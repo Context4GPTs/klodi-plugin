@@ -55,7 +55,11 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsc -p tsconfig.build.json --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublish": "bash scripts/smoke-plugin-load.sh",
+    "pack:inspect": "pnpm build && pnpm pack --pack-destination /tmp/klodi-pack && tar -tzf /tmp/klodi-pack/*.tgz | sort",
+    "publish:clawhub:dry": "pnpm prepublish && clawhub package publish \"$PWD\" --dry-run --source-repo Context4GPTs/klodi-plugin --source-commit \"$(git rev-parse HEAD)\"",
+    "publish:clawhub": "pnpm prepublish && clawhub package publish \"$PWD\" --tags latest --source-repo Context4GPTs/klodi-plugin --source-commit \"$(git rev-parse HEAD)\""
   },
   "devDependencies": {
     "@nats-io/jetstream": "3.3.1",

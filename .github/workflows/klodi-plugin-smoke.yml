@@ -40,7 +40,7 @@ jobs:
       OPENCLAW_IMAGE: alpine/openclaw
       # Pinned tag gates PRs; nightly schedule swaps to :latest so the
       # same job surfaces unreleased SDK drift without affecting the
-      # merge gate. Keep in sync with klodi-plugin-release.yml.
+      # merge gate.
       OPENCLAW_TAG: ${{ github.event_name == 'schedule' && 'latest' || '2026.4.14' }}
     steps:
       - name: Checkout
