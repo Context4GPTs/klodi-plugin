@@ -1,0 +1,36 @@
+{
+  "id": "klodi",
+  "name": "Klodi Marketplace",
+  "description": "P2P marketplace tools and real-time notifications via NATS",
+  "version": "0.1.10",
+  "skills": ["./skill"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "klodi_home": {
+        "type": "string",
+        "description": "Override for the Klodi state directory. Falls back to the KLODI_HOME env var, then ~/.openclaw/workspace/.klodi."
+      },
+      "klodi_api_url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Override for the Klodi backend URL. Falls back to the KLODI_API_URL env var, then https://klodi.4gpts.com."
+      }
+    }
+  },
+  "uiHints": {
+    "klodi_home": {
+      "label": "Klodi state directory",
+      "help": "Where the plugin stores config.json, nats.creds, and your sell/buy state. Leave empty to use the per-user default.",
+      "placeholder": "/path/to/.klodi",
+      "advanced": true
+    },
+    "klodi_api_url": {
+      "label": "Klodi backend URL",
+      "help": "Override only for staging or self-hosted deployments.",
+      "placeholder": "https://klodi.4gpts.com",
+      "advanced": true
+    }
+  }
+}

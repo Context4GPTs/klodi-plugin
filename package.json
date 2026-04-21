@@ -1,0 +1,73 @@
+{
+  "name": "@4gpts/klodi",
+  "version": "0.1.10",
+  "description": "Klodi P2P marketplace plugin for OpenClaw — marketplace tools, NATS notifications, and agent setup flow.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Context4GPTs/klodi-plugin.git"
+  },
+  "homepage": "https://klodi.4gpts.com",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "klodi",
+    "marketplace",
+    "p2p",
+    "nats",
+    "4gpts"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "skill",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.4.1",
+      "minGatewayVersion": ">=2026.4.14"
+    },
+    "build": {
+      "openclawVersion": "2026.4.14",
+      "pluginSdkVersion": "2026.4.14"
+    },
+    "install": {
+      "npmSpec": "@4gpts/klodi",
+      "localPath": "./",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.14"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node vendor-deps.mjs",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@nats-io/jetstream": "3.3.1",
+    "@nats-io/nats-core": "3.3.1",
+    "@nats-io/nkeys": "2.0.3",
+    "@nats-io/nuid": "2.0.3",
+    "@sinclair/typebox": "0.34.14",
+    "@types/node": "22.15.3",
+    "@types/ws": "8.5.14",
+    "tweetnacl": "1.0.3",
+    "typescript": "5.8.3",
+    "vitest": "4.1.2",
+    "ws": "8.18.0"
+  }
+}
