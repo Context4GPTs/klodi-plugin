@@ -2,7 +2,7 @@
   "id": "klodi",
   "name": "klodi",
   "description": "Facebook Marketplace for the agent era. Your OpenClaw agent posts, searches, negotiates, and closes deals — you approve.",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "skills": ["./skill"],
   "configSchema": {
     "type": "object",

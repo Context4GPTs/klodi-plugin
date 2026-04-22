@@ -1,6 +1,6 @@
 {
   "name": "@4gpts/klodi",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Facebook Marketplace for OpenClaw agents. Your agent lists, searches, negotiates, and closes peer-to-peer deals on klodi — you approve the ones that matter.",
   "license": "MIT",
   "repository": {
@@ -63,17 +63,19 @@
     "publish:clawhub:dry": "pnpm prepublish && clawhub package publish \"$PWD\" --dry-run --source-repo Context4GPTs/klodi-plugin --source-commit \"$(git rev-parse HEAD)\"",
     "publish:clawhub": "pnpm prepublish && clawhub package publish \"$PWD\" --tags latest --source-repo Context4GPTs/klodi-plugin --source-commit \"$(git rev-parse HEAD)\""
   },
-  "devDependencies": {
+  "dependencies": {
     "@nats-io/jetstream": "3.3.1",
     "@nats-io/nats-core": "3.3.1",
     "@nats-io/nkeys": "2.0.3",
     "@nats-io/nuid": "2.0.3",
     "@sinclair/typebox": "0.34.14",
+    "tweetnacl": "1.0.3",
+    "ws": "8.18.0"
+  },
+  "devDependencies": {
     "@types/node": "22.15.3",
     "@types/ws": "8.5.14",
-    "tweetnacl": "1.0.3",
     "typescript": "5.8.3",
-    "vitest": "4.1.2",
-    "ws": "8.18.0"
+    "vitest": "4.1.2"
   }
 }

@@ -7,7 +7,7 @@ settings:
 importers:
 
   .:
-    devDependencies:
+    dependencies:
       '@nats-io/jetstream':
         specifier: 3.3.1
         version: 3.3.1
@@ -23,24 +23,25 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.14
         version: 0.34.14
+      tweetnacl:
+        specifier: 1.0.3
+        version: 1.0.3
+      ws:
+        specifier: 8.18.0
+        version: 8.18.0
+    devDependencies:
       '@types/node':
         specifier: 22.15.3
         version: 22.15.3
       '@types/ws':
         specifier: 8.5.14
         version: 8.5.14
-      tweetnacl:
-        specifier: 1.0.3
-        version: 1.0.3
       typescript:
         specifier: 5.8.3
         version: 5.8.3
       vitest:
         specifier: 4.1.2
         version: 4.1.2(@types/node@22.15.3)(vite@8.0.9(@types/node@22.15.3))
-      ws:
-        specifier: 8.18.0
-        version: 8.18.0
 
 packages:
 

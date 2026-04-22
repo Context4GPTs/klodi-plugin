@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.12] — 2026-04-22
+
+### Fixed
+
+- **ClawHub installs of `@4gpts/klodi` no longer fail with `Cannot find module '@nats-io/jetstream'`.** Root cause: all seven runtime packages (`@nats-io/jetstream`, `@nats-io/nats-core`, `@nats-io/nkeys`, `@nats-io/nuid`, `@sinclair/typebox`, `tweetnacl`, `ws`) were declared under `devDependencies`. The build-time vendoring in `vendor-deps.mjs` carries them into `dist/node_modules/` for direct-tarball installs, which is why `scripts/smoke-plugin-load.sh` passed. However, the ClawHub registry strips `dist/node_modules/` during ingestion — confirmed by `clawhub package inspect @4gpts/klodi --files`, which lists zero vendored files for 0.1.11 — and ClawHub then expects declared `dependencies` to resolve the imports. Moved all seven packages to `dependencies`; `devDependencies` now contains only `@types/node`, `@types/ws`, `typescript`, and `vitest`.
+
+### Smoke
+
+- `scripts/smoke-plugin-load.sh` now runs a second install variant that deletes `package/dist/node_modules/` from the packed tarball before install, simulating the ClawHub ingestion path. A regression that reintroduces the devDeps-only packaging bug now fails the gate instead of the production ClawHub install.
+
 ## [0.1.11] — 2026-04-22
 
 ### Changed
