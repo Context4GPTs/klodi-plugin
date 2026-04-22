@@ -275,6 +275,7 @@ describe("onBuySearchCreated", () => {
       action_on_match: "notify",
       check_every: "4h",
       last_checked: null,
+      seen_listings: {},
       body: "Must have 32GB RAM.",
     });
 
@@ -305,6 +306,7 @@ describe("onBuySearchRemoved", () => {
       action_on_match: "notify",
       check_every: "4h",
       last_checked: null,
+      seen_listings: {},
       body: "",
     });
     expect(readBuyFile("old-search")).not.toBeNull();

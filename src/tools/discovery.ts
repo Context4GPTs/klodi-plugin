@@ -191,7 +191,8 @@ function registerWatch(api: PluginAPI): void {
             (params["action_on_match"] as ActionOnMatch)
             ?? "notify",
           check_every: checkEvery,
-          last_checked: new Date().toISOString(),
+          last_checked: null,
+          seen_listings: {},
           body: "",
         });
         createBuyTimer(buySlug, checkEvery);

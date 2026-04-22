@@ -359,6 +359,7 @@ describe("reconcileTimers", () => {
       action_on_match: "notify",
       check_every: "4h",
       last_checked: null,
+      seen_listings: {},
       body: "",
     });
 
@@ -517,7 +518,9 @@ describe("checkSellItem (via timer fire)", () => {
 });
 
 describe("checkBuyItem (via timer fire)", () => {
-  it("runs watch query with buy file search params", async () => {
+  it("runs watch query with buy file search params without since", async () => {
+    // Client-side dedup (seen_listings) replaces createdAt-based `since`
+    // so price drops and edits on pre-existing listings are surfaced.
     mockReadBuyFile.mockReturnValue({
       query: "gaming laptop",
       slug: "gaming-laptop",
@@ -529,6 +532,7 @@ describe("checkBuyItem (via timer fire)", () => {
       action_on_match: "notify",
       check_every: "4h",
       last_checked: "2026-04-15T00:00:00.000Z",
+      seen_listings: {},
       body: "",
     });
     mockRequest.mockResolvedValueOnce({ results: [] });
@@ -542,9 +546,10 @@ describe("checkBuyItem (via timer fire)", () => {
         query: "gaming laptop",
         max_price: 200000,
         delivery_method: "shipping",
-        since: "2026-04-15T00:00:00.000Z",
       }),
     );
+    const payload = mockRequest.mock.calls[0][1];
+    expect(payload).not.toHaveProperty("since");
   });
 
   it("wakes agent when matches found", async () => {
@@ -559,6 +564,7 @@ describe("checkBuyItem (via timer fire)", () => {
       action_on_match: "notify",
       check_every: "4h",
       last_checked: null,
+      seen_listings: {},
       body: "",
     });
     mockRequest.mockResolvedValueOnce({
@@ -603,6 +609,7 @@ describe("checkBuyItem (via timer fire)", () => {
       action_on_match: "negotiate",
       check_every: "4h",
       last_checked: null,
+      seen_listings: {},
       body: "",
     });
     mockRequest.mockResolvedValueOnce({
@@ -656,6 +663,7 @@ describe("checkBuyItem (via timer fire)", () => {
       action_on_match: "notify",
       check_every: "4h",
       last_checked: null,
+      seen_listings: {},
       body: "",
     });
     mockRequest.mockResolvedValueOnce({ results: [] });
@@ -685,6 +693,7 @@ describe("checkBuyItem (via timer fire)", () => {
       action_on_match: "notify",
       check_every: "4h",
       last_checked: null,
+      seen_listings: {},
       body: "",
     });
     mockRequest.mockResolvedValueOnce({ results: [] });
@@ -709,5 +718,153 @@ describe("checkBuyItem (via timer fire)", () => {
     await vi.advanceTimersByTimeAsync(14400000);
 
     expect(vi.getTimerCount()).toBeLessThan(countBefore);
+  });
+
+  // ── seen_listings dedup ────────────────────────────────────────────────────
+  // Covers the post-fix contract: periodic checks rely on a per-buy-file
+  // seen_listings map (id → last-seen price) instead of createdAt-based
+  // `since`. A listing surfaces iff it is NEW (unseen id) or its price
+  // has DROPPED vs. the stored value. Price hikes and unchanged prices
+  // are intentionally ignored to avoid agent-wake spam.
+
+  const buyFixture = (seen: Record<string, number>) => ({
+    query: "keyboard",
+    slug: "keyboard",
+    max_price: 30000,
+    target_price: 20000,
+    delivery_method: "any",
+    pickup_radius: null,
+    ships_to: null,
+    action_on_match: "notify" as const,
+    check_every: "4h",
+    last_checked: null,
+    seen_listings: seen,
+    body: "",
+  });
+
+  const match = (id: string, price: number) => ({
+    listing_id: id,
+    title: `Listing ${id}`,
+    asking_price: price,
+    seller_handle: "seller",
+  });
+
+  it("surfaces all matches as NEW on the first check (empty seen_listings)", async () => {
+    mockReadBuyFile.mockReturnValue(buyFixture({}));
+    mockRequest.mockResolvedValueOnce({
+      results: [match("lst-1", 25000), match("lst-2", 28000)],
+    });
+
+    createBuyTimer("keyboard", "4h");
+    await vi.advanceTimersByTimeAsync(14400000);
+
+    expect(api.runtime.system.enqueueSystemEvent)
+      .toHaveBeenCalledTimes(1);
+    const [text] = vi.mocked(api.runtime.system.enqueueSystemEvent)
+      .mock.calls[0] as unknown as [string, unknown];
+    expect(text).toContain("[NEW]");
+    expect(text).toContain("Listing lst-1");
+    expect(text).toContain("Listing lst-2");
+    expect(text).not.toContain("PRICE DROP");
+  });
+
+  it("does not wake when seen listings still match at the same price", async () => {
+    mockReadBuyFile.mockReturnValue(buyFixture({
+      "lst-1": 25000,
+      "lst-2": 28000,
+    }));
+    mockRequest.mockResolvedValueOnce({
+      results: [match("lst-1", 25000), match("lst-2", 28000)],
+    });
+
+    createBuyTimer("keyboard", "4h");
+    await vi.advanceTimersByTimeAsync(14400000);
+
+    expect(api.runtime.system.enqueueSystemEvent)
+      .not.toHaveBeenCalled();
+  });
+
+  it("does not wake when a seen listing's price went UP", async () => {
+    // Price hikes on an already-known listing don't surface — the buyer
+    // isn't waiting for bad news. A later drop below the stored high
+    // will still surface (see below).
+    mockReadBuyFile.mockReturnValue(buyFixture({ "lst-1": 25000 }));
+    mockRequest.mockResolvedValueOnce({
+      results: [match("lst-1", 27000)],
+    });
+
+    createBuyTimer("keyboard", "4h");
+    await vi.advanceTimersByTimeAsync(14400000);
+
+    expect(api.runtime.system.enqueueSystemEvent)
+      .not.toHaveBeenCalled();
+  });
+
+  it("surfaces a price drop on a previously seen listing", async () => {
+    // The core reason `since` was removed: a pre-existing listing that
+    // dropped into budget should be surfaced even though createdAt is
+    // older than last_checked.
+    mockReadBuyFile.mockReturnValue(buyFixture({ "lst-1": 65000 }));
+    mockRequest.mockResolvedValueOnce({
+      results: [match("lst-1", 55000)],
+    });
+
+    createBuyTimer("keyboard", "4h");
+    await vi.advanceTimersByTimeAsync(14400000);
+
+    expect(api.runtime.system.enqueueSystemEvent)
+      .toHaveBeenCalledTimes(1);
+    const [text] = vi.mocked(api.runtime.system.enqueueSystemEvent)
+      .mock.calls[0] as unknown as [string, unknown];
+    expect(text).toContain("PRICE DROP");
+    expect(text).toContain("Listing lst-1");
+  });
+
+  it("mixes NEW and PRICE DROP labels in one wake", async () => {
+    mockReadBuyFile.mockReturnValue(buyFixture({ "lst-1": 30000 }));
+    mockRequest.mockResolvedValueOnce({
+      results: [
+        match("lst-1", 22000), // price drop
+        match("lst-2", 25000), // new
+      ],
+    });
+
+    createBuyTimer("keyboard", "4h");
+    await vi.advanceTimersByTimeAsync(14400000);
+
+    const [text] = vi.mocked(api.runtime.system.enqueueSystemEvent)
+      .mock.calls[0] as unknown as [string, unknown];
+    expect(text).toContain("PRICE DROP");
+    expect(text).toContain("[NEW]");
+  });
+
+  it("rebuilds seen_listings from the current match snapshot", async () => {
+    // Listings that fall out of the match set (sold, price-hiked above
+    // max_price, server-filtered) are removed. If they later reappear
+    // they'll be flagged NEW again — an acceptable cost for bounded state.
+    mockReadBuyFile.mockReturnValue(buyFixture({
+      "lst-old": 10000,
+      "lst-keep": 20000,
+    }));
+    mockRequest.mockResolvedValueOnce({
+      results: [
+        match("lst-keep", 20000), // unchanged
+        match("lst-new", 15000),  // newly appeared
+      ],
+    });
+
+    const mockWriteBuyFile = vi.mocked(writeBuyFile);
+    createBuyTimer("keyboard", "4h");
+    await vi.advanceTimersByTimeAsync(14400000);
+
+    expect(mockWriteBuyFile).toHaveBeenCalledWith(
+      "keyboard",
+      expect.objectContaining({
+        seen_listings: {
+          "lst-keep": 20000,
+          "lst-new": 15000,
+        },
+      }),
+    );
   });
 });

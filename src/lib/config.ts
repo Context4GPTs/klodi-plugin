@@ -312,6 +312,15 @@ export interface BuyFile {
   action_on_match: ActionOnMatch;
   check_every: string;
   last_checked: string | null;
+  /**
+   * Map of listing_id → last-seen asking_price (cents).
+   * Used for client-side dedup: periodic checks surface a
+   * listing when it is new (unseen id) or when its price has
+   * dropped vs. the stored value. `since`/createdAt filtering
+   * is intentionally NOT used because it would miss price drops
+   * and edits on pre-existing listings.
+   */
+  seen_listings: Record<string, number>;
   slug: string;
   /** Freeform markdown content below frontmatter */
   body: string;
@@ -439,9 +448,37 @@ export function readBuyFile(slug: string): BuyFile | null {
     check_every: meta["check_every"] ?? "4h",
     last_checked: meta["last_checked"] && meta["last_checked"] !== "null"
       ? meta["last_checked"] : null,
+    seen_listings: parseSeenListings(meta["seen_listings"], slug),
     slug,
     body,
   };
+}
+
+function parseSeenListings(
+  raw: string | undefined,
+  slug: string,
+): Record<string, number> {
+  if (!raw || raw === "null" || raw === "{}") return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      typeof parsed !== "object" || parsed === null
+      || Array.isArray(parsed)
+    ) {
+      return {};
+    }
+    const out: Record<string, number> = {};
+    for (const [id, price] of Object.entries(parsed)) {
+      if (typeof price === "number" && Number.isFinite(price)) {
+        out[id] = price;
+      }
+    }
+    return out;
+  } catch {
+    // Malformed frontmatter — fall back to empty, log nothing
+    // (the dedup just treats everything as new next tick).
+    return {};
+  }
 }
 
 export function writeBuyFile(slug: string, data: Omit<BuyFile, "slug">): void {
@@ -456,6 +493,7 @@ export function writeBuyFile(slug: string, data: Omit<BuyFile, "slug">): void {
     action_on_match: data.action_on_match,
     check_every: data.check_every,
     last_checked: data.last_checked,
+    seen_listings: JSON.stringify(data.seen_listings ?? {}),
   });
   const content = data.body ? `${fm}\n\n${data.body}` : fm;
   writeFileSync(join(getBuyDir(), `${slug}.md`), content + "\n", "utf-8");

@@ -240,6 +240,7 @@ describe('buy file I/O', () => {
     action_on_match: 'notify',
     check_every: '4h',
     last_checked: null,
+    seen_listings: {},
     body: '',
   }
 
@@ -331,6 +332,62 @@ describe('buy file I/O', () => {
     expect(() => readBuyFile('bad-action')).toThrow(
       /Invalid action_on_match.*bad-action.*auto_offer.*notify.*negotiate/,
     )
+  })
+
+  // ── seen_listings frontmatter roundtrip ───────────────────────────────────
+
+  it('roundtrips seen_listings as JSON in frontmatter', () => {
+    const withSeen = {
+      ...buyData,
+      seen_listings: { 'lst-abc': 25000, 'lst-def': 55000 },
+    }
+    writeBuyFile('with-seen', withSeen)
+
+    const raw = readFileSync(
+      join(home.buyDir, 'with-seen.md'),
+      'utf-8',
+    )
+    expect(raw).toContain('seen_listings: {"lst-abc":25000,"lst-def":55000}')
+
+    const result = readBuyFile('with-seen')
+    expect(result).not.toBeNull()
+    expect(result!.seen_listings).toEqual({
+      'lst-abc': 25000,
+      'lst-def': 55000,
+    })
+  })
+
+  it('defaults seen_listings to empty object when missing or null', () => {
+    // Legacy buy files written before seen_listings existed should read
+    // back cleanly with {} so the dedup code treats everything as new
+    // on the next tick.
+    const pathMissing = join(home.buyDir, 'legacy-missing.md')
+    writeFileSync(
+      pathMissing,
+      '---\nquery: old\naction_on_match: notify\n---\n',
+      'utf-8',
+    )
+    expect(readBuyFile('legacy-missing')!.seen_listings).toEqual({})
+
+    const pathNull = join(home.buyDir, 'legacy-null.md')
+    writeFileSync(
+      pathNull,
+      '---\nquery: old\naction_on_match: notify\nseen_listings: null\n---\n',
+      'utf-8',
+    )
+    expect(readBuyFile('legacy-null')!.seen_listings).toEqual({})
+  })
+
+  it('returns empty seen_listings when frontmatter value is malformed JSON', () => {
+    // A hand-edited or corrupted frontmatter shouldn't throw — the tick
+    // just treats all current matches as NEW.
+    const path = join(home.buyDir, 'broken.md')
+    writeFileSync(
+      path,
+      '---\nquery: x\naction_on_match: notify\nseen_listings: {not-json\n---\n',
+      'utf-8',
+    )
+    expect(readBuyFile('broken')!.seen_listings).toEqual({})
   })
 })
 

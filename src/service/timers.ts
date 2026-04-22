@@ -224,9 +224,10 @@ async function checkBuyItem(slug: string): Promise<void> {
     if (buyFile.ships_to !== null) {
       payload["ships_to"] = buyFile.ships_to;
     }
-    if (buyFile.last_checked) {
-      payload["since"] = buyFile.last_checked;
-    }
+    // Intentionally no `since` filter: we rely on client-side
+    // dedup against seen_listings so price drops and edits on
+    // pre-existing listings are surfaced. createdAt-based `since`
+    // would hide those forever once last_checked rolls past them.
 
     const result = await request<{
       results?: Array<{
@@ -238,13 +239,31 @@ async function checkBuyItem(slug: string): Promise<void> {
     }>("p2p.v1.listings.watch", payload);
 
     const matches = result.results ?? [];
+    const seen = buyFile.seen_listings;
 
-    if (matches.length > 0) {
-      const summary = matches
-        .map((m) =>
-          `- "${m.title}" by @${m.seller_handle}`
-          + ` — ${formatCents(m.asking_price)}`,
-        )
+    type Match = typeof matches[number];
+    type Kind = "new" | "drop";
+    const surfaced: Array<{ m: Match; kind: Kind; prev?: number }> = [];
+    for (const m of matches) {
+      const prev = seen[m.listing_id];
+      if (prev === undefined) {
+        surfaced.push({ m, kind: "new" });
+      } else if (m.asking_price < prev) {
+        surfaced.push({ m, kind: "drop", prev });
+      }
+    }
+
+    if (surfaced.length > 0) {
+      const summary = surfaced
+        .map(({ m, kind, prev }) => {
+          const tag = kind === "new"
+            ? "NEW"
+            : `PRICE DROP: ${formatCents(prev!)}`
+              + ` → ${formatCents(m.asking_price)}`;
+          return `- [${tag}] "${m.title}"`
+            + ` by @${m.seller_handle}`
+            + ` — ${formatCents(m.asking_price)}`;
+        })
         .join("\n");
 
       const policyPath = getNegotiationStylePath();
@@ -267,13 +286,24 @@ async function checkBuyItem(slug: string): Promise<void> {
       await wakeAgent(
         api,
         `[klodi] Standing search "${slug}"`
-          + ` found ${matches.length} new match(es):\n`
+          + ` found ${surfaced.length} match(es)`
+          + ` (new or price-dropped):\n`
           + summary + "\n\n" + action,
         "klodi-buy-match",
       );
     }
 
+    // Rebuild seen_listings from the current match snapshot.
+    // Listings that dropped out of the match set (sold, delisted,
+    // hiked above max_price) are allowed to fall out; if they
+    // later reappear they'll be flagged NEW again — acceptable.
+    const nextSeen: Record<string, number> = {};
+    for (const m of matches) {
+      nextSeen[m.listing_id] = m.asking_price;
+    }
+
     const { slug: _s, ...data } = buyFile;
+    data.seen_listings = nextSeen;
     data.last_checked = new Date().toISOString();
     writeBuyFile(slug, data);
   } catch (err) {
