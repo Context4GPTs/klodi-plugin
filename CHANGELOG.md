@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.11] — 2026-04-22
+
+### Changed
+
+- Plugin display name in `openclaw.plugin.json` is now `klodi` (was `Klodi Marketplace`) and the `definePluginEntry({ name })` in `src/index.ts` is aligned to match. The old name duplicated "marketplace," which the description one line down already conveys; the shorter brand-forward name is what surfaces in the OpenClaw plugin list and ClawHub.
+- Brand-style lowercase `klodi` applied across all user-facing text: README prose, skill playbook (`skill/SKILL.md`, `skill/SETUP.md`, `skill/policies/security.md`), plugin-manifest descriptions and `uiHints` labels, the `package.json` description, every `[klodi] …` system-event prefix emitted from `src/service/{notifications,nats,timers}.ts` and `src/tools/register-poller.ts`, and the user-facing tool labels/descriptions in `src/tools/identity.ts`. Internal identifiers (`KlodiConfig`, `getKlodiHome`, `KLODI_*` env vars) and historical CHANGELOG entries are unchanged.
+- No change to the npm package name (`@4gpts/klodi`), the plugin `id` (`klodi`), any tool names, on-disk paths, config schema, or notification payload contents. Existing installs upgrade in place.
+
 ## [0.1.10] — 2026-04-21
 
 ### Fixed

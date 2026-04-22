@@ -268,7 +268,7 @@ describe("plugin registration", () => {
     expect(api.logger.info).toHaveBeenCalledWith(
       "klodi_plugin_loaded",
       expect.objectContaining({
-        message: expect.stringContaining("Klodi marketplace plugin registered"),
+        message: expect.stringContaining("klodi marketplace plugin registered"),
         api_url: expect.any(String),
         api_url_source: expect.any(String),
         klodi_home: expect.any(String),

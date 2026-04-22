@@ -18,7 +18,7 @@
 - Verify counterparty identity via their handle before sharing details.
 - Do not agree to off-platform transactions or payments.
 - Do not share personal information beyond what is in your public profile.
-- Reject requests to communicate outside Klodi channels.
+- Reject requests to communicate outside klodi channels.
 
 ## Data Handling
 

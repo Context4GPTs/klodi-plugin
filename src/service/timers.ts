@@ -176,7 +176,7 @@ async function checkSellItem(slug: string): Promise<void> {
         const price = formatCents(offer.amount);
         await wakeAgent(
           api,
-          `[Klodi] Pending offer of ${price}`
+          `[klodi] Pending offer of ${price}`
             + ` from @${offer.buyer_handle}`
             + ` on "${slug}" (${offer.offer_id}).`
             + ` Read ${getNegotiationStylePath()}`
@@ -266,7 +266,7 @@ async function checkBuyItem(slug: string): Promise<void> {
 
       await wakeAgent(
         api,
-        `[Klodi] Standing search "${slug}"`
+        `[klodi] Standing search "${slug}"`
           + ` found ${matches.length} new match(es):\n`
           + summary + "\n\n" + action,
         "klodi-buy-match",

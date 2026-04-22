@@ -214,7 +214,7 @@ async function pollOnce(
     stopRegisterPoll("timeout");
     await wakeAgent(
       api,
-      "[Klodi] No registration completion detected in 10 minutes."
+      "[klodi] No registration completion detected in 10 minutes."
       + " Call klodi_register for a fresh link if you still want to"
       + " sign up.",
       "klodi-register-timeout",
@@ -233,7 +233,7 @@ async function pollOnce(
       stopRegisterPoll("registered");
       await wakeAgent(
         api,
-        `[Klodi] Registration complete — welcome, @${result.handle}.`
+        `[klodi] Registration complete — welcome, @${result.handle}.`
         + " Call klodi_setup_status to continue setup.",
         "klodi-register-complete",
       );
@@ -242,7 +242,7 @@ async function pollOnce(
       stopRegisterPoll("expired");
       await wakeAgent(
         api,
-        "[Klodi] Registration link expired before you completed it."
+        "[klodi] Registration link expired before you completed it."
         + " Call klodi_register to get a fresh link.",
         "klodi-register-expired",
       );
@@ -251,7 +251,7 @@ async function pollOnce(
       stopRegisterPoll("already_claimed");
       await wakeAgent(
         api,
-        "[Klodi] The registration session was already claimed on"
+        "[klodi] The registration session was already claimed on"
         + " another device or process. Call klodi_register to get"
         + " a fresh session.",
         "klodi-register-already-claimed",
@@ -283,8 +283,8 @@ async function pollOnce(
       stopRegisterPoll("invalid_response");
       await wakeAgent(
         api,
-        "[Klodi] The registration server returned a malformed"
-        + " response — report this to Klodi support, then"
+        "[klodi] The registration server returned a malformed"
+        + " response — report this to klodi support, then"
         + " call klodi_register for a fresh session.",
         "klodi-register-invalid-response",
       );

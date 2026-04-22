@@ -26,7 +26,7 @@ import { registerSetupTools } from "./tools/setup.js";
 
 export default definePluginEntry({
   id: "klodi",
-  name: "Klodi Marketplace",
+  name: "klodi",
   description: "P2P marketplace tools and real-time notifications via NATS",
   register(api) {
     // Plugin-scoped overrides (klodi_home, klodi_api_url) come from
@@ -51,7 +51,7 @@ export default definePluginEntry({
     registerSetupTools(api);
 
     api.logger.info("klodi_plugin_loaded", {
-      message: "Klodi marketplace plugin registered.",
+      message: "klodi marketplace plugin registered.",
       api_url: getApiUrl(),
       api_url_source: getApiUrlSource(),
       klodi_home: getKlodiHome(),

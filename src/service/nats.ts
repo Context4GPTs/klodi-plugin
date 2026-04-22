@@ -143,7 +143,7 @@ export async function ensureNatsRunning(
 async function promptOnboarding(api: PluginAPI): Promise<void> {
   await wakeAgent(
     api,
-    "[Klodi] Plugin is installed but the user is not registered."
+    "[klodi] Plugin is installed but the user is not registered."
       + " Kick off onboarding now: call klodi_setup_status and"
       + " follow SETUP.md from the klodi skill.",
     "klodi-onboarding-needed",

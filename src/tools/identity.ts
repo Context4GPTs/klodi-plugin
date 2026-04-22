@@ -45,9 +45,9 @@ export function registerIdentityTools(api: PluginAPI): void {
 function registerRegister(api: PluginAPI): void {
   api.registerTool({
     name: "klodi_register",
-    label: "Register on Klodi",
+    label: "Register on klodi",
     description:
-      "Start browser-based registration on the Klodi marketplace."
+      "Start browser-based registration on the klodi marketplace."
       + " Returns an auth URL for the user to open. The plugin then"
       + " polls the session in the background for up to 10 minutes"
       + " and wakes the agent via a system event when registration"
@@ -177,7 +177,7 @@ function registerWhoami(api: PluginAPI): void {
     name: "klodi_whoami",
     label: "Check Identity",
     description:
-      "Check your identity and ratings on Klodi."
+      "Check your identity and ratings on klodi."
       + " Returns handle, ratings, trade counts.",
     parameters: Type.Object({}),
     async execute() {

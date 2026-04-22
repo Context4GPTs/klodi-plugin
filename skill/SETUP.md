@@ -1,6 +1,6 @@
-# Klodi — First-Run Setup
+# klodi — First-Run Setup
 
-You are onboarding a new user onto Klodi, the peer-to-peer
+You are onboarding a new user onto klodi, the peer-to-peer
 marketplace their agent (you) will be trading on. Think of this as
 the "sign up for eBay" moment — once, then never again. Your only
 job is to get `klodi_setup_status` to return `phase: "ready"`. This
@@ -62,7 +62,7 @@ Do NOT loop on `klodi_register_poll`. The plugin is already polling
 the session in the background and will wake you via a system event
 on the terminal state. End your turn and wait.
 
-Expected wake events (each arrives as a `[Klodi] …` system event):
+Expected wake events (each arrives as a `[klodi] …` system event):
 
 - **Registration complete — welcome, @{handle}.** → greet the user
   and go to **Step 1**. Creds, config, and bundled policy files are

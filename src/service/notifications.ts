@@ -185,7 +185,7 @@ function formatOfferProposed(
     ? `\nProposed terms:\n${JSON.stringify(event.terms, null, 2)}`
     : "";
 
-  return `[Klodi] Offer of ${amount} from @${buyer}`
+  return `[klodi] Offer of ${amount} from @${buyer}`
     + ` on listing ${listing}.${termsBlock}`
     + `\nRead ${policyPath} and ${sellRef},`
     + " then review and respond with"
@@ -208,7 +208,7 @@ function formatChannelOpened(
   const listing = event.listing_id ?? "unknown";
   const policyPath = getNegotiationStylePath();
   const sellRef = sellFileRef(event.listing_id);
-  return `[Klodi] @${buyer} opened a negotiation`
+  return `[klodi] @${buyer} opened a negotiation`
     + ` channel on listing ${listing}.`
     + ` Read ${policyPath} and ${sellRef},`
     + " then respond per your negotiation style.";
@@ -220,7 +220,7 @@ function formatChannelMessage(
   const sender = event.sender_handle ?? "unknown";
   const channel = event.channel_id ?? "unknown";
   const policyPath = getNegotiationStylePath();
-  return `[Klodi] New message from @${sender}`
+  return `[klodi] New message from @${sender}`
     + ` in channel ${channel}.`
     + ` Read ${policyPath} and the matching`
     + ` ${getBuyDir()} or ${getSellDir()} file`
@@ -240,7 +240,7 @@ function formatCommentCreated(
   const body = event.body ? `\n${quoteBody(event.body)}` : "";
   const policyPath = getNegotiationStylePath();
   const sellRef = sellFileRef(event.listing_id);
-  return `[Klodi] @${handle} commented on`
+  return `[klodi] @${handle} commented on`
     + ` listing ${listing}${mentions}:${body}`
     + `\nIf you're the seller, read ${policyPath}`
     + ` and ${sellRef}, classify the comment per`
@@ -269,7 +269,7 @@ function formatOfferAccepted(
   const listing = event.listing_id ?? "unknown";
   const seller = event.seller_handle ?? "unknown";
   const tx = event.transaction_id ?? "unknown";
-  return `[Klodi] Your offer on listing ${listing}`
+  return `[klodi] Your offer on listing ${listing}`
     + ` was accepted by @${seller}${amount}.`
     + ` Transaction ${tx} created.`
     + " Coordinate the exchange and confirm"
@@ -281,7 +281,7 @@ function formatOfferRejected(
 ): string {
   const listing = event.listing_id ?? "unknown";
   const seller = event.seller_handle ?? "unknown";
-  return `[Klodi] Your offer on listing ${listing}`
+  return `[klodi] Your offer on listing ${listing}`
     + ` was rejected by @${seller}.`
     + " Consider adjusting your offer"
     + " or moving on.";
@@ -292,7 +292,7 @@ function formatTransactionConfirmed(
 ): string {
   const handle = event.confirmed_by_handle ?? "unknown";
   const tx = event.transaction_id ?? "unknown";
-  return `[Klodi] @${handle} confirmed`
+  return `[klodi] @${handle} confirmed`
     + ` transaction ${tx}.`
     + " If you haven't confirmed yet,"
     + " use klodi_tx_confirm.";
@@ -303,7 +303,7 @@ function formatTransactionCompleted(
 ): string {
   const tx = event.transaction_id ?? "unknown";
   const listing = event.listing_id ?? "unknown";
-  return `[Klodi] Transaction ${tx}`
+  return `[klodi] Transaction ${tx}`
     + ` on listing ${listing} is complete!`
     + " Both parties confirmed."
     + " Rate the other party with klodi_tx_rate."
@@ -320,7 +320,7 @@ function formatTransactionCancelled(
   const handle = event.cancelled_by_handle ?? "unknown";
   const reason = event.reason
     ? ` Reason: ${event.reason}.` : "";
-  return `[Klodi] Transaction ${tx}`
+  return `[klodi] Transaction ${tx}`
     + ` was cancelled by @${handle}.${reason}`;
 }
 
@@ -330,6 +330,6 @@ function formatListingStatusChanged(
   const listing = event.listing_id ?? "unknown";
   const old = event.old_status ?? "?";
   const next = event.new_status ?? "?";
-  return `[Klodi] Listing ${listing}`
+  return `[klodi] Listing ${listing}`
     + ` status changed: ${old} → ${next}.`;
 }

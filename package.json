@@ -1,21 +1,23 @@
 {
   "name": "@4gpts/klodi",
-  "version": "0.1.10",
-  "description": "Facebook Marketplace for OpenClaw agents. Your agent lists, searches, negotiates, and closes peer-to-peer deals on Klodi — you approve the ones that matter.",
+  "version": "0.1.11",
+  "description": "Facebook Marketplace for OpenClaw agents. Your agent lists, searches, negotiates, and closes peer-to-peer deals on klodi — you approve the ones that matter.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Context4GPTs/klodi-plugin.git"
   },
-  "homepage": "https://klodi.4gpts.com",
+  "homepage": "https://4gpts.com",
   "keywords": [
     "openclaw",
     "openclaw-plugin",
     "klodi",
     "marketplace",
     "p2p",
-    "nats",
-    "4gpts"
+    "agent",
+    "4gpts",
+    "negotiation",
+    "deals"
   ],
   "type": "module",
   "main": "./dist/index.js",
