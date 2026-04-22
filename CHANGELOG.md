@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.13] — 2026-04-22
+
+### Added
+
+- **`SECURITY.md` at repo root.** Itemises network hosts, local file paths and modes, the trust model, what is and isn't sent to klodi's servers, credential handling, and vulnerability reporting. Shipped in the published tarball via `package.json#files`. GitHub surfaces it as the repo's security policy.
+- **`contracts.tools` in `openclaw.plugin.json`.** Declares all 32 `klodi_*` tool names statically. OpenClaw loader + ClawHub scanner populate `capabilities.toolNames` from this list without executing plugin code. Closes the 0.1.12 registry-metadata gap where `toolNames: []` read as "instruction-only" despite a compiled bundle.
+- **`activation.onCapabilities: ["tool"]` hint in the manifest.** Cheap static hint that the plugin activates on tool calls, used by control-plane planning.
+
+### Changed
+
+- **Entry-point header docstring (`src/index.ts`) expanded** to document the service (`klodi-nats`), the single outbound host, credential paths and modes, and the private-content boundary. Scanner-readable and matches the content in `SECURITY.md`.
+- **README gains a "We take your agent's security seriously" section** at the end — marketing-voiced pros (private-stays-private, OAuth-only, single host, minimal surface, clean exit) with a link to `SECURITY.md` for the full technical breakdown.
+- **Build no longer emits `.d.ts` or `.js.map` files from plugin source.** `tsconfig.build.json` overrides `declaration`, `declarationMap`, and `sourceMap` to `false`. Tarball drops from ~874 KB to ~646 KB. Vendored NATS dependencies under `dist/node_modules/` still carry their own source maps — those are upstream and unchanged.
+
 ## [0.1.12] — 2026-04-22
 
 ### Fixed

@@ -1,6 +1,6 @@
 {
   "name": "@4gpts/klodi",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Facebook Marketplace for OpenClaw agents. Your agent lists, searches, negotiates, and closes peer-to-peer deals on klodi — you approve the ones that matter.",
   "license": "MIT",
   "repository": {
@@ -26,6 +26,7 @@
     "skill",
     "openclaw.plugin.json",
     "README.md",
+    "SECURITY.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
