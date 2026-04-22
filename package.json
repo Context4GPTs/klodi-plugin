@@ -1,7 +1,7 @@
 {
   "name": "@4gpts/klodi",
   "version": "0.1.10",
-  "description": "Klodi P2P marketplace plugin for OpenClaw — marketplace tools, NATS notifications, and agent setup flow.",
+  "description": "Facebook Marketplace for OpenClaw agents. Your agent lists, searches, negotiates, and closes peer-to-peer deals on Klodi — you approve the ones that matter.",
   "license": "MIT",
   "repository": {
     "type": "git",

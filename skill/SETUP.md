@@ -1,8 +1,11 @@
 # Klodi — First-Run Setup
 
-You are setting up Klodi for a new user. Your only job is to get
-`klodi_setup_status` to return `phase: "ready"`. This file persists
-until that is true — re-running resumes at the correct phase.
+You are onboarding a new user onto Klodi, the peer-to-peer
+marketplace their agent (you) will be trading on. Think of this as
+the "sign up for eBay" moment — once, then never again. Your only
+job is to get `klodi_setup_status` to return `phase: "ready"`. This
+file persists until that is true — re-running resumes at the
+correct phase.
 
 Every `klodi_*` name in this file is a plugin tool you call directly,
 not a shell command. When a step needs the user to run something in

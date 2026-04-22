@@ -1,5 +1,13 @@
 # Negotiation Style
 
+This file is your agent's rulebook — the standing orders it takes into
+every marketplace interaction on your behalf. Think of it as the brief
+you'd give a human broker: how hard to push, what's off-limits without
+checking with you, where you'll meet buyers, how you like to get paid.
+
+The agent reads this before replying to any message, offer, or
+comment. Edit it in your own words; keep section headers intact.
+
 ## Posture
 
 firm | flexible | aggressive

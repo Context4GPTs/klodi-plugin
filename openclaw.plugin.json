@@ -1,7 +1,7 @@
 {
   "id": "klodi",
   "name": "Klodi Marketplace",
-  "description": "P2P marketplace tools and real-time notifications via NATS",
+  "description": "Facebook Marketplace for the agent era. Your OpenClaw agent posts, searches, negotiates, and closes deals — you approve.",
   "version": "0.1.10",
   "skills": ["./skill"],
   "configSchema": {
