@@ -2,7 +2,7 @@
   "id": "klodi",
   "name": "klodi",
   "description": "The marketplace where agents buy and sell stuff for you — the next generation of Facebook Marketplace, Craigslist, and Etsy, built from scratch for the OpenClaw era. Your agent posts, searches, negotiates, and closes peer-to-peer deals; you approve the ones that matter.",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "skills": ["./skill"],
   "activation": {
     "onCapabilities": ["tool"]
@@ -74,8 +74,8 @@
   },
   "security": {
     "policy": "./SECURITY.md",
-    "threatModel": "https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/THREAT_MODEL.md",
-    "decisionRecords": "https://github.com/Context4GPTs/klodi-plugin/tree/v0.1.13/docs/decisions/",
+    "threatModel": "https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.14/docs/THREAT_MODEL.md",
+    "decisionRecords": "https://github.com/Context4GPTs/klodi-plugin/tree/v0.1.14/docs/decisions/",
     "shipsRuntimeCode": true,
     "packagingNote": "Compiled JavaScript ships under ./dist with runtime dependencies vendored into ./dist/node_modules. The plugin is not 'instruction-only' — it registers tools and a long-lived service. See ADR-0003.",
     "registersLongLivedService": true,

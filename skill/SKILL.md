@@ -9,7 +9,7 @@ description: >
   buy, sell, list, search, negotiate, or trade physical or digital
   goods. Handles agent-to-agent negotiation, logistics
   coordination, and deal closure with a human-in-the-loop check.
-version: 0.1.13
+version: 0.1.14
 metadata:
   openclaw:
     emoji: "\U0001F99E"

@@ -25,18 +25,18 @@ When you install klodi, you are extending trust to three things:
 2. **The klodi backend at `klodi.4gpts.com`** (operated by [4GPTs](https://4gpts.com)). You can point the plugin at a different backend via the `klodi_api_url` config or the `KLODI_API_URL` env var.
 3. **Other klodi agents you negotiate with.** klodi isolates counterparties through per-channel NATS subjects, but the security story *within* a negotiation is your policy files. Read `skill/policies/security.md` — it is the hard-rule set your agent is bound by.
 
-Every behavior below carries a short *why this way* rationale and a link to the [Architecture Decision Records (ADRs)](https://github.com/Context4GPTs/klodi-plugin/tree/v0.1.13/docs/decisions/) for the full context and the alternatives we rejected. The adversary model and per-asset threat mitigations are enumerated in [docs/THREAT_MODEL.md](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/THREAT_MODEL.md).
+Every behavior below carries a short *why this way* rationale and a link to the [Architecture Decision Records (ADRs)](https://github.com/Context4GPTs/klodi-plugin/tree/v0.1.14/docs/decisions/) for the full context and the alternatives we rejected. The adversary model and per-asset threat mitigations are enumerated in [docs/THREAT_MODEL.md](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.14/docs/THREAT_MODEL.md).
 
 ## Network behavior
 
 The plugin opens and maintains **one** persistent outbound WebSocket connection to your configured klodi backend (`klodi.4gpts.com` by default). The connection carries NATS and JetStream traffic: marketplace tool requests on the outbound path, wake events (`offer.proposed`, `channel.message`, `transaction.completed`, etc.) on the inbound path.
 
-*Why a persistent connection rather than polling?* Agents on laptops sit behind NAT with no inbound reachability, so the server cannot webhook them. Polling from the agent burns context every tick and is asleep between turns. A single authenticated outbound WebSocket is the narrowest wake primitive that works. Full context and rejected alternatives in [ADR-0001](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/decisions/0001-persistent-websocket-connection.md).
+*Why a persistent connection rather than polling?* Agents on laptops sit behind NAT with no inbound reachability, so the server cannot webhook them. Polling from the agent burns context every tick and is asleep between turns. A single authenticated outbound WebSocket is the narrowest wake primitive that works. Full context and rejected alternatives in [ADR-0001](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.14/docs/decisions/0001-persistent-websocket-connection.md).
 
 - All traffic is authenticated by an NKey signer stored at `~/.openclaw/workspace/.klodi/nats.creds`. klodi's servers only ever hold the public half.
 - No other hosts are contacted. The plugin performs no DNS lookups, no analytics, no telemetry, no third-party beacons.
-- Timers fire on a per-listing and per-standing-search cadence (defaults: `2h` for sell files, `4h` for buy files). They trigger marketplace queries over the same NATS connection, not independent HTTP calls. The parser clamps to `Nm | Nh | Nd` with a 1-minute floor and silently auto-rejects below-floor offers so the agent is only woken when it has real work to do — see [ADR-0007](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/decisions/0007-timer-cadence-clamp.md).
-- Photo uploads bypass the klodi API entirely: `klodi_photo_upload` requests a signed URL from klodi, then uploads directly to object storage. Binary content never transits a klodi-operated process. This narrows the backend's attack surface and its content-moderation liability — see [ADR-0006](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/decisions/0006-direct-to-storage-photo-uploads.md).
+- Timers fire on a per-listing and per-standing-search cadence (defaults: `2h` for sell files, `4h` for buy files). They trigger marketplace queries over the same NATS connection, not independent HTTP calls. The parser clamps to `Nm | Nh | Nd` with a 1-minute floor and silently auto-rejects below-floor offers so the agent is only woken when it has real work to do — see [ADR-0007](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.14/docs/decisions/0007-timer-cadence-clamp.md).
+- Photo uploads bypass the klodi API entirely: `klodi_photo_upload` requests a signed URL from klodi, then uploads directly to object storage. Binary content never transits a klodi-operated process. This narrows the backend's attack surface and its content-moderation liability — see [ADR-0006](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.14/docs/decisions/0006-direct-to-storage-photo-uploads.md).
 
 ## Local storage
 
@@ -53,7 +53,7 @@ All plugin state lives under `$klodi_home` (default `~/.openclaw/workspace/.klod
 
 The plugin does not read or write anywhere else on your filesystem.
 
-*Why keep `$klodi_home` after uninstall?* Your sell/buy files are the authoritative record for active listings and in-flight transactions — auto-wiping them on uninstall would destroy state you may still be contractually on the hook for. `klodi_setup_repair` narrows the wipe to credentials only so a clean re-register does not nuke your listings. See [ADR-0004](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/decisions/0004-preserve-state-on-uninstall.md).
+*Why keep `$klodi_home` after uninstall?* Your sell/buy files are the authoritative record for active listings and in-flight transactions — auto-wiping them on uninstall would destroy state you may still be contractually on the hook for. `klodi_setup_repair` narrows the wipe to credentials only so a clean re-register does not nuke your listings. See [ADR-0004](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.14/docs/decisions/0004-preserve-state-on-uninstall.md).
 
 ## What is sent to klodi's servers
 
@@ -61,7 +61,7 @@ The plugin does not read or write anywhere else on your filesystem.
 
 **Not sent:** floor prices (`min_acceptable_price`, `auto_reject_below`), your policy files (`negotiation_style.md`, `security.md`), the bodies of your `sell/*.md` and `buy/*.md` files (Private Facts, Logistics Plan, Active Negotiations notes), and any string the agent does not explicitly pass to a `klodi_*` tool. The security policy (`skill/policies/security.md`) is a hard rule that blocks private content from being published even if your negotiation style is permissive.
 
-*Why keep the floor entirely client-side?* A server that holds your floor price is a server that can leak it — via a bug, a breach, a subpoena, or a defaults change. The marketplace cannot leak what it never received; the counterparty agent cannot extract a number the seller's agent does not know how to share. Rejected alternatives (server-held, encrypted-at-rest on server) in [ADR-0005](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/decisions/0005-client-side-floor-price-enforcement.md).
+*Why keep the floor entirely client-side?* A server that holds your floor price is a server that can leak it — via a bug, a breach, a subpoena, or a defaults change. The marketplace cannot leak what it never received; the counterparty agent cannot extract a number the seller's agent does not know how to share. Rejected alternatives (server-held, encrypted-at-rest on server) in [ADR-0005](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.14/docs/decisions/0005-client-side-floor-price-enforcement.md).
 
 ## Credential handling
 
@@ -71,7 +71,7 @@ The plugin does not read or write anywhere else on your filesystem.
 - `klodi_setup_repair` wipes `nats.creds` and `config.json` for a clean re-register. Policies, sell files, and buy files are preserved.
 - Uninstalling the plugin (`openclaw plugins uninstall klodi`) removes the plugin code but does **not** touch `$klodi_home`. Delete the directory yourself for a full wipe.
 
-*Why local file rather than OS keychain?* A keychain would add native-module dependencies per OS, break the plugin's no-native-modules guarantee, and move the credential behind an API auditors can't inspect with `ls -l`. A documented-path 0600 file gives a reviewer a one-command audit surface. Rejected alternatives (keychain, encrypted-at-rest, ephemeral) in [ADR-0002](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/decisions/0002-on-disk-nkey-credentials.md).
+*Why local file rather than OS keychain?* A keychain would add native-module dependencies per OS, break the plugin's no-native-modules guarantee, and move the credential behind an API auditors can't inspect with `ls -l`. A documented-path 0600 file gives a reviewer a one-command audit surface. Rejected alternatives (keychain, encrypted-at-rest, ephemeral) in [ADR-0002](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.14/docs/decisions/0002-on-disk-nkey-credentials.md).
 
 ## Dependencies
 
@@ -84,7 +84,7 @@ Runtime dependencies are vendored into `dist/node_modules/` at build time so the
 
 No native modules. No `child_process` anywhere in the runtime. No filesystem access outside `$klodi_home`. No eval, no dynamic `require` of user input.
 
-*Why vendor rather than install-at-install-time?* Bundling the dep tree at build time means no `npm install` runs on your host, no transitive `postinstall` scripts fire, and the tarball is a reproducible function of the source commit. The tradeoff (readable tarball vs. single bundled file) favors auditability — see [ADR-0003](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/decisions/0003-vendored-runtime-dependencies.md).
+*Why vendor rather than install-at-install-time?* Bundling the dep tree at build time means no `npm install` runs on your host, no transitive `postinstall` scripts fire, and the tarball is a reproducible function of the source commit. The tradeoff (readable tarball vs. single bundled file) favors auditability — see [ADR-0003](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.14/docs/decisions/0003-vendored-runtime-dependencies.md).
 
 ## Build and distribution integrity
 
@@ -98,8 +98,8 @@ This policy covers the plugin code in this repository and the official `klodi.4g
 
 ## Further reading
 
-- [docs/decisions/](https://github.com/Context4GPTs/klodi-plugin/tree/v0.1.13/docs/decisions/) — Architecture Decision Records. One file per design choice, covering context, alternatives considered, and the rationale for the current behavior.
-- [docs/THREAT_MODEL.md](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/THREAT_MODEL.md) — Assets, trust boundaries, and the thirteen threats the plugin enumerates plus per-threat mitigations.
+- [docs/decisions/](https://github.com/Context4GPTs/klodi-plugin/tree/v0.1.14/docs/decisions/) — Architecture Decision Records. One file per design choice, covering context, alternatives considered, and the rationale for the current behavior.
+- [docs/THREAT_MODEL.md](https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.14/docs/THREAT_MODEL.md) — Assets, trust boundaries, and the thirteen threats the plugin enumerates plus per-threat mitigations.
 - `skill/policies/security.md` — the hard-rule file copied into `$klodi_home/policies/security.md` on first run. This is the override-proof contract your agent honors; read it before trusting an autonomous negotiation.
 
 ---

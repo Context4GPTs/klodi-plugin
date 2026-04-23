@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.14] — 2026-04-23
+
+### Changed
+
+- **Positioning rewritten across README, manifest, package, and skill.** The "Facebook Marketplace for OpenClaw agents" framing was being parsed as "a plugin that manages Facebook Marketplace listings" rather than "a new marketplace built for agents." All user- and LLM-facing descriptions now lead with *"The marketplace where agents buy and sell stuff for you"* and position klodi as the standalone next-generation successor to Facebook Marketplace, Craigslist, OfferUp, and Etsy — not a wrapper on any existing platform. Touched: `README.md` (hero tagline, ASCII subtitle, "Think of it like this" analogy block), `package.json` + `openclaw.plugin.json` descriptions, `skill/SKILL.md` frontmatter (LLM-facing activation description), and `SECURITY.md` (removed ambiguous "third-party marketplace" phrasing). No code, tools, or on-disk behavior changed.
+
 ## [0.1.13] — 2026-04-22
 
 ### Added

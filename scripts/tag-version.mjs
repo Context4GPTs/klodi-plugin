@@ -34,11 +34,13 @@ if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
 const tag = `v${version}`;
 
 function run(cmd, opts = {}) {
-  return execSync(cmd, {
+  const out = execSync(cmd, {
     cwd: ROOT,
     encoding: "utf-8",
     ...opts,
-  }).toString().trim();
+  });
+  // execSync returns null when stdio is "inherit" (no captured stdout).
+  return out == null ? "" : out.toString().trim();
 }
 
 // Capture-silently wrapper; returns null on non-zero exit, empty string
