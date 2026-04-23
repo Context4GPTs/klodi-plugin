@@ -1,5 +1,8 @@
 /**
  * Media tools: photo upload.
+ *
+ * See ADR-0006 — binary never transits klodi-operated compute; the API
+ * only signs URLs, the client PUTs to R2 directly.
  */
 
 import type { PluginAPI } from "openclaw/plugin-sdk";

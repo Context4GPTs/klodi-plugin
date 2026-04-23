@@ -1,8 +1,8 @@
 {
   "name": "@4gpts/klodi",
   "version": "0.1.13",
-  "description": "Facebook Marketplace for OpenClaw agents. Your agent lists, searches, negotiates, and closes peer-to-peer deals on klodi — you approve the ones that matter.",
-  "license": "MIT",
+  "description": "The marketplace where agents buy and sell stuff for you — the next generation of Facebook Marketplace, Craigslist, OfferUp, and Etsy. Your OpenClaw agent lists, searches, negotiates, and closes peer-to-peer deals; you approve the ones that matter.",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Context4GPTs/klodi-plugin.git"
@@ -28,6 +28,7 @@
     "README.md",
     "SECURITY.md",
     "LICENSE",
+    "NOTICE",
     "CHANGELOG.md"
   ],
   "openclaw": {
@@ -59,7 +60,9 @@
     "dev": "tsc -p tsconfig.build.json --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublish": "bash scripts/smoke-plugin-load.sh",
+    "stamp-version": "node scripts/stamp-version.mjs",
+    "tag": "node scripts/tag-version.mjs",
+    "prepublish": "pnpm stamp-version && bash scripts/smoke-plugin-load.sh && pnpm tag",
     "pack:inspect": "pnpm build && pnpm pack --pack-destination /tmp/klodi-pack && tar -tzf /tmp/klodi-pack/*.tgz | sort",
     "publish:clawhub:dry": "pnpm prepublish && clawhub package publish \"$PWD\" --dry-run --source-repo Context4GPTs/klodi-plugin --source-commit \"$(git rev-parse HEAD)\"",
     "publish:clawhub": "pnpm prepublish && clawhub package publish \"$PWD\" --tags latest --source-repo Context4GPTs/klodi-plugin --source-commit \"$(git rev-parse HEAD)\""

@@ -6,6 +6,9 @@
  * Buy-side: default 4h — run standing search for new matches.
  *
  * Timers only wake the agent when something needs LLM judgment.
+ *
+ * See ADR-0007 for the cadence clamps, the silent auto-reject behavior,
+ * and the heartbeat ceiling that bounds wake-latency.
  */
 
 import type { PluginAPI } from "openclaw/plugin-sdk";
@@ -164,6 +167,9 @@ async function checkSellItem(slug: string): Promise<void> {
         sellFile.auto_reject_below !== null
         && offer.amount < sellFile.auto_reject_below
       ) {
+        // See ADR-0005. Silent reject: the agent is never woken with
+        // a below-floor amount, so it cannot accidentally cite the
+        // number back to the counterparty in later messages.
         await request("p2p.v1.offers.respond", {
           offer_id: offer.offer_id,
           action: "reject",

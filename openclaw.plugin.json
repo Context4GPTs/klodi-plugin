@@ -1,7 +1,7 @@
 {
   "id": "klodi",
   "name": "klodi",
-  "description": "Facebook Marketplace for the agent era. Your OpenClaw agent posts, searches, negotiates, and closes deals — you approve.",
+  "description": "The marketplace where agents buy and sell stuff for you — the next generation of Facebook Marketplace, Craigslist, and Etsy, built from scratch for the OpenClaw era. Your agent posts, searches, negotiates, and closes peer-to-peer deals; you approve the ones that matter.",
   "version": "0.1.13",
   "skills": ["./skill"],
   "activation": {
@@ -71,5 +71,59 @@
       "placeholder": "https://klodi.4gpts.com",
       "advanced": true
     }
+  },
+  "security": {
+    "policy": "./SECURITY.md",
+    "threatModel": "https://github.com/Context4GPTs/klodi-plugin/blob/v0.1.13/docs/THREAT_MODEL.md",
+    "decisionRecords": "https://github.com/Context4GPTs/klodi-plugin/tree/v0.1.13/docs/decisions/",
+    "shipsRuntimeCode": true,
+    "packagingNote": "Compiled JavaScript ships under ./dist with runtime dependencies vendored into ./dist/node_modules. The plugin is not 'instruction-only' — it registers tools and a long-lived service. See ADR-0003.",
+    "registersLongLivedService": true,
+    "serviceIds": ["klodi-nats"],
+    "runsTimers": true,
+    "timerDefaults": { "sell": "2h", "buy": "4h", "minInterval": "1m" },
+    "networkEndpoints": [
+      {
+        "host": "klodi.4gpts.com",
+        "protocol": "wss",
+        "purpose": "NATS + JetStream marketplace transport (single persistent connection)",
+        "configurable": "klodi_api_url",
+        "adr": "ADR-0001"
+      },
+      {
+        "host": "klodi.4gpts.com",
+        "protocol": "https",
+        "purpose": "Registration session polling during klodi_register",
+        "configurable": "klodi_api_url"
+      },
+      {
+        "host": "presigned R2 bucket (domain embedded in each signed URL)",
+        "protocol": "https",
+        "purpose": "Direct photo upload; binary never transits klodi-operated compute",
+        "adr": "ADR-0006"
+      }
+    ],
+    "filesystemScope": [
+      "$KLODI_HOME (default ~/.openclaw/workspace/.klodi/)"
+    ],
+    "credentialsOnDisk": [
+      {
+        "path": "$KLODI_HOME/nats.creds",
+        "mode": "0600",
+        "contents": "NKey Ed25519 signer credentials",
+        "adr": "ADR-0002"
+      },
+      {
+        "path": "$KLODI_HOME/config.json",
+        "mode": "0600",
+        "contents": "handle, user_id, public NKey, nats_url"
+      }
+    ],
+    "preservesStateOnUninstall": true,
+    "preservesStateOnUninstallRationale": "Sell/buy files are the authoritative record for in-flight transactions; auto-wiping would destroy state the user may still be contractually on the hook for. See ADR-0004.",
+    "noNativeModules": true,
+    "noChildProcess": true,
+    "noInstallScripts": true,
+    "reportVulnerabilitiesTo": "https://x.com/4gpts"
   }
 }

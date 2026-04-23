@@ -168,6 +168,9 @@ async function persistCompleted(
   mkdirSync(getBuyDir(), { recursive: true });
   mkdirSync(getPoliciesDir(), { recursive: true });
 
+  // See ADR-0002. The explicit chmodSync after writeFileSync closes the
+  // umask-interaction hole where writeFileSync's create-flow can land a
+  // wider mode than requested. Both calls intentional.
   const credsPath = getCredsPath();
   writeFileSync(credsPath, creds, { encoding: "utf-8", mode: 0o600 });
   chmodSync(credsPath, 0o600);

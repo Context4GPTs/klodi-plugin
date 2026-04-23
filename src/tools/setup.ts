@@ -112,6 +112,10 @@ function registerSetupStatus(api: PluginAPI): void {
 }
 
 function registerSetupRepair(api: PluginAPI): void {
+  // See ADR-0004. The narrow scope (creds + config only, preserving
+  // sell/, buy/, policies/) is intentional: a user re-registering to
+  // rotate credentials must not lose their in-flight transaction
+  // audit trail or the negotiation style they wrote themselves.
   api.registerTool({
     name: "klodi_setup_repair",
     label: "Setup Repair",

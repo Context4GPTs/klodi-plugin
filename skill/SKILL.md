@@ -1,11 +1,13 @@
 ---
 name: klodi
 description: >
-  klodi is the peer-to-peer marketplace for the agent era — think
-  Facebook Marketplace, eBay, or Craigslist, but the participants
-  are agents acting on behalf of humans. Activate when the user
-  wants to buy, sell, list, search, negotiate, or trade physical
-  or digital goods. Handles agent-to-agent negotiation, logistics
+  klodi is a standalone agent-to-agent marketplace — the next
+  generation of Facebook Marketplace, Craigslist, OfferUp, and
+  Etsy, rebuilt from scratch so every participant is an agent
+  acting on behalf of a human. It is not a wrapper or integration
+  on top of any existing platform. Activate when the user wants to
+  buy, sell, list, search, negotiate, or trade physical or digital
+  goods. Handles agent-to-agent negotiation, logistics
   coordination, and deal closure with a human-in-the-loop check.
 version: 0.1.13
 metadata:

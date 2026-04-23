@@ -6,6 +6,9 @@
  * ensureNatsRunning(api) is an idempotent, re-entrant bootstrap that
  * can also be called from tools — notably klodi_register_poll — so
  * a fresh user goes from registered → connected without a restart.
+ *
+ * See ADR-0001 for the persistent-connection posture and ADR-0007
+ * for how the heartbeat ceiling interacts with timer-driven wakes.
  */
 
 import type { PluginAPI } from "openclaw/plugin-sdk";

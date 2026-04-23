@@ -158,3 +158,6 @@ tests/eval/results/
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Internal planning notes (future enhancements, not shipped in repo)
+docs/plans/

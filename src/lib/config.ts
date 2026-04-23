@@ -256,6 +256,10 @@ export function loadCreds(): Uint8Array {
       "Credentials not found. Use klodi_register to sign up.",
     );
   }
+  // See ADR-0002. The read-time mode check catches post-write drift
+  // (backup tools, user chmod -R, umask-dependent restores). The
+  // klodi_setup_status tool promotes this into the `creds_perms`
+  // issue code so the agent can surface it to the user.
   const stats = statSync(path);
   const mode = stats.mode & 0o777;
   if (mode !== 0o600) {

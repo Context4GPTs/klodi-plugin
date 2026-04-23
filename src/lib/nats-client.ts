@@ -2,6 +2,9 @@
  * Shared NATS connection for the Klodi plugin.
  * Used by both tools (request-reply) and the JetStream consumer (notifications).
  *
+ * See ADR-0001 for the rationale behind one long-lived outbound WS vs
+ * polling/webhooks.
+ *
  * Connects over WebSocket (`wss://` in production, `ws://` locally) using the
  * `@nats-io/nats-core` client with an explicit `ws`-backed `wsFactory`.
  *
