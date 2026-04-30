@@ -81,15 +81,15 @@ Last reviewed: 2026-04-30.
 - **Mitigation (committed lock file):** `pnpm-lock.yaml` is committed at the workspace root; reproducing the build reproduces the exact dep graph for our own pack-time inputs (workspace deps + bundled stripping). Host-side install does not consult the lock file — exact version pins above are what keeps the install deterministic.
 - **Mitigation (no native modules):** Zero native modules in the runtime deps means zero compile-time code execution paths.
 - **Mitigation (smoke gate):** `klodi-plugin/adapters/openclaw/scripts/smoke-plugin-load.sh` loads the published-shape tarball into a clean OpenClaw image before publish; a misbehaving dep that crashes on load fails the gate.
-- **Residual risk:** A compromised dep that behaves correctly at load and misbehaves later would not be caught. Standard npm supply-chain risk, not specific to this plugin. See [ADR-0008](./decisions/0008-bundled-deps-host-ignore-scripts.md) for the install path.
+- **Residual risk:** A compromised dep that behaves correctly at load and misbehaves later would not be caught. Standard npm supply-chain risk, not specific to this plugin. See [ADR-0009](./decisions/0009-vendored-ts-workspace-deps.md) for the install path.
 
 ### T7 — Install-time code execution
 
 *A malicious `postinstall` or similar runs arbitrary code on the user's host during install.*
 
 - **Mitigation (no plugin install scripts):** The plugin declares no `preinstall` / `postinstall` / `install` lifecycle scripts. See `package.json#scripts` — the only `"install"` key is the `openclaw.install` config block, not a script.
-- **Mitigation (bundled workspace deps stripped of scripts):** Workspace deps (`@klodi/tool-catalog`, `@klodi/nats-client`) ride into the tarball via `bundleDependencies`. `pack-with-bundles.mjs` `materialize()` strips `scripts` from each bundled `package.json` at pack time, so a bundled workspace dep cannot run install hooks even if the host stops passing `--ignore-scripts`.
-- **Mitigation (host enforces `--ignore-scripts`):** Public-registry transitive deps run through `npm install` on the user's host after extraction. OpenClaw `>=2026.4.15` invokes that install with `--omit=dev --silent --ignore-scripts` (`install-package-dir` chunk in the OpenClaw runtime), blocking `preinstall` / `install` / `postinstall` from firing. The plugin pins `openclaw.install.minHostVersion: ">=2026.4.15"` to refuse hosts where this protection has not been verified. See [ADR-0008](./decisions/0008-bundled-deps-host-ignore-scripts.md).
+- **Mitigation (vendored workspace deps have no install hooks):** Workspace deps (`@klodi/tool-catalog`, `@klodi/nats-client`) ride into the tarball as inlined source under `dist/_vendor/_klodi_openclaw_<pkg>/` — plain `.js` files with no nested `package.json`. There is no manifest for `npm install` to script-execute, regardless of whether the host passes `--ignore-scripts`. The threat shape is structurally absent rather than mitigated.
+- **Mitigation (host enforces `--ignore-scripts`):** Public-registry transitive deps run through `npm install` on the user's host after extraction. OpenClaw `>=2026.4.15` invokes that install with `--omit=dev --silent --ignore-scripts` (`install-package-dir` chunk in the OpenClaw runtime), blocking `preinstall` / `install` / `postinstall` from firing. The plugin pins `openclaw.install.minHostVersion: ">=2026.4.15"` to refuse hosts where this protection has not been verified. See [ADR-0009](./decisions/0009-vendored-ts-workspace-deps.md).
 
 ### T8 — Permission drift on `nats.creds`
 

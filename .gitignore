@@ -162,6 +162,12 @@ klodi-plugin/packages/tool-catalog/dist/*
 # `copy-skill.mjs`. Never commit the adapter-local copy.
 klodi-plugin/adapters/*/skill/
 
+# Per-adapter publish staging tree (scripts/vendor.mjs target). Holds a
+# self-contained snapshot of the publish-ready artefact with workspace
+# @klodi/* deps inlined under dist/_vendor/. Recreated on every
+# pnpm build:vendored — never commit.
+adapters/*/.publish-stage/
+
 # E2E agent test artifacts (generated per run)
 tests/e2e/homes/
 tests/e2e/transcripts/

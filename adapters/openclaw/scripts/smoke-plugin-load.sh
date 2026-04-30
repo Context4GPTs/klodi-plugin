@@ -4,30 +4,34 @@
 #
 # Boots the same OpenClaw image the e2e suite uses (>=2026.4.15) and
 # verifies a freshly-packed tarball installs and loads. .14 and earlier
-# are not supported — they didn't run npm install at install time, so
-# bundleDependencies couldn't materialise; we dropped that path with
-# vendor-deps.mjs.
+# are not supported — they didn't run npm install at install time.
 #
 # Install path under test, mirroring both the local (pack-and-install)
-# and ClawHub (publish-and-install) flows since the artefact is the
-# same after we stopped vendoring `dist/node_modules/`:
+# and ClawHub (publish-and-install) flows. Both extract the same
+# staged tree (.publish-stage/) — for ClawHub specifically because its
+# CLI hardcodes node_modules/ into its ignore list, so any vendoring
+# done via npm bundleDependencies is silently stripped at upload. The
+# workspace @klodi/* packages ride into the tarball as plain JS under
+# dist/_vendor/_klodi_openclaw_{natsclient,toolcatalog}/ instead, with
+# imports rewritten in place by scripts/vendor.mjs.
 #
 #   1. `openclaw plugins install <tarball>`
 #   2. host runs `npm install` in the extracted plugin dir
-#   3. unpublished workspace @klodi/* packages resolve via
-#      bundleDependencies (preserved at `node_modules/@klodi/<name>/`
-#      in the tarball)
+#   3. workspace @klodi/* deps resolve to vendored sources under
+#      dist/_vendor/ via the rewritten import specifiers — no npm
+#      registry lookup
 #   4. public-registry packages (@nats-io/*, ws, gray-matter, ...)
 #      resolve via package.json#dependencies, fetched by npm install
 #   5. `klodi_plugin_loaded` log marker fires from dist/index.js
 #
 # Pre-install structural asserts catch packaging regressions without
 # needing a docker run:
-#   - bundleDependencies survived → node_modules/@klodi/<name>/package.json
-#     exists in the tarball
-#   - vendoring stayed dropped → no dist/node_modules/ in the tarball
-#     (its presence would mean someone reintroduced vendor-deps and
-#     bloated the publish surface)
+#   - vendored sources survived → dist/_vendor/_klodi_openclaw_natsclient/
+#     index.js and _klodi_openclaw_toolcatalog/index.js exist
+#   - no node_modules/ shipped → neither package/node_modules/ nor
+#     package/dist/node_modules/ in the tarball
+#   - published package.json has no @klodi/* deps and no
+#     bundleDependencies field (both are dead under the vendor model)
 #
 # Why a tarball install (not a bind-mount of klodi-plugin/):
 # - The published tarball excludes `src/` and `src/__tests__/` per
@@ -77,29 +81,33 @@ command -v pnpm   >/dev/null || { log "pnpm not found on PATH";   exit 2; }
 
 # --- Build + pack the plugin ------------------------------------------------
 # A fresh dist/ is required; a stale one masks source regressions.
-# pack-with-bundles.mjs materialises bundleDependencies (workspace
-# @klodi/* packages, not on the public registry) into clean
-# node_modules/<name>/ entries that ClawHub preserves on ingest, then
-# delegates to npm pack (pnpm pack rejects bundleDependencies under
-# node-linker=isolated).
+# vendor.mjs stages a publish-ready tree at .publish-stage/ with the
+# workspace @klodi/* deps copied into dist/_vendor/ and import
+# specifiers rewritten to relative paths. We then run `npm pack` from
+# the staged dir to produce the same tarball ClawHub would upload
+# (modulo ClawHub's own ignore rules; both treat .publish-stage/ as
+# the package root).
 
 log "Building @4gpts/klodi and its file: deps in topological order..."
 # Each TS package is independent (file: refs, not a pnpm workspace).
 # Build deps first so @klodi/tool-catalog and @klodi/nats-client have
-# dist/ ready by the time openclaw's tsc runs and its pnpm install
-# resolves the file: links.
+# dist/ ready by the time openclaw's tsc runs, vendor.mjs's preflight
+# checks pass, and openclaw's pnpm install resolves the file: links.
 readonly REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
 for pkg in packages/tool-catalog packages/nats-client-ts; do
   ( cd "$REPO_ROOT/$pkg" && pnpm install >/dev/null && pnpm build >/dev/null )
 done
 ( cd "$ROOT" && pnpm install >/dev/null && pnpm build >/dev/null )
 
+log "Staging .publish-stage/ via scripts/vendor.mjs ..."
+( cd "$ROOT" && node scripts/vendor.mjs >/dev/null )
+
 STAGE_DIR="$(mktemp -d)"
 log "Packing plugin tarball into $STAGE_DIR ..."
-( cd "$ROOT" && node scripts/pack-with-bundles.mjs --pack-destination "$STAGE_DIR" >/dev/null )
+( cd "$ROOT/.publish-stage" && npm pack --pack-destination "$STAGE_DIR" >/dev/null )
 
 readonly TARBALL="$(ls "$STAGE_DIR"/*.tgz | head -1)"
-[[ -f "$TARBALL" ]] || { log "pack-with-bundles produced no tarball"; exit 2; }
+[[ -f "$TARBALL" ]] || { log "npm pack produced no tarball"; exit 2; }
 log "Tarball: $(basename "$TARBALL") ($(wc -c <"$TARBALL") bytes)"
 
 # --- Structural asserts on the tarball --------------------------------------
@@ -108,23 +116,43 @@ readonly EXTRACT_DIR="$STAGE_DIR/inspect"
 mkdir -p "$EXTRACT_DIR"
 tar -xzf "$TARBALL" -C "$EXTRACT_DIR"
 
-for bundled_pkg in @klodi/nats-client @klodi/tool-catalog; do
-  if [[ ! -f "$EXTRACT_DIR/package/node_modules/$bundled_pkg/package.json" ]]; then
-    log "FAIL: $bundled_pkg missing from tarball at node_modules/."
-    log "      bundleDependencies didn't survive — check pack-with-bundles.mjs."
+for vendored_entry in \
+  dist/_vendor/_klodi_openclaw_natsclient/index.js \
+  dist/_vendor/_klodi_openclaw_toolcatalog/index.js
+do
+  if [[ ! -f "$EXTRACT_DIR/package/$vendored_entry" ]]; then
+    log "FAIL: $vendored_entry missing from tarball."
+    log "      Vendor staging didn't reach the published artefact —"
+    log "      check scripts/vendor.mjs and pack:inspect output."
     exit 1
   fi
 done
 
-if [[ -d "$EXTRACT_DIR/package/dist/node_modules" ]]; then
-  log "FAIL: dist/node_modules/ present in tarball."
-  log "      Vendoring was dropped with .14 support; this directory should"
-  log "      not exist. Someone reintroduced vendor-deps.mjs or equivalent."
+if [[ -d "$EXTRACT_DIR/package/node_modules" ]] \
+  || [[ -d "$EXTRACT_DIR/package/dist/node_modules" ]]; then
+  log "FAIL: node_modules/ shipped in tarball."
+  log "      Vendor model expects no node_modules/ at all — workspace"
+  log "      deps ride under dist/_vendor/ and external deps install"
+  log "      via package.json#dependencies on the host."
+  exit 1
+fi
+
+# Vendoring's publish-time projection: workspace deps are real runtime
+# deps in source, but they ride into the artefact as inlined JS under
+# dist/_vendor/, not as registry-fetchable packages. vendor.mjs strips
+# them from the published dependencies so the host's npm install does
+# not try (and fail) to resolve them against the public registry.
+PUBLISHED_PKG="$EXTRACT_DIR/package/package.json"
+if grep -qE '"@klodi/(nats-client|tool-catalog)"\s*:' "$PUBLISHED_PKG"; then
+  log "FAIL: published package.json still lists @klodi/* in dependencies."
+  log "      vendor.mjs's writePublishPackageJson regressed — workspace"
+  log "      deps must be stripped because they ship inlined under"
+  log "      dist/_vendor/ rather than via the public registry."
   exit 1
 fi
 
 rm -rf "$EXTRACT_DIR"
-log "Structural asserts: bundleDeps present, dist/node_modules/ absent."
+log "Structural asserts: vendored sources present, no node_modules/, clean package.json."
 
 # Stage the openclaw config alongside the tarball; everything rides
 # into the container under /stage:ro so nothing on the host needs to
@@ -237,8 +265,9 @@ fi
 if [[ $DOCKER_RC -ne 0 ]]; then
   log "docker run exited $DOCKER_RC — plugin install failed."
   log "Common causes: a runtime dep declared under devDependencies, a"
-  log "workspace dep not added to bundleDependencies, or a transitive"
-  log "package not reachable from package.json#dependencies."
+  log "workspace dep not vendored by scripts/vendor.mjs (check the"
+  log "staged tree's dist/_vendor/), or a transitive package not"
+  log "reachable from package.json#dependencies."
   log "--- install output ---"
   cat "$INSTALL_LOG" >&2
   exit 1

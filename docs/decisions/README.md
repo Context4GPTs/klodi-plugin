@@ -30,4 +30,5 @@ Each ADR is a short, self-contained markdown file:
 | [0005](./0005-client-side-floor-price-enforcement.md) | Floor-price enforcement client-side only | Accepted |
 | [0006](./0006-direct-to-storage-photo-uploads.md) | Direct-to-storage photo uploads via signed URLs | Accepted |
 | [0007](./0007-timer-cadence-clamp.md) | Timer cadences with parse clamps and silent auto-reject | Accepted |
-| [0008](./0008-bundled-deps-host-ignore-scripts.md) | Runtime deps via `bundleDependencies` + host-enforced `--ignore-scripts` | Accepted |
+| [0008](./0008-bundled-deps-host-ignore-scripts.md) | Runtime deps via `bundleDependencies` + host-enforced `--ignore-scripts` | Superseded |
+| [0009](./0009-vendored-ts-workspace-deps.md) | Workspace TS deps vendored into `dist/_vendor/` at publish time | Accepted |

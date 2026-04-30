@@ -40,10 +40,10 @@ Tool calls (post a listing, search, send a channel message, etc.) round-trip on 
 
 - All traffic is authenticated by an NKey signer stored at `${klodi_home}/nats.creds`. klodi's servers only ever hold the public half. JWTs are scoped per user and limit the subjects that user can pub/sub.
 - No other hosts are contacted. The plugin performs no DNS lookups, no analytics, no telemetry, no third-party beacons.
-- No client-side cron. 0.2.0 retired the per-listing and per-standing-search timers (`2h` / `4h` cadences in 0.1.x). Standing-search matches and below-floor auto-rejects are server-side: matches arrive as `search.match` wakes; `auto_reject_below` is set on the listing and the marketplace rejects offers that violate it. The historical timer-cadence clamp is documented in [ADR-0007](docs/decisions/0007-timer-cadence-clamp.md) (Superseded).
-- Photo uploads bypass the klodi API entirely: `klodi_assets_upload_url` requests a signed URL from klodi, then uploads directly to object storage. Binary content never transits a klodi-operated process. See [ADR-0006](docs/decisions/0006-direct-to-storage-photo-uploads.md).
+- No client-side cron. 0.2.0 retired the per-listing and per-standing-search timers (`2h` / `4h` cadences in 0.1.x). Standing-search matches and below-floor auto-rejects are server-side: matches arrive as `search.match` wakes; `auto_reject_below` is set on the listing and the marketplace rejects offers that violate it. The historical timer-cadence clamp is documented in [ADR-0007](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/decisions/0007-timer-cadence-clamp.md) (Superseded).
+- Photo uploads bypass the klodi API entirely: `klodi_assets_upload_url` requests a signed URL from klodi, then uploads directly to object storage. Binary content never transits a klodi-operated process. See [ADR-0006](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/decisions/0006-direct-to-storage-photo-uploads.md).
 
-The retired pieces (HMAC inbound webhook, public-URL prerequisite, `wake.hmac` credential, `klodi-mcp` Node binary, host cron paths) were removed in 0.2.0 — see [CHANGELOG.md](CHANGELOG.md). The 0012 plan documents the rationale.
+The retired pieces (HMAC inbound webhook, public-URL prerequisite, `wake.hmac` credential, `klodi-mcp` Node binary, host cron paths) were removed in 0.2.0 — see [CHANGELOG.md](https://github.com/Context4GPTs/klodi-plugin/blob/main/CHANGELOG.md). The 0012 plan documents the rationale.
 
 ## Local storage
 
@@ -63,7 +63,7 @@ The directory itself is mode `0700`. The plugin does not read or write anywhere 
 
 `wake.hmac` is **gone** as of 0.2.0 — the retired webhook plane was the only consumer.
 
-*Why keep `${klodi_home}` after uninstall?* Your sell/buy files are the authoritative record for active listings and in-flight transactions — auto-wiping them on uninstall would destroy state you may still be contractually on the hook for. `klodi_setup_repair` narrows the wipe to credentials only so a clean re-register does not nuke your listings. See [ADR-0004](docs/decisions/0004-preserve-state-on-uninstall.md).
+*Why keep `${klodi_home}` after uninstall?* Your sell/buy files are the authoritative record for active listings and in-flight transactions — auto-wiping them on uninstall would destroy state you may still be contractually on the hook for. `klodi_setup_repair` narrows the wipe to credentials only so a clean re-register does not nuke your listings. See [ADR-0004](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/decisions/0004-preserve-state-on-uninstall.md).
 
 ## What is sent to klodi's servers
 
@@ -71,7 +71,7 @@ The directory itself is mode `0700`. The plugin does not read or write anywhere 
 
 **Not sent:** floor prices (`min_acceptable_price`, `auto_reject_below`), your policy files (`negotiation_style.md`, `security.md`), the bodies of your `sell/*.md` and `buy/*.md` files (Private Facts, Logistics Plan, Active Negotiations notes), and any string the agent does not explicitly pass to a `klodi_*` tool. The security policy (`skill/policies/security.md`) is a hard rule that blocks private content from being published even if your negotiation style is permissive.
 
-*Why keep the floor entirely client-side?* A server that holds your floor price is a server that can leak it. The marketplace cannot leak what it never received; the counterparty agent cannot extract a number the seller's agent does not know how to share. See [ADR-0005](docs/decisions/0005-client-side-floor-price-enforcement.md).
+*Why keep the floor entirely client-side?* A server that holds your floor price is a server that can leak it. The marketplace cannot leak what it never received; the counterparty agent cannot extract a number the seller's agent does not know how to share. See [ADR-0005](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/decisions/0005-client-side-floor-price-enforcement.md).
 
 **Asking price ≠ floor price.** `asking_price` is the public target the marketplace shows; `min_acceptable_price` is the private floor your agent enforces locally. The plugin **never** derives one from the other. Three states are valid for the floor:
 
@@ -91,7 +91,7 @@ The seller chooses; the system never auto-fills the floor from the asking price.
 - `klodi_setup_repair` removes only `nats.creds` and `config.json` for a clean re-register. Policies, sell files, buy files, and the bundled `skill/` tree are preserved. After repair, the user re-runs `klodi_register`.
 - Uninstalling the plugin removes the plugin code but does **not** touch `${klodi_home}`. Delete the directory yourself for a full wipe.
 
-*Why local file rather than OS keychain?* A keychain would add native-module dependencies per OS, break the plugin's no-native-modules guarantee, and move the credential behind an API auditors can't inspect with `ls -l`. A documented-path 0600 file gives a reviewer a one-command audit surface. See [ADR-0002](docs/decisions/0002-on-disk-nkey-credentials.md).
+*Why local file rather than OS keychain?* A keychain would add native-module dependencies per OS, break the plugin's no-native-modules guarantee, and move the credential behind an API auditors can't inspect with `ls -l`. A documented-path 0600 file gives a reviewer a one-command audit surface. See [ADR-0002](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/decisions/0002-on-disk-nkey-credentials.md).
 
 ## JWT scope
 
@@ -109,7 +109,7 @@ A missing server-managed consumer surfaces in the client as `KlodiSetupError("no
 
 Channel publishes are scope-locked at the JWT layer (above): the second token in `p2p.v1.channels.<channel_id>.<user_id>.msg` MUST equal the authenticated user. The marketplace's side-consumer at `p2p.v1.channels.*.*.msg` is a defense-in-depth check that also enforces participant membership in the channel — a user could publish to a channel they are not a participant of (e.g. a deleted/closed channel they were once in). The side-consumer drops those messages from the audit / history index.
 
-Current behavior is lenient: log + drop, no auto-revoke. The threat is bounded (impersonation closed at the JWT layer, intent-required, low expected frequency). A future operator can add a counter + threshold + alert; the implementation sketch lives in [docs/reviews/2026-04-25-0012-first-pass-review.md § F.1](../docs/reviews/2026-04-25-0012-first-pass-review.md).
+Current behavior is lenient: log + drop, no auto-revoke. The threat is bounded (impersonation closed at the JWT layer, intent-required, low expected frequency). A future operator can add a counter + threshold + alert; the implementation sketch lives in [docs/reviews/2026-04-25-0012-first-pass-review.md § F.1](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/reviews/2026-04-25-0012-first-pass-review.md).
 
 ## Dependencies
 
@@ -117,7 +117,7 @@ Each adapter declares its own runtime dependencies. The OpenClaw TypeScript adap
 
 No native modules in the TS adapters. No `child_process` anywhere in the runtime. No filesystem access outside `${klodi_home}`. No eval, no dynamic `require` of user input.
 
-*Why vendor + host `--ignore-scripts` rather than bundle or registry-publish?* The first design ([ADR-0003](docs/decisions/0003-vendored-runtime-dependencies.md), superseded) vendored every transitive into `dist/node_modules/` at build time and maintained two sources of truth (`vendor-deps.mjs` and `package.json#dependencies`) that drifted in practice. The second ([ADR-0008](docs/decisions/0008-bundled-deps-host-ignore-scripts.md), superseded) shipped workspace deps via `bundleDependencies`, but ClawHub's publish CLI hardcodes `node_modules/` into its upload-time ignore list and silently strips it at every depth — the bundles never reached users. The current design ([ADR-0009](docs/decisions/0009-vendored-ts-workspace-deps.md)) ports the per-adapter vendor pattern already used by every Rust and Python adapter to the TypeScript build: workspace deps ride into the tarball as inlined `.js` files under `dist/_vendor/_klodi_openclaw_<pkg>/` (no nested `package.json`, so no install hooks exist regardless of `--ignore-scripts`), and the host re-resolves public-registry deps with `npm install --omit=dev --silent --ignore-scripts` (blocks transitive postinstall execution). The plugin pins `openclaw.install.minHostVersion: ">=2026.4.15"` so the install will refuse hosts where the `--ignore-scripts` enforcement has not been verified.
+*Why vendor + host `--ignore-scripts` rather than bundle or registry-publish?* The first design ([ADR-0003](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/decisions/0003-vendored-runtime-dependencies.md), superseded) vendored every transitive into `dist/node_modules/` at build time and maintained two sources of truth (`vendor-deps.mjs` and `package.json#dependencies`) that drifted in practice. The second ([ADR-0008](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/decisions/0008-bundled-deps-host-ignore-scripts.md), superseded) shipped workspace deps via `bundleDependencies`, but ClawHub's publish CLI hardcodes `node_modules/` into its upload-time ignore list and silently strips it at every depth — the bundles never reached users. The current design ([ADR-0009](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/decisions/0009-vendored-ts-workspace-deps.md)) ports the per-adapter vendor pattern already used by every Rust and Python adapter to the TypeScript build: workspace deps ride into the tarball as inlined `.js` files under `dist/_vendor/_klodi_openclaw_<pkg>/` (no nested `package.json`, so no install hooks exist regardless of `--ignore-scripts`), and the host re-resolves public-registry deps with `npm install --omit=dev --silent --ignore-scripts` (blocks transitive postinstall execution). The plugin pins `openclaw.install.minHostVersion: ">=2026.4.15"` so the install will refuse hosts where the `--ignore-scripts` enforcement has not been verified.
 
 ## Build and distribution integrity
 
@@ -133,10 +133,10 @@ This policy covers the plugin code in this repository and the official `klodi-ne
 
 ## Further reading
 
-- [docs/decisions/](docs/decisions/) — Architecture Decision Records.
-- [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) — Assets, trust boundaries, and per-threat mitigations.
-- [docs/plans/0012-nats-native-host-plugins.md](docs/plans/0012-nats-native-host-plugins.md) — current architecture spec.
-- [docs/reviews/2026-04-25-0012-first-pass-review.md](../docs/reviews/2026-04-25-0012-first-pass-review.md) — first-pass review and resolved decisions.
+- [docs/decisions/](https://github.com/Context4GPTs/klodi-plugin/tree/main/docs/decisions/) — Architecture Decision Records.
+- [docs/THREAT_MODEL.md](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/THREAT_MODEL.md) — Assets, trust boundaries, and per-threat mitigations.
+- [docs/plans/0012-nats-native-host-plugins.md](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/plans/0012-nats-native-host-plugins.md) — current architecture spec.
+- [docs/reviews/2026-04-25-0012-first-pass-review.md](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/reviews/2026-04-25-0012-first-pass-review.md) — first-pass review and resolved decisions.
 - `skill/policies/security.md` — the hard-rule file copied into `${klodi_home}/policies/security.md` on first run.
 
 ---
