@@ -35,7 +35,7 @@ PYTHON ?= $(shell command -v python3.13 2>/dev/null || command -v python3.12 2>/
 VERSION = $(shell awk -F'"' '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version[[:space:]]*=/{print $$2;exit}' $(HERE)/Cargo.toml)
 TAG     = $(PACKAGE)-v$(VERSION)
 
-.PHONY: help vendor stamp-version build pack-inspect smoke tag changelog-check release-notes prepublish publish-dry publish clean
+.PHONY: help vendor stamp-version render-readme build pack-inspect smoke tag changelog-check release-notes prepublish publish-dry publish clean
 
 help:
 	@echo "klodi-zeroclaw — adapter publish targets"
@@ -43,6 +43,7 @@ help:
 	@echo "  make pack-inspect  vendor + cargo package + dump .crate contents"
 	@echo "  make smoke         build + run --help on each declared [[bin]]"
 	@echo "  make stamp-version stamp version into versioned URLs"
+	@echo "  make render-readme regenerate README.md (header + absolute repo links)"
 	@echo "  make tag           create + push klodi-zeroclaw-v<version> git tag"
 	@echo "  make changelog-check  validate CHANGELOG entry exists for this version"
 	@echo "  make release-notes    print CHANGELOG entry for this version to stdout"
@@ -51,7 +52,10 @@ help:
 	@echo "  make publish       prepublish + cargo publish (staged) → crates.io"
 	@echo "  make clean         rm -rf build/"
 
-vendor:
+render-readme:
+	@node $(HERE)/../../scripts/render-publish-readme.mjs adapters/zeroclaw
+
+vendor: render-readme
 	@$(PYTHON) scripts/vendor.py
 
 stamp-version:

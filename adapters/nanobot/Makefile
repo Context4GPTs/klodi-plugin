@@ -29,7 +29,7 @@ DIST    := $(HERE)/dist
 VERSION = $(shell awk -F'"' '/^\[project\]/{p=1;next} /^\[/{p=0} p && /^version[[:space:]]*=/{print $$2;exit}' $(HERE)/pyproject.toml)
 TAG     = $(PACKAGE)-v$(VERSION)
 
-.PHONY: help copy-skill vendor stamp-version build pack-inspect smoke tag changelog-check release-notes prepublish publish-dry publish clean
+.PHONY: help copy-skill vendor stamp-version render-readme build pack-inspect smoke tag changelog-check release-notes prepublish publish-dry publish clean
 
 help:
 	@echo "klodi-nanobot — adapter publish targets"
@@ -37,6 +37,7 @@ help:
 	@echo "  make pack-inspect  build + dump wheel contents"
 	@echo "  make smoke         build + install into a clean venv + import"
 	@echo "  make stamp-version stamp version into versioned URLs"
+	@echo "  make render-readme regenerate README.md (header + absolute repo links)"
 	@echo "  make tag           create + push klodi-nanobot-v<version> git tag"
 	@echo "  make changelog-check  validate CHANGELOG entry exists for this version"
 	@echo "  make release-notes    print CHANGELOG entry for this version to stdout"
@@ -48,11 +49,14 @@ help:
 copy-skill:
 	@python3 scripts/copy-skill.py
 
-vendor: copy-skill
+vendor: render-readme copy-skill
 	@python3 scripts/vendor.py
 
 stamp-version:
 	@python3 scripts/stamp-version.py
+
+render-readme:
+	@node $(HERE)/../../scripts/render-publish-readme.mjs adapters/nanobot
 
 build: vendor
 	@rm -rf "$(DIST)"
