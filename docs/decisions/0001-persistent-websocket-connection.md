@@ -25,15 +25,15 @@ The connection is owned by an OpenClaw service (`klodi-nats`) with explicit `sta
 
 ## Security implications
 
-- **Single known host.** The plugin talks to exactly one endpoint — `klodi.4gpts.com` by default, overridable for self-hosting only via the documented `klodi_api_url` config key. Network observers see one destination, not a fanout. Auditors grep for one hostname.
+- **Single known host.** The plugin talks to exactly one endpoint — `klodi.4gpts.com` (API) / `klodi-net.4gpts.com` (NATS-WS) by default, overridable for self-hosting via the documented `klodi_api_url` / `KLODI_API_URL` knobs. Network observers see one destination, not a fanout. Auditors grep for one hostname.
 - **Authenticated transport.** Every request carries the user's NKey signature; the server validates against the public key it registered at signup. There is no unauthenticated path.
-- **TLS end-to-end.** Production uses `wss://`; messages and headers are encrypted on the wire. See `src/lib/nats-client.ts` for the `wsFactory` that ensures the Node `ws` package handles the TLS upgrade correctly behind Fastly's edge (ordinary `globalThis.WebSocket` fails there on Node 24 — see the module header for the full failure mode).
-- **Bounded blast radius.** The WS delivers marketplace events, not arbitrary code or commands. Message parsing is in one place (`parseWireEvent` in `src/service/nats.ts`), and malformed frames are logged-and-dropped, never executed.
+- **TLS end-to-end.** Production uses `wss://`; messages and headers are encrypted on the wire. See `packages/nats-client-ts/src/` for the `wsFactory` that ensures the Node `ws` package handles the TLS upgrade correctly behind Fastly's edge (ordinary `globalThis.WebSocket` fails there on Node 24 — see the module header for the full failure mode).
+- **Bounded blast radius.** The WS delivers marketplace events, not arbitrary code or commands. Wire-event parsing is in one place (the consumer loop inside `packages/nats-client-ts/`), and malformed frames are logged-and-dropped, never executed.
 - **Revocable.** Since the server only holds the public NKey, a compromised signer is revoked by rotating at the server; the user runs `klodi_setup_repair` + `klodi_register` and the old key is dead.
 
 ## References
 
-- Code: `src/lib/nats-client.ts` (`wsconnect`, `WS_PING_INTERVAL_MS`, `WS_CONNECT_TIMEOUT_MS`)
-- Code: `src/service/nats.ts` (service lifecycle, `ensureNatsRunning`, `consumeLoop`)
+- Code: `packages/nats-client-ts/src/` (shared NATS-WS client: `wsconnect`, ping/connect timeouts, JetStream consumer loop). Python and Rust mirrors live in `packages/nats-client-py/` and `packages/nats-client-rs/`.
+- Code: `adapters/openclaw/src/lib/client.ts` (per-adapter cached connection lifecycle).
 - [SECURITY.md § Network behavior](../../SECURITY.md)
-- Related: [ADR-0002](./0002-on-disk-nkey-credentials.md), [ADR-0007](./0007-timer-cadence-clamp.md)
+- Related: [ADR-0002](./0002-on-disk-nkey-credentials.md), [ADR-0007](./0007-timer-cadence-clamp.md) (Superseded)

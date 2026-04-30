@@ -1,0 +1,18 @@
+# klodi-nanobot — local build artefacts that should never be committed.
+# scripts/vendor.py + the Makefile produce everything below; the source
+# of truth is pyproject.toml + the .py / skill assets.
+
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Smoke-test scratch venv created by scripts/smoke.sh.
+build/smoke-venv/
+
+# Skill bundle is materialised by scripts/copy-skill.py from the
+# canonical klodi-plugin/skill/ source. The adapter-local copy is a
+# build artefact, never edited by hand.
+skills/

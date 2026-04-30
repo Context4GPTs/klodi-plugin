@@ -1,0 +1,67 @@
+# klodi-rust-host — host-orchestration glue for the Rust adapters.
+#
+# `klodi-nats-client` is the wire-level NATS client (connect, request,
+# subscribe, publish). This crate sits one layer up: forwarder daemon
+# (subscribes both consumers, POSTs each delivered event to a local host
+# wake URL), HTTP-only registration loop, default `${KLODI_HOME}` paths,
+# `klodi_setup_status` reporter, and the `--health-port` HTTP probe.
+#
+# Three adapters (klodi-moltis, klodi-ironclaw, klodi-zeroclaw) consume
+# this crate. Their bin/ files are ~30 LOC drivers that build a
+# `ForwarderConfig` from CLI/env and call into here.
+#
+# Per **D § D8** in
+# `docs/reviews/2026-04-26-klodi-plugin-multi-lens-review-decisions.md`
+# this is option (b): a separate crate so `klodi-nats-client` stays
+# usable in non-daemon contexts.
+
+[package]
+name = "klodi-rust-host"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "klodi — host-orchestration glue for Rust adapters (forwarder, register, paths, setup_status, health probe)."
+repository = "https://github.com/Context4GPTs/klodi-plugin"
+homepage = "https://4gpts.com"
+keywords = ["klodi", "marketplace", "p2p", "agent", "daemon"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+# Internal-only crate. Each adapter (klodi-moltis, klodi-ironclaw,
+# klodi-zeroclaw) vendors this crate's source into its own tree at
+# publish time the same way it vendors `nats-client-rs`. `publish = false`
+# makes `cargo publish` fail loud if anyone tries to push this to crates.io.
+publish = false
+
+[lib]
+name = "klodi_rust_host"
+path = "src/lib.rs"
+
+[dependencies]
+klodi-nats-client = { path = "../nats-client-rs" }
+klodi-logger = { path = "../logger-rs" }
+
+# Async runtime — match the workspace pin.
+tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync"] }
+
+# Outbound HTTP for the host wake POST and the registration HTTP poll.
+# `rustls-tls` keeps OpenSSL out of the build for portability.
+reqwest = { version = "=0.12.9", default-features = false, features = ["json", "rustls-tls"] }
+
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.140"
+
+anyhow = "=1.0.95"
+thiserror = "=2.0.18"
+
+# Used by the registration flow to mint the session UUID.
+uuid = { version = "=1.18.0", features = ["v4"] }
+
+tracing = "=0.1.41"
+
+# Used by the forwarder + register subscribe / await semantics.
+futures-util = "=0.3.31"
+
+[dev-dependencies]
+tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "test-util"] }
+tempfile = "=3.14.0"

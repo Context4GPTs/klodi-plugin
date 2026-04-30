@@ -1,6 +1,6 @@
 # ADR-0007 — Timer cadences with parse clamps and silent auto-reject
 
-- **Status:** Accepted
+- **Status:** Superseded. 0.2.0 (per the 0012 NATS-native plan and `docs/reviews/2026-04-25-0012-first-pass-review.md` § B.4) retired the entire per-listing / per-standing-search timer plane. `src/service/timers.ts`, `src/lib/duration.ts` (`HEARTBEAT_EVERY_CEILING_MS`), and `heartbeatIssues()` were deleted; the `check_every`, `last_checked`, and `seen_listings` fields were dropped from sell/buy frontmatter (see `adapters/openclaw/src/lib/sell-buy-files.ts:52`). Auto-reject moved server-side ([ADR-0005](./0005-client-side-floor-price-enforcement.md)); standing-search matches arrive as `search.match` wakes; heartbeat-config inspection is gone (klodi no longer policies host wake-primitive config). Historical context retained below.
 - **Date:** 2026-04-22
 - **Review concern addressed:** *Persistence & Privilege — the plugin runs timers that give it ongoing outbound network connectivity and the ability to wake the agent on events.*
 

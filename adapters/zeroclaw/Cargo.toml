@@ -1,0 +1,50 @@
+# klodi ZeroClaw adapter — NATS-native daemon driver.
+#
+# Per **D § D8** the adapter is a thin binary tree on top of
+# `klodi-rust-host`. Three binaries (daemon, register, channel-message)
+# each bind CLI/env to the shared crate's runners.
+
+[package]
+name = "klodi-zeroclaw"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "klodi — ZeroClaw adapter. NATS-native wake daemon."
+repository = "https://github.com/Context4GPTs/klodi-plugin"
+homepage = "https://4gpts.com"
+keywords = ["zeroclaw", "klodi", "marketplace", "p2p", "agent"]
+categories = ["api-bindings"]
+readme = "README.md"
+
+[[bin]]
+name = "klodi-zeroclaw-daemon"
+path = "src/bin/daemon.rs"
+
+[[bin]]
+name = "klodi-zeroclaw-register"
+path = "src/bin/register.rs"
+
+[[bin]]
+name = "klodi-zeroclaw-channel-message"
+path = "src/bin/channel_message.rs"
+
+[[bin]]
+name = "klodi-zeroclaw-setup-status"
+path = "src/bin/setup_status.rs"
+
+[dependencies]
+klodi-nats-client = { path = "../../packages/nats-client-rs" }
+klodi-rust-host = { path = "../../packages/klodi-rust-host" }
+
+tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
+clap = { version = "=4.5.20", features = ["derive", "env"] }
+serde_json = "=1.0.140"
+anyhow = "=1.0.95"
+tracing-subscriber = { version = "=0.3.19", features = ["env-filter", "fmt"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

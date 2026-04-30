@@ -1,0 +1,35 @@
+{
+  "name": "@klodi/nats-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Klodi NATS-WS client for TS host adapters: tool calls, durable wake consumers, channel publish.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@klodi/tool-catalog": "workspace:*",
+    "@nats-io/jetstream": "3.3.1",
+    "@nats-io/nats-core": "3.3.1",
+    "ws": "8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "@types/ws": "8.5.14",
+    "nats": "catalog:",
+    "typescript": "5.8.3",
+    "vitest": "4.1.2"
+  }
+}

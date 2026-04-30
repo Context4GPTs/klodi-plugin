@@ -1,0 +1,303 @@
+# Auto-publish @4gpts/klodi to ClawHub + npm on every merge to main that
+# bumps klodi-plugin/package.json version. Path-filtered so unrelated
+# merges don't even start the job. Version existence check is the hard
+# gate: if both registries already have the target version, the workflow
+# exits cleanly without publishing, so re-running against an old commit
+# is a safe no-op.
+#
+# Prerequisites (must land before the first release run):
+#   1. ClawHub trusted-publisher binding for this repo + this workflow
+#      path, registered at clawhub.ai under the @4gpts org.
+#   2. npm trusted-publisher binding for @4gpts/klodi, registered at
+#      npmjs.com under the @4gpts org.
+#   3. CLAWHUB_REF pinned to a reviewed openclaw/clawhub SHA (see env block).
+#   4. All GitHub Actions below scanned with zizmor
+#      (https://github.com/woodruffw/zizmor) before merge, per
+#      .claude/rules/infra-rules.md.
+#
+# What this workflow intentionally does NOT do:
+#   - Run @klodi/tests test:integration. Integration tests need
+#     postgres + NATS + marketplace + web-app running, with dev NATS
+#     keys + migrations applied. That setup belongs in a separate
+#     PR-gate workflow, not in a release-path workflow that must stay
+#     fast and deterministic so "auto on merge" works without tuning.
+#     Tracked as follow-up; the release trusts that main is green
+#     because the PR CI gated merge.
+#   - Run e2e agent tests. Same reason as integration tests — too
+#     much infra for the publish path. Keep the smoke test (post-publish
+#     plugin install on alpine/openclaw) as the live runtime gate.
+
+name: klodi-plugin release
+
+# Automatic push trigger disabled until the release pipeline is green again.
+# Re-enable by uncommenting the push block below.
+on:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "klodi-plugin/**"
+  #     - ".github/workflows/klodi-plugin-release.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit SHA on main to re-publish from (optional — defaults to current main)."
+        required: false
+        type: string
+
+# Deny by default; each job opts in to what it needs.
+permissions: {}
+
+# Serialise releases so a quick double-merge can't race two publishes.
+concurrency:
+  group: klodi-plugin-release
+  cancel-in-progress: false
+
+env:
+  OPENCLAW_IMAGE: alpine/openclaw
+  OPENCLAW_TAG: "2026.4.14"
+  # Per **R § P1-17** the clawhub CLI install MUST pin to a reviewed SHA
+  # (40-char hex), not a mutable branch. Mutable refs are out — a
+  # force-push or repo takeover on `main` would otherwise inherit our
+  # `id-token:write` + `contents:write` permissions when the publish
+  # step runs `npm install -g git+https://...#${CLAWHUB_REF}`.
+  #
+  # The Pin gate (`pin-gate` job below) fails loud if this is not a
+  # 40-char hex SHA, so a fork/branch slip through review is impossible.
+  #
+  # Bump procedure:
+  #   1. Review the upstream changelog at openclaw/clawhub.
+  #   2. Run `klodi-clawhub-bump.yml` (workflow_dispatch with the new
+  #      SHA) — it opens a PR updating this line.
+  #   3. Land the PR after a maintainer reviews the diff between the
+  #      previous and new SHAs.
+  #
+  # Placeholder until release-eng files the first reviewed SHA. The
+  # pin-gate fails with this value, refusing to publish.
+  CLAWHUB_REF: "PIN-REQUIRED-SEE-WORKFLOW-COMMENT"
+  CLAWHUB_REGISTRY: https://clawhub.ai
+
+jobs:
+  pin-gate:
+    name: Pin gate (CLAWHUB_REF must be a reviewed SHA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - name: Assert CLAWHUB_REF is a 40-char hex SHA
+        run: |
+          ref="${CLAWHUB_REF}"
+          if ! echo "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::CLAWHUB_REF must be a 40-char hex SHA — got '${ref}'."
+            echo "Per **R § P1-17**, mutable refs (branches, floating tags) are not allowed."
+            echo "Run klodi-clawhub-bump.yml to open a PR with a reviewed SHA, then merge."
+            exit 1
+          fi
+          echo "CLAWHUB_REF pin OK (${ref:0:7}…)."
+
+  preflight:
+    name: Preflight (version gate + typecheck + unit tests)
+    needs: pin-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      should_publish: ${{ steps.check.outputs.should_publish }}
+      version: ${{ steps.read.outputs.version }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Read target version from klodi-plugin/package.json
+        id: read
+        run: |
+          version=$(jq -r '.version' klodi-plugin/package.json)
+          if [[ -z "$version" || "$version" == "null" ]]; then
+            echo "::error::klodi-plugin/package.json has no version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "target version: $version"
+
+      - name: Check if version already published (ClawHub + npm)
+        id: check
+        env:
+          VERSION: ${{ steps.read.outputs.version }}
+        run: |
+          should_publish=true
+
+          # A 2xx on either registry = already published = no-op.
+          clawhub_status=$(curl -s -o /dev/null -w '%{http_code}' \
+            "${CLAWHUB_REGISTRY}/api/v1/packages/@4gpts/klodi/versions/${VERSION}" || true)
+          if [[ "$clawhub_status" =~ ^2 ]]; then
+            echo "ClawHub already has @4gpts/klodi@${VERSION} (HTTP $clawhub_status). No-op."
+            should_publish=false
+          fi
+
+          if npm view "@4gpts/klodi@${VERSION}" version >/dev/null 2>&1; then
+            echo "npm already has @4gpts/klodi@${VERSION}. No-op."
+            should_publish=false
+          fi
+
+          echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+
+      - name: Set up pnpm
+        if: steps.check.outputs.should_publish == 'true'
+        uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+
+      - name: Set up Node
+        if: steps.check.outputs.should_publish == 'true'
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies (frozen)
+        if: steps.check.outputs.should_publish == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck + unit tests
+        if: steps.check.outputs.should_publish == 'true'
+        run: |
+          pnpm --filter @4gpts/klodi typecheck
+          pnpm --filter @4gpts/klodi test
+
+  publish:
+    name: Publish to ClawHub + npm
+    needs: preflight
+    if: needs.preflight.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    permissions:
+      contents: write       # gh release create
+      id-token: write       # npm provenance + ClawHub OIDC
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.0.0
+
+      - name: Set up Node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org/"
+          cache: pnpm
+
+      - name: Install dependencies (frozen)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build plugin
+        run: |
+          pnpm --filter @4gpts/klodi build
+          if [[ ! -s klodi-plugin/dist/index.js ]]; then
+            echo "::error::klodi-plugin/dist/index.js missing or empty after build"
+            exit 1
+          fi
+
+      - name: Install clawhub CLI (pinned SHA)
+        run: |
+          # --ignore-scripts is defense-in-depth: we're pulling from a
+          # git ref, and the publish job holds id-token:write + contents:write
+          # by the time this step runs. Any upstream lifecycle script would
+          # inherit those permissions. clawhub is a pure-JS CLI and does not
+          # need lifecycle scripts to install.
+          npm install -g --ignore-scripts \
+            "git+https://github.com/openclaw/clawhub.git#${CLAWHUB_REF}"
+          clawhub --version
+
+      - name: Publish to ClawHub (OIDC trusted publisher)
+        run: |
+          clawhub package publish ./klodi-plugin \
+            --tags latest \
+            --source-repo "${{ github.repository }}" \
+            --source-commit "${{ github.sha }}" \
+            --source-ref "${{ github.ref }}" \
+            --source-path klodi-plugin
+
+      - name: Publish to npm (trusted publisher + provenance)
+        run: |
+          pnpm --filter @4gpts/klodi publish \
+            --access public --provenance --no-git-checks
+
+      - name: Extract CHANGELOG entry for this version
+        run: |
+          node - <<'EOF' > RELEASE_NOTES.md
+          const fs = require('node:fs');
+          const v = process.env.VERSION;
+          const text = fs.readFileSync('klodi-plugin/CHANGELOG.md', 'utf8');
+          const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const re = new RegExp('## \\[' + escaped + '\\][\\s\\S]*?(?=\\n## \\[|$)');
+          const m = text.match(re);
+          if (!m) {
+            console.error('CHANGELOG entry for ' + v + ' not found');
+            process.exit(1);
+          }
+          process.stdout.write(m[0]);
+          EOF
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "klodi-plugin-v${VERSION}" \
+            --title "klodi-plugin v${VERSION}" \
+            --notes-file RELEASE_NOTES.md \
+            --target "${{ github.sha }}"
+
+  smoke:
+    name: Host-agnostic smoke test
+    needs: [preflight, publish]
+    if: needs.preflight.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    permissions:
+      contents: read
+    steps:
+      - name: Wait for npm propagation
+        run: |
+          for i in $(seq 1 30); do
+            if npm view "@4gpts/klodi@${VERSION}" version >/dev/null 2>&1; then
+              echo "@4gpts/klodi@${VERSION} visible on npm"
+              exit 0
+            fi
+            echo "waiting for npm propagation... ($i/30)"
+            sleep 10
+          done
+          echo "::error::@4gpts/klodi@${VERSION} not visible on npm after 5 minutes"
+          exit 1
+
+      - name: Install plugin on ephemeral alpine/openclaw host
+        run: |
+          # Host-agnostic smoke. alpine is CI's image of convenience,
+          # not a runtime constraint. Any future non-alpine regression
+          # is a compat-block bug, not a smoke-test bug.
+          log="$(mktemp)"
+          if ! docker run --rm \
+            -e KLODI_HOME=/tmp/.klodi \
+            "${OPENCLAW_IMAGE}:${OPENCLAW_TAG}" \
+            sh -c "openclaw plugins install @4gpts/klodi@${VERSION}" \
+            > "$log" 2>&1; then
+            echo "::error::plugin install failed on ${OPENCLAW_IMAGE}:${OPENCLAW_TAG}"
+            cat "$log"
+            exit 1
+          fi
+          if ! grep -q 'klodi_plugin_loaded' "$log"; then
+            echo "::error::'klodi_plugin_loaded' marker missing — plugin failed to register"
+            cat "$log"
+            exit 1
+          fi
+          echo "Plugin registered successfully on ${OPENCLAW_IMAGE}:${OPENCLAW_TAG}"
+          cat "$log"

@@ -4,7 +4,7 @@ This document enumerates the assets the plugin holds, the trust boundaries it cr
 
 It is a living document: if you add a capability or cross a new boundary, add the row here before you merge.
 
-Last reviewed: 2026-04-22.
+Last reviewed: 2026-04-30.
 
 ## Assets
 
@@ -38,7 +38,7 @@ Last reviewed: 2026-04-22.
 
 - **Mitigation (hard rule):** `skill/policies/security.md` forbids sharing `min_acceptable_price` / `auto_reject_below` under any negotiation style. Copied verbatim into `$klodi_home/policies/security.md` on first run.
 - **Mitigation (architecture):** Floor never leaves disk ([ADR-0005](./decisions/0005-client-side-floor-price-enforcement.md)); the counterparty cannot extract what klodi never had to relay.
-- **Mitigation (behavior):** Below-floor offers are silently auto-rejected by the timer; the agent never sees the amount and cannot cite it back. See `src/service/timers.ts` `checkSellItem`.
+- **Mitigation (behavior):** Below-floor offers are silently auto-rejected. `auto_reject_below` is enforced server-side (set via `klodi_list_update`); the agent never sees the offer amount and cannot cite it back. See `adapters/openclaw/src/service/state.ts` `onListingUpdated` for the local mirror that keeps the sell file in sync after the server-side update.
 
 ### T2 — klodi backend compromise leaks private strategy
 
@@ -59,7 +59,7 @@ Last reviewed: 2026-04-22.
 
 *A network adversary between the user's host and klodi.4gpts.com reads or tampers with traffic.*
 
-- **Mitigation (TLS):** Production uses `wss://`. The WS layer rides on the same TLS stack the browser uses. See `src/lib/nats-client.ts`.
+- **Mitigation (TLS):** Production uses `wss://`. The WS layer rides on the same TLS stack the browser uses. See `packages/nats-client-ts/src/` (the shared NATS-WS client every TS adapter imports).
 - **Mitigation (signatures):** Every NATS frame is signed by the NKey and verified server-side. Tampering changes the signature and the server rejects.
 - **Mitigation (single host):** One configured endpoint — easier to pin, easier to observe in a corporate proxy, no cross-host DNS surface.
 
@@ -68,26 +68,28 @@ Last reviewed: 2026-04-22.
 *An attacker copies the creds file off the user's laptop and uses it elsewhere.*
 
 - **Mitigation (mode):** `0600` limits who on the source host can read the file.
-- **Mitigation (drift detection):** `loadCreds` in `src/lib/config.ts` logs a warning on mode drift; `klodi_setup_status` surfaces it as `creds_perms`.
+- **Mitigation (drift detection):** `loadCreds` in `adapters/openclaw/src/lib/config.ts` logs a warning on mode drift; `klodi_setup_status` surfaces it as `creds_perms`. Same check uniformly across TS / Py / Rust per SECURITY.md § Credential handling.
 - **Mitigation (revocation):** User runs `klodi_setup_repair` + `klodi_register`. Server rotates the NKey association. Old signer is dead.
 - **Residual risk:** Between theft and user noticing, the attacker has full authority. SECURITY.md § Credential handling instructs the user to rotate on suspicion.
 
-### T6 — Rogue dependency in the vendored tree
+### T6 — Rogue runtime dependency
 
 *A transitive dep is malicious or compromised between publish and install.*
 
-- **Mitigation (audit surface):** Runtime deps are few and enumerated in SECURITY.md § Dependencies. Each one is a named, widely-used package with its own review trail (`@nats-io/*`, `ws`, `tweetnacl`, `@sinclair/typebox`).
-- **Mitigation (lock file):** `pnpm-lock.yaml` is committed; reproducing the build reproduces the exact dep graph.
+- **Mitigation (audit surface):** Runtime deps are few and enumerated in SECURITY.md § Dependencies. Each one is a named, widely-used package with its own review trail (`@nats-io/*`, `ws`, `tweetnacl`, `@sinclair/typebox`, `gray-matter`).
+- **Mitigation (exact version pins):** Public-registry deps in `package.json#dependencies` are pinned to exact versions (no `^`, `~`, or ranges). The host's `npm install` after tarball extraction therefore resolves to the same versions every time.
+- **Mitigation (committed lock file):** `pnpm-lock.yaml` is committed at the workspace root; reproducing the build reproduces the exact dep graph for our own pack-time inputs (workspace deps + bundled stripping). Host-side install does not consult the lock file — exact version pins above are what keeps the install deterministic.
 - **Mitigation (no native modules):** Zero native modules in the runtime deps means zero compile-time code execution paths.
-- **Mitigation (smoke gate):** `scripts/smoke-plugin-load.sh` loads the tarball into a clean OpenClaw image before publish; a misbehaving dep that crashes on load fails the gate.
-- **Residual risk:** A compromised dep that behaves correctly at load and misbehaves later would not be caught. Standard npm supply-chain risk, not specific to this plugin. See [ADR-0003](./decisions/0003-vendored-runtime-dependencies.md).
+- **Mitigation (smoke gate):** `klodi-plugin/adapters/openclaw/scripts/smoke-plugin-load.sh` loads the published-shape tarball into a clean OpenClaw image before publish; a misbehaving dep that crashes on load fails the gate.
+- **Residual risk:** A compromised dep that behaves correctly at load and misbehaves later would not be caught. Standard npm supply-chain risk, not specific to this plugin. See [ADR-0008](./decisions/0008-bundled-deps-host-ignore-scripts.md) for the install path.
 
 ### T7 — Install-time code execution
 
 *A malicious `postinstall` or similar runs arbitrary code on the user's host during install.*
 
-- **Mitigation (no install scripts):** The plugin declares no `preinstall` / `postinstall` / `install` lifecycle scripts. See `package.json#scripts`.
-- **Mitigation (vendored deps):** Transitive deps are pre-extracted into `dist/node_modules/` at build time; the user's host does not run `npm install` against the plugin's dep tree, so even if a transitive had a `postinstall`, it would never fire on the user's machine. See [ADR-0003](./decisions/0003-vendored-runtime-dependencies.md).
+- **Mitigation (no plugin install scripts):** The plugin declares no `preinstall` / `postinstall` / `install` lifecycle scripts. See `package.json#scripts` — the only `"install"` key is the `openclaw.install` config block, not a script.
+- **Mitigation (bundled workspace deps stripped of scripts):** Workspace deps (`@klodi/tool-catalog`, `@klodi/nats-client`) ride into the tarball via `bundleDependencies`. `pack-with-bundles.mjs` `materialize()` strips `scripts` from each bundled `package.json` at pack time, so a bundled workspace dep cannot run install hooks even if the host stops passing `--ignore-scripts`.
+- **Mitigation (host enforces `--ignore-scripts`):** Public-registry transitive deps run through `npm install` on the user's host after extraction. OpenClaw `>=2026.4.15` invokes that install with `--omit=dev --silent --ignore-scripts` (`install-package-dir` chunk in the OpenClaw runtime), blocking `preinstall` / `install` / `postinstall` from firing. The plugin pins `openclaw.install.minHostVersion: ">=2026.4.15"` to refuse hosts where this protection has not been verified. See [ADR-0008](./decisions/0008-bundled-deps-host-ignore-scripts.md).
 
 ### T8 — Permission drift on `nats.creds`
 
@@ -100,7 +102,7 @@ Last reviewed: 2026-04-22.
 
 *A user re-registers; the plugin's in-memory state still holds the prior signer.*
 
-- **Mitigation (ordered reset):** `persistCompleted` calls `resetNatsState()` (drain + null cached connection) *before* `ensureNatsRunning(api)` re-bootstraps with the new creds. `clearConfigCache()` drops the cached config object. The ordering is commented inline at `src/tools/register-poller.ts` and `src/service/nats.ts`.
+- **Mitigation (ordered reset):** the registration completion path closes the cached NATS client and drops the cached config *before* the next request re-bootstraps with the new creds. The ordering is commented inline at `adapters/openclaw/src/tools/register-poller.ts` and `adapters/openclaw/src/lib/client.ts` (the connection cache).
 - **Mitigation (same path for repair):** `klodi_setup_repair` uses the same reset sequence so tool path and poller path cannot diverge.
 
 ### T10 — Agent publishes private facts under social-engineering pressure
@@ -111,24 +113,25 @@ Last reviewed: 2026-04-22.
 - **Mitigation (description clamp):** SKILL.md §8 caps listing description at ~8 bullets; beyond that the agent must restructure, which forces the user to see the change.
 - **Mitigation (immutable fields):** `delivery_method` and `category` are immutable post-create; attempts to change them require withdraw + relist, which the user sees.
 
-### T11 — Denial-of-wake via heartbeat misconfiguration
+### T11 — Denial-of-wake via heartbeat misconfiguration *(retired in 0.2.0)*
 
-*`agents.defaults.heartbeat.every` is set too high (or zero) and queued wakes never fire, so the plugin looks silent.*
+Historical context: the 0.1.x plugin enqueued wakes via OpenClaw's heartbeat plane, which made `agents.defaults.heartbeat.every` a load-bearing config the plugin had to police (`heartbeat_interval_too_long` issue code, `heartbeat_not_last` check).
 
-- **Mitigation (setup gate):** `klodi_setup_status` refuses `phase: ready` when `heartbeat_every_ms > 2m` or `heartbeat_every_ms === 0` or it cannot be parsed. Issue code `heartbeat_interval_too_long`.
-- **Mitigation (bootstrap warning):** `bootstrap` in `src/service/nats.ts` logs the error on connect so it's visible in gateway logs.
+0.2.0 (per [ADR-0001](./decisions/0001-persistent-websocket-connection.md) and the 0012 plan) replaced that path with JetStream push over the per-session NATS-WS connection. Wake delivery no longer depends on the host's heartbeat cadence; the plugin no longer inspects host wake-primitive config. The heartbeat issue codes were deleted alongside `lib/duration.ts`, `heartbeatIssues()`, and `needs_heartbeat`.
+
+If wakes are not landing, the failure surface is now NATS connectivity (`klodi_health`) and per-host wake-routing config — see the relevant adapter spec in `docs/specs/hosts/`.
 
 ### T12 — Prompt injection in channel messages
 
 *A counterparty sends a channel message crafted to jailbreak the user's agent.*
 
-- **Mitigation (data not code):** Channel message bodies are carried opaquely into the agent's context; nothing in the plugin interprets them as instructions. The plugin's tool schemas accept `content` as a string and never `exec`/`eval` it.
+- **Mitigation (data not code):** Channel message bodies are carried opaquely into the agent's context; nothing in the plugin interprets them as instructions. The catalog's tool schemas (`packages/tool-catalog/src/index.ts`) accept `content` as a string and the adapters never `exec`/`eval` it.
 - **Mitigation (SKILL.md posture):** SKILL.md §3 frames the counterparty as adversarial and the hard-rule file as the fallback contract.
 - **Residual risk:** LLM-level prompt injection is a class of risk the agent host (OpenClaw + the model) bears; the plugin cannot fully prevent it and instead minimises the damage a successful injection can do (see T1, T10).
 
 ### T13 — Photo upload endpoint abused for non-photo binary
 
-*A compromised agent or a bug uses `klodi_photo_upload` to exfiltrate arbitrary bytes to R2.*
+*A compromised agent or a bug uses `klodi_assets_upload_url` to exfiltrate arbitrary bytes to R2.*
 
 - **Mitigation (content-type bind):** The presigned URL is signed for a specific `content_type` chosen at sign time (`image/jpeg|png|webp`). R2 rejects uploads whose `Content-Type` request header does not match.
 - **Mitigation (size cap):** Max 10MB per file, max 10 files per request.
@@ -146,4 +149,4 @@ Last reviewed: 2026-04-22.
 - [SECURITY.md](../SECURITY.md) — public policy
 - [docs/decisions/](./decisions/) — ADRs
 - `skill/policies/security.md` — hard-rule file bound into the agent
-- `scripts/smoke-plugin-load.sh` — publish-time gate
+- `klodi-plugin/adapters/openclaw/scripts/smoke-plugin-load.sh` — publish-time gate

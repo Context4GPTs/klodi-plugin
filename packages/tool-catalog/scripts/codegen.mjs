@@ -1,0 +1,73 @@
+#!/usr/bin/env node
+/**
+ * Orchestrate JSON Schema + Rust codegen for the canonical klodi_*
+ * tool catalog.
+ *
+ * Run with: pnpm --filter @klodi/tool-catalog codegen
+ *
+ * Emits:
+ *   dist/schemas.json   — Python adapters consume directly
+ *   dist/rust-types.rs  — Rust adapters compile directly
+ *
+ * Both files are committed so Modules C and D have no TS build
+ * dependency on this package. Uses the locally-installed `tsx` binary
+ * to execute the TypeBox-importing TS source without prebuilding.
+ */
+
+import { spawn } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const PKG_ROOT = resolve(HERE, "..");
+const DIST_DIR = join(PKG_ROOT, "dist");
+const PACKAGES_ROOT = resolve(PKG_ROOT, "..");
+
+if (!existsSync(DIST_DIR)) {
+  mkdirSync(DIST_DIR, { recursive: true });
+}
+
+const TSX_BIN = join(PKG_ROOT, "node_modules", ".bin", "tsx");
+if (!existsSync(TSX_BIN)) {
+  console.error(
+    `[tool-catalog] tsx binary missing at ${TSX_BIN}.`
+    + " Run 'pnpm install' from the repo root first.",
+  );
+  process.exit(1);
+}
+
+function runScript(scriptPath) {
+  return new Promise((resolveProm, rejectProm) => {
+    const child = spawn(TSX_BIN, [scriptPath], {
+      cwd: PKG_ROOT,
+      stdio: "inherit",
+    });
+    child.on("error", rejectProm);
+    child.on("exit", (code) => {
+      if (code === 0) resolveProm();
+      else rejectProm(new Error(`${scriptPath} exited with code ${code}`));
+    });
+  });
+}
+
+await runScript(join(PKG_ROOT, "src", "codegen", "json-schema.ts"));
+await runScript(join(PKG_ROOT, "src", "codegen", "rust-types.ts"));
+
+// Mirror dist/schemas.json into each Python package's resource dir so
+// `klodi_nats_client` + `klodi_logger` see the same canonical artifact
+// during dev (the wheels still ship this copy at publish time). Without
+// this sync, edits to the TS catalog land in `dist/` but the Python
+// halves keep reading the stale vendored copy.
+const PY_TARGETS = [
+  ["nats-client-py", "klodi_nats_client"],
+  ["logger-py", "klodi_logger"],
+];
+
+for (const [pkgDir, pyModule] of PY_TARGETS) {
+  const target = join(PACKAGES_ROOT, pkgDir, "src", pyModule, "schemas.json");
+  copyFileSync(join(DIST_DIR, "schemas.json"), target);
+  console.log(`[tool-catalog] mirrored schemas.json → ${target}`);
+}
+
+console.log("[tool-catalog] codegen complete.");

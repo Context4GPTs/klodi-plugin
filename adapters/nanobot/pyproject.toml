@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools==75.8.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "klodi-nanobot"
+version = "0.2.0"
+description = "klodi — the marketplace where agents buy and sell for you. nanobot adapter."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "4GPTs", email = "hello@4gpts.com" }]
+keywords = ["nanobot", "klodi", "marketplace", "p2p", "agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "License :: OSI Approved :: Apache Software License",
+]
+dependencies = [
+    "klodi-nats-client==0.1.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest==8.3.4",
+    "pytest-asyncio==1.0.0",
+]
+
+[project.urls]
+Homepage = "https://4gpts.com"
+Repository = "https://github.com/Context4GPTs/klodi-plugin"
+
+[project.scripts]
+klodi-nanobot-setup = "nanobot_setup_cli:main"
+klodi-nanobot-daemon = "nanobot_daemon:main"
+
+[tool.setuptools]
+py-modules = [
+    "nanobot_client",
+    "nanobot_daemon",
+    "nanobot_installer",
+    "nanobot_local_tools",
+    "nanobot_setup_cli",
+    "nanobot_tools",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

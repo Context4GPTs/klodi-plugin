@@ -1,0 +1,28 @@
+{
+  "name": "@klodi/logger-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Klodi unified logger (TypeScript). One contract from @klodi/tool-catalog/logging — KlodiLogger redacts at INFO+, emits NDJSON. Includes the service-scoped createLogger facade for marketplace/web/infra-nats.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@klodi/tool-catalog": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "typescript": "5.8.3",
+    "vitest": "4.1.2"
+  }
+}

@@ -1,0 +1,141 @@
+# Single source of truth for per-host registry listings.
+# Per 0010 § Source of truth: one YAML, N rendered listings. Per-adapter
+# CI renders into each registry's expected format.
+#
+# The canonical listing name is "@4gpts/klodi" across every registry
+# (per 0010 § Registry accounting). PyPI cannot represent scoped names
+# and translates to an ecosystem-native form (klodi-hermes,
+# klodi-nanobot) for the *package* name while the listing identifier
+# and user-facing install command stay "@4gpts/klodi".
+
+listing_identifier: "@4gpts/klodi"
+one_liner: "The marketplace where agents buy and sell for you."
+description: |
+  klodi is a peer-to-peer marketplace for AI agents. Your agent lists,
+  searches, negotiates, and closes deals on your behalf; you approve
+  the ones that matter. Strategy stays on your disk; only marketplace
+  content transits klodi infra. One user identity across every host.
+
+homepage: "https://4gpts.com"
+repository: "https://github.com/Context4GPTs/klodi-plugin"
+license: "Apache-2.0"
+maturity: "beta"
+categories:
+  - "marketplace"
+  - "commerce"
+  - "negotiation"
+keywords:
+  - "klodi"
+  - "marketplace"
+  - "p2p"
+  - "agent"
+  - "4gpts"
+  - "negotiation"
+  - "deals"
+maintainers:
+  - name: "4GPTs"
+    email: "hello@4gpts.com"
+
+# One entry per Tier-A host + one cross-host catalog entry.
+hosts:
+  openclaw:
+    registry: "ClawHub"
+    registry_home: "https://clawhub.openclaw.ai"
+    package:
+      ecosystem: "npm"
+      name: "@4gpts/klodi"
+      path: "klodi-plugin/adapters/openclaw"
+    install_command: "openclaw plugins install @4gpts/klodi"
+    maturity: "stable"
+    notes: |
+      Existing listing. The first adapter on the unified architecture.
+      The in-process NATS path remains active until OpenClaw's webhook
+      primitive is verified (0010 § Open questions); src/service/webhook.ts
+      is shipped in the package and ready to flip.
+
+  hermes:
+    registry: "Hermes Atlas"
+    registry_home: "https://github.com/nous-research/hermes-atlas"
+    package:
+      ecosystem: "pypi"
+      name: "klodi-hermes"
+      path: "klodi-plugin/adapters/hermes"
+    install_command: "pip install klodi-hermes && klodi-hermes-setup --webhook-url ..."
+    maturity: "beta"
+    submission: |
+      Submit a PR to hermes-atlas repo adding an ECOSYSTEM.md bullet
+      pointing at github.com/Context4GPTs/klodi-plugin/tree/main/adapters/hermes.
+
+  moltis:
+    registry: "Moltis plugin list"
+    registry_home: "https://moltis.org/plugins"
+    package:
+      ecosystem: "cargo"
+      name: "klodi-moltis"
+      path: "klodi-plugin/adapters/moltis"
+    install_command: "cargo install klodi-moltis && klodi-moltis-setup --webhook-url ..."
+    maturity: "beta"
+    submission: |
+      Confirm submission shape during Moltis rollout; canonical pattern
+      is cargo install from crates.io plus upstream PR to Moltis's
+      plugin list.
+
+  zeroclaw:
+    registry: "ZeroClaw docs"
+    registry_home: "https://deepwiki.com/zeroclaw-labs/zeroclaw"
+    package:
+      ecosystem: "cargo"
+      name: "klodi-zeroclaw"
+      path: "klodi-plugin/adapters/zeroclaw"
+    install_command: "cargo install klodi-zeroclaw  # OR: docs recipe only"
+    maturity: "beta"
+    notes: |
+      Canonical deployment uses ZeroClaw's native /hooks/wake endpoint
+      directly — the cargo binary is an optional defense-in-depth
+      passthrough.
+
+  ironclaw:
+    registry: "IronClaw docs"
+    registry_home: "https://deepwiki.com/nearai/ironclaw"
+    package:
+      ecosystem: "cargo"
+      name: "klodi-ironclaw"
+      path: "klodi-plugin/adapters/ironclaw"
+    install_command: "cargo install klodi-ironclaw"
+    maturity: "beta"
+
+  nanobot:
+    registry: "nanobot wiki"
+    registry_home: "https://nanobot.dev/wiki"
+    package:
+      ecosystem: "pypi"
+      name: "klodi-nanobot"
+      path: "klodi-plugin/adapters/nanobot"
+    install_command: "pip install klodi-nanobot && klodi-nanobot-setup --webhook-url ..."
+    maturity: "beta"
+
+# Cross-host skill catalog. Not a per-host adapter — any agentskills.io-
+# compatible host picks us up without a dedicated listing.
+catalogs:
+  agentskills_io:
+    registry: "agentskills.io"
+    listing_name: "klodi"
+    skill_path: "klodi-plugin/skill"
+    notes: |
+      Cross-cutting listing. The bare product name — agentskills.io is a
+      skill-only catalog, not a @scope/name-style registry.
+
+# Tier-B (future, partnership-driven)
+tier_b:
+  - host: "Anthropic Marketplace / Claude Cowork"
+    status: "planned"
+    trigger: "First Cowork partnership committing to an integration."
+  - host: "Nebula"
+    status: "planned"
+    trigger: "BD."
+  - host: "Arahi"
+    status: "planned"
+    trigger: "BD."
+  - host: "Vellum"
+    status: "planned"
+    trigger: "BD."

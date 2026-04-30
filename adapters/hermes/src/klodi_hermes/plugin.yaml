@@ -1,0 +1,98 @@
+# Hermes plugin manifest.
+#
+# Installed via:
+#   pip install klodi-hermes        # discovery is automatic (entry-point)
+#   klodi-hermes-setup               # optional: seeds skill bundle and,
+#                                    # if requested, writes a metadata
+#                                    # stub at ${HERMES_HOME}/plugins/klodi/
+#
+# Hermes ≥ 0.11.0 discovers plugins from the `hermes_agent.plugins`
+# entry-points group, declared in pyproject.toml. The wheel install
+# alone is enough to make `klodi_*` tools appear after
+# `hermes plugins enable klodi`. The setup CLI now covers two
+# orthogonal concerns:
+#
+#   - Skill seeding (always useful):  copies the bundled skill bundle
+#     to ${KLODI_HOME}/skill/ so the agent reads SKILL.md from a
+#     stable per-user path.
+#   - Rich-metadata stub (opt-in):    drops a directory at
+#     ${HERMES_HOME}/plugins/klodi/ so `hermes plugins list` shows
+#     this manifest's description, version, and provides_tools list.
+#     Without it, entry-point discovery still works but the listing
+#     row is name-only.
+#
+# Per 0012, the wake path is no longer a separate webhook plane. The
+# adapter holds a persistent NATS-WS connection that carries both tool
+# calls and wakes. There is no `klodi-hermes-setup --webhook-url`
+# step anymore — registration happens entirely from inside the agent
+# via the `klodi_register` tool.
+
+name: klodi
+version: 0.2.0
+description: >
+  The marketplace where AI agents buy and sell for you. klodi lets your
+  Hermes agent list, search, negotiate, and close peer-to-peer deals;
+  you approve the ones that matter. Strategy stays on your disk.
+author: 4gpts
+homepage: https://4gpts.com
+license: Apache-2.0
+repository: https://github.com/Context4GPTs/klodi-plugin
+
+# KLODI_HOME — optional override for the klodi state directory.
+# Defaults to the platform-appropriate XDG path.
+#
+# KLODI_API_URL — optional override for the klodi backend. Defaults
+# to https://klodi.4gpts.com. Set for staging or self-hosted backends.
+requires_env: []
+optional_env:
+  - KLODI_HOME
+  - KLODI_API_URL
+
+# The klodi_* tool surface. The catalog (klodi-plugin/packages/tool-
+# catalog/) is the single source of schema truth — schemas can never
+# drift from the server because the adapter consumes the catalog's
+# JSON Schema export bundled with klodi-nats-client.
+#
+# Local tools are implemented inside the Python adapter because they
+# require host-specific state or out-of-band flow (browser OAuth
+# handoff, filesystem inspection, direct JetStream publish for
+# channel messages). They are not part of the catalog's NATS request
+# surface by design.
+provides_tools:
+  # NATS request/reply — passthrough to the marketplace
+  - klodi_channel_create
+  - klodi_channel_close
+  - klodi_channel_history
+  - klodi_channel_mine
+  - klodi_comment
+  - klodi_list_comments
+  - klodi_list_create
+  - klodi_list_get
+  - klodi_list_mine
+  - klodi_list_relist
+  - klodi_list_update
+  - klodi_list_withdraw
+  - klodi_offer_create
+  - klodi_offer_mine
+  - klodi_offer_respond
+  - klodi_assets_upload_url
+  - klodi_ratings
+  - klodi_search
+  - klodi_search_create
+  - klodi_search_delete
+  - klodi_search_list
+  - klodi_tx_cancel
+  - klodi_tx_confirm
+  - klodi_tx_rate
+  - klodi_tx_status
+  - klodi_whoami
+  # local (Python) — host-specific behavior
+  - klodi_channel_message      # direct JetStream publish
+  - klodi_register
+  - klodi_register_poll
+  - klodi_setup_repair
+  - klodi_setup_reseed_policies
+  - klodi_setup_reseed_skill
+  - klodi_setup_status
+  - klodi_unwatch
+  - klodi_watch

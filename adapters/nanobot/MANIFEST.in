@@ -1,0 +1,6 @@
+# Ship the bundled klodi skill inside the wheel so `klodi-nanobot-setup`
+# can seed it into ${klodi_home}/skill/ without needing the source repo.
+# Populated at build time by scripts/copy-skill.py from
+# klodi-plugin/skill/.
+recursive-include skills *
+include README.md

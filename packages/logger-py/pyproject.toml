@@ -1,0 +1,54 @@
+# klodi-logger — Python implementation of the unified KlodiLogger contract.
+#
+# One contract per language (TS / Py / Rust); three implementations.
+# Source of truth lives in `klodi-plugin/packages/tool-catalog/src/logging.ts`
+# (D15) and ships into Python via `dist/schemas.json#logging`. The contract
+# is read at import time so the Py logger and the cross-language test agree
+# on field names + level ordering.
+
+[build-system]
+requires = ["setuptools==75.8.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "klodi-logger"
+version = "0.1.0"
+description = "Klodi unified logger (Python) — emits NDJSON matching the @klodi/tool-catalog/logging contract."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "4GPTs", email = "hello@4gpts.com" }]
+keywords = ["klodi", "logging", "marketplace", "p2p", "agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    # Internal-only. Each adapter (klodi-hermes, klodi-nanobot) vendors
+    # this package's source into its own wheel at publish time the same
+    # way it vendors `klodi-nats-client`. The "Private :: Do Not Upload"
+    # classifier is the canonical PyPI tripwire — twine/PyPI reject any
+    # upload that carries it.
+    "Private :: Do Not Upload",
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+    "pytest==8.3.4",
+]
+
+[project.urls]
+Homepage = "https://4gpts.com"
+Repository = "https://github.com/Context4GPTs/klodi-plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+klodi_logger = ["py.typed", "schemas.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

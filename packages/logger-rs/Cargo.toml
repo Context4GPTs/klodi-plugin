@@ -1,0 +1,46 @@
+# klodi-logger — Rust implementation of the unified KlodiLogger contract.
+#
+# One contract per language (TS / Py / Rust); three implementations.
+# Source of truth lives in `klodi-plugin/packages/tool-catalog/src/logging.ts`
+# (D15) and ships into Rust via the generated `dist/rust-types.rs`
+# (`logging` module). The contract is referenced at compile time so the
+# Rust logger and the cross-language test agree on field names + level
+# ordering.
+
+[package]
+name = "klodi-logger"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "klodi unified logger (Rust) — emits NDJSON matching the @klodi/tool-catalog/logging contract."
+repository = "https://github.com/Context4GPTs/klodi-plugin"
+homepage = "https://4gpts.com"
+keywords = ["klodi", "logging", "marketplace", "p2p", "agent"]
+categories = ["development-tools::debugging"]
+readme = "README.md"
+# Internal-only crate. Each adapter (klodi-moltis, klodi-ironclaw,
+# klodi-zeroclaw) vendors this crate's source into its own tree at
+# publish time the same way it vendors `klodi-nats-client`.
+publish = false
+
+[lib]
+name = "klodi_logger"
+path = "src/lib.rs"
+
+[dependencies]
+# Catalog provides the logging contract module (LogLevel enum,
+# REDACTED_FIELD_NAMES, REDACTION_PLACEHOLDER, DEFAULT_LOG_LEVEL,
+# required_fields_by_site).
+klodi-nats-client = { path = "../nats-client-rs" }
+
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.140"
+
+# Time formatting for the `ts` field. `chrono` is already in the workspace
+# tree via `nats-client-rs`'s indirect deps (async-nats); pull a small
+# direct pin here so we don't rely on transitive availability.
+chrono = { version = "=0.4.38", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+tempfile = "=3.14.0"
