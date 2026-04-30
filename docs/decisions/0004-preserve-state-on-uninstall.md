@@ -28,13 +28,13 @@ An uninstall could plausibly mean "I want to stop running the plugin" (reinstall
 
 - **User retains visibility.** The directory is plain markdown + creds under a documented path the user can `ls`, audit, or delete themselves. Nothing hides.
 - **No orphan processes.** The `klodi-nats` service's `stop()` handler runs at uninstall (service lifecycle is owned by the gateway); no background process keeps a WebSocket open or a timer firing after the plugin code is gone. Persistence is data-only, not execution.
-- **Narrow `setup_repair`.** `klodi_setup_repair` takes only `nats.creds` and `config.json`. That is the narrowest blast radius that still enables a clean re-register. Tested at `src/__tests__/tools/setup.test.ts`.
+- **Narrow `setup_repair`.** `klodi_setup_repair` takes only `nats.creds` and `config.json`. That is the narrowest blast radius that still enables a clean re-register. (Per [docs/plans/0008-mitigation-test-evidence.md](../plans/0008-mitigation-test-evidence.md): unit coverage for `registerSetupRepair` in `adapters/openclaw/src/tools/setup.ts` is open work; the existing `__tests__/` covers `service/state.ts` and `service/wake.ts` only.)
 - **Documented full-wipe path.** SECURITY.md § Credential handling states the full-wipe step (`rm -rf ~/.openclaw/workspace/.klodi/`) so a user who *does* want total removal has an unambiguous path.
 - **Revoke-at-server complements local wipe.** A user uninstalling because they suspect local compromise should also rotate the signer on the server — SECURITY.md instructs them to do so.
 
 ## References
 
-- Code: `src/tools/setup.ts` `registerSetupRepair`
+- Code: `adapters/openclaw/src/tools/setup.ts` `registerSetupRepair`
 - [SECURITY.md § Credential handling](../../SECURITY.md)
 - [SECURITY.md § Local storage](../../SECURITY.md)
 - Related: [ADR-0002](./0002-on-disk-nkey-credentials.md)

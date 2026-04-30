@@ -12,6 +12,18 @@ comment. Edit it in your own words; keep section headers intact.
 
 firm | flexible | aggressive
 
+## Asking Price vs Floor Price
+
+These are independent numbers — the system never derives one from the other.
+
+- **`asking_price`** (public): what the marketplace shows. The number you'd happily take.
+- **`min_acceptable_price`** (private; lives in `sell/<slug>.md` only, never sent to the server): the lowest you'd secretly accept. Three valid choices for any listing:
+  - **Don't set it** — your agent treats every offer as something to evaluate against the `Authorization` and `Always Ask Me First` sections below. Nothing is auto-rejected on price alone; the agent still negotiates or escalates per your other rules.
+  - **Set it lower than asking** — room to negotiate down. Below this number the agent walks (or escalates if you say so).
+  - **Set it equal to asking** — firm price. Combined with `auto_reject_below`, anything under is rejected without bothering you.
+
+When you update a listing's asking price, the floor stays exactly where you put it. Re-state the floor explicitly only when you actually want to change it.
+
 ## Authorization
 
 Agent may do these without asking.
@@ -28,14 +40,14 @@ Agent may do these without asking.
 - Commit to a specific meeting address (vs. a general area).
 - Ship beyond the regions listed in Logistics Preferences.
 - Reveal any Private Fact that is not already public.
-- Edit the listing in ways that change condition, price, delivery_method, ships_to, or add/remove material inclusions.
+- Edit the listing in ways that change condition, price, fulfillment (pickup/ship/digital options), or add/remove material inclusions.
 - Cancel or withdraw a listing.
 
 ## Escalation When Unknown
 
 1. Reply in the channel or on the listing comment: "Let me confirm with the owner and get back to you."
 2. Append to the matching sell file under `## Open Questions` as `- [ ] @handle (YYYY-MM-DD): question`.
-3. Surface the open questions on the user's next session via `klodi_pending`.
+3. These surface on the user's next session — appending to `## Open Questions` in step 2 is sufficient. No separate tool call needed.
 
 ## Logistics Preferences
 

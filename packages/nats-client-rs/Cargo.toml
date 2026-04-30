@@ -1,0 +1,96 @@
+# klodi-nats-client — single persistent NATS-WS connection per session.
+#
+# Mirrors the public surface of the TS client at
+# klodi-plugin/packages/nats-client-ts/. The Rust adapters (Moltis, IronClaw,
+# ZeroClaw) depend on this crate to talk to the marketplace.
+#
+# Internal dep on the tool catalog for subject + ToolName lookup; the catalog
+# JSON Schema and Rust structs are generated from the TS source of truth in
+# klodi-plugin/packages/tool-catalog/dist/.
+
+[package]
+name = "klodi-nats-client"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "klodi — single persistent NATS-WS client. Tool calls, notifications, channel streams."
+repository = "https://github.com/Context4GPTs/klodi-plugin"
+homepage = "https://4gpts.com"
+keywords = ["nats", "klodi", "marketplace", "p2p", "agent"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+# Internal-only crate. Each adapter (klodi-moltis, klodi-ironclaw,
+# klodi-zeroclaw) vendors this crate's source into its own tree at
+# publish time (see adapters/<host>/scripts/vendor.sh) so consumers
+# install one self-contained crate per host. `publish = false` makes
+# `cargo publish` fail loud if anyone tries to push this to crates.io.
+publish = false
+
+[lib]
+name = "klodi_nats_client"
+path = "src/lib.rs"
+
+[dependencies]
+# NATS — `websockets`, `jetstream`, `nkeys` are all in the default feature
+# set of v0.47. Pin loosely on the minor (0.47.x) so security patches land
+# without explicit bumps; major bumps are an explicit opt-in.
+async-nats = "=0.47.0"
+
+# Async runtime — same minor pin we use across the workspace.
+tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+# Serde — version pinned to match the existing Rust adapters in this repo.
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.140"
+
+# UUID minting for the publish path (event_id, message_id are client-side).
+uuid = { version = "=1.18.0", features = ["v4"] }
+
+# In-memory dedup ring (per-consumer, capacity 1000).
+lru = "=0.17.0"
+
+# Library-level structured errors.
+thiserror = "=2.0.18"
+
+# Stream consumption — async-nats Consumer's messages() returns a Stream.
+futures-util = "=0.3.31"
+
+# Structured logging — surface lifecycle events without owning a sink.
+tracing = "=0.1.41"
+
+# Per-attempt jitter for the exponential reconnect backoff (P2-5).
+# Pinned to match the workspace; small-utils crate, no transitive risk.
+rand = "=0.8.5"
+
+[dev-dependencies]
+tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }
+uuid = { version = "=1.18.0", features = ["v4"] }
+futures-util = "=0.3.31"
+
+# Cross-language contract test (Decision 7) lives at tests/contract/golden.rs
+# rather than tests/contract.rs so the directory mirrors the TS + Python halves.
+# Cargo only auto-discovers integration tests at the top level of `tests/`, so
+# the target is declared explicitly here.
+[features]
+# Enable the golden corpus contract test. Off by default — CI runs:
+#   cargo test --features golden
+# so plain `cargo test` stays focused on the in-crate unit tests.
+golden = []
+
+# P1-22 — D.1.rs: per-language client cycle. Off by default so plain
+# `cargo test` stays focused on unit tests; CI runs:
+#   cargo test --features integration -- --test-threads=1
+# (single-threaded so the per-test consumer cleanup doesn't race with
+# the next user mint).
+integration = []
+
+[[test]]
+name = "golden"
+path = "tests/contract/golden.rs"
+required-features = ["golden"]
+
+[[test]]
+name = "integration_client"
+path = "tests/integration/client.rs"
+required-features = ["integration"]

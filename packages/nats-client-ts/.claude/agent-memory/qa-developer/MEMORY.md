@@ -1,0 +1,2 @@
+- [project: localhost IPv6 collision](project_localhost_ipv6_collision.md) — Fellou.app squats on [::1]:8080; use ws://127.0.0.1:8080 for nats-client-ts integration tests
+- [project: D.8 reconnect-drain failing](project_d8_reconnect_drain_failing.md) — Still broken after extending budget past ack_wait: only 1-2 of 3 redelivered messages arrive in phase 2 (real impl bug)

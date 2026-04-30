@@ -1,0 +1,11 @@
+# TypeScript build artifacts (regenerated on every build)
+dist/*.js
+dist/*.js.map
+dist/*.d.ts
+dist/*.d.ts.map
+dist/codegen/
+
+# Codegen artifacts MUST be committed — Modules C (Python) and D (Rust)
+# consume them with no TS build dependency.
+!dist/schemas.json
+!dist/rust-types.rs

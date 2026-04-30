@@ -1,0 +1,1 @@
+- [project: wake_pump Rust idiom](project_wake_pump_rust_idiom.md) — Rust WakePump tests reuse existing crate idiom (boxed-future traits, std::time::SystemTime); no async_trait or chrono.

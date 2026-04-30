@@ -1,0 +1,107 @@
+# PR gate for the klodi Rust crates + adapters.
+#
+# Per **R § P2-23** the Rust workspace shipped without CI; per **D § D8**
+# the consolidation into `klodi-rust-host` is the right time to add it.
+# Matrix over each crate so a regression in one crate doesn't get masked
+# by another crate's test passing.
+#
+# All third-party actions pinned to full SHA per
+# .claude/rules/infra-rules.md. Scan with zizmor before merging changes.
+
+name: klodi-plugin rust
+
+# Automatic pull_request and push triggers disabled until the Rust CI is green again.
+# Re-enable by uncommenting the blocks below.
+on:
+  # pull_request:
+  #   paths:
+  #     - "packages/logger-rs/**"
+  #     - "packages/nats-client-rs/**"
+  #     - "packages/klodi-rust-host/**"
+  #     - "adapters/moltis/**"
+  #     - "adapters/ironclaw/**"
+  #     - "adapters/zeroclaw/**"
+  #     - ".github/workflows/klodi-plugin-rust.yml"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "packages/logger-rs/**"
+  #     - "packages/nats-client-rs/**"
+  #     - "packages/klodi-rust-host/**"
+  #     - "adapters/moltis/**"
+  #     - "adapters/ironclaw/**"
+  #     - "adapters/zeroclaw/**"
+  #     - ".github/workflows/klodi-plugin-rust.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: klodi-plugin-rust-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned MSRV. Keep aligned with `rust-version` in every crate's
+  # Cargo.toml. Bump together when any direct or transitive dep raises
+  # its MSRV (e.g., async-nats 0.47 → 1.88; reqwest's idna→icu_*
+  # chain → 1.86 floor). The lockfile-staleness step below catches
+  # the secondary failure mode (lock out of sync with manifests).
+  RUST_VERSION: "1.88"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test-clippy:
+    name: ${{ matrix.crate.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - { name: "klodi-logger", manifest: "packages/logger-rs/Cargo.toml" }
+          - { name: "nats-client-rs", manifest: "packages/nats-client-rs/Cargo.toml" }
+          - { name: "klodi-rust-host", manifest: "packages/klodi-rust-host/Cargo.toml" }
+          - { name: "klodi-moltis", manifest: "adapters/moltis/Cargo.toml" }
+          - { name: "klodi-ironclaw", manifest: "adapters/ironclaw/Cargo.toml" }
+          - { name: "klodi-zeroclaw", manifest: "adapters/zeroclaw/Cargo.toml" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain (stable, pinned MSRV)
+        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # master @ 2024-04
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ matrix.crate.manifest }}/../target/
+          key: rust-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ matrix.crate.name }}-${{ hashFiles(format('{0}', matrix.crate.manifest)) }}
+
+      - name: Lockfile staleness guard (cargo update --locked)
+        # `cargo update --locked` exits non-zero if running it would
+        # change `Cargo.lock` — i.e., the lockfile is out of sync with
+        # the manifests. Catches the failure mode that hit Phase 4:
+        # adding a new transitive dep (e.g., klodi-logger) to one
+        # adapter's path-dep graph without refreshing the other
+        # adapters' lockfiles.
+        run: cargo update --locked --manifest-path ${{ matrix.crate.manifest }}
+
+      - name: cargo build --locked --release
+        run: cargo build --locked --release --manifest-path ${{ matrix.crate.manifest }}
+
+      - name: cargo test --locked
+        run: cargo test --locked --manifest-path ${{ matrix.crate.manifest }}
+
+      - name: cargo clippy -- -D warnings
+        run: cargo clippy --locked --all-targets --manifest-path ${{ matrix.crate.manifest }} -- -D warnings

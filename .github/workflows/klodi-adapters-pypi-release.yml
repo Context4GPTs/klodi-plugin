@@ -1,0 +1,350 @@
+# Auto-publish klodi-hermes + klodi-nanobot to PyPI on every merge to
+# main that bumps either adapter's pyproject.toml. Each adapter publishes
+# independently in a matrix — bumping only one fans out only that one.
+# Path-filtered so unrelated merges don't start the job. Version-existence
+# is the hard gate per adapter: if PyPI already has the target version,
+# the matrix entry exits cleanly. Re-running against an old commit is
+# a safe no-op for every adapter.
+#
+# klodi-nats-client is NOT a separate PyPI package. It is vendored at
+# wheel-build time into a privately-namespaced peer of the adapter (see
+# `scripts/vendor.py` in each adapter). The adapter's Makefile owns the
+# build/smoke flow; this workflow delegates to those targets so adapter-
+# specific build hygiene stays adapter-local.
+#
+# Pre-publish gates (the work this workflow exists to do, applied per
+# adapter via matrix):
+#   1. Plan         — read [project].version per adapter, query PyPI,
+#                     emit a JSON matrix-include list of adapters needing
+#                     publish. Empty list ⇒ workflow stops cleanly.
+#   2. Manifest     — license, repository, semver, pyproject importable.
+#   3. Lint+format  — ruff check + ruff format --check.
+#   4. Typecheck    — pyright in strict mode (zero warnings).
+#   5. Unit tests   — pytest on the adapter's tests/ directory.
+#   6. Build        — `make build` runs the adapter's vendor + build flow.
+#   7. Smoke        — `make smoke` installs the wheel into a clean venv
+#                     and exercises plugin entry-points + package data.
+#                     This is the gate that catches "wheel installs but
+#                     plugin can't load" — it failed silently in the old
+#                     workflow that imported flat py-modules from CWD.
+#   8. Twine check  — wheel metadata validity.
+#   9. Wheel hygiene — no .env / .pem / .key / egg-info / __pycache__
+#                      leakage in the wheel.
+#
+# Prerequisites (must land before the first release run):
+#   1. PyPI Trusted Publisher binding for klodi-hermes AND klodi-nanobot
+#      → this repo → this workflow path → `pypi` GitHub Environment.
+#      One binding per package; both must exist.
+#   2. adapters/{hermes,nanobot}/CHANGELOG.md created.
+#   3. Every action below pinned to a full SHA and zizmor-scanned per
+#      .claude/rules/infra-rules.md.
+#
+# What this workflow intentionally does NOT do:
+#   - Publish klodi-nats-client. It is vendored into each adapter's wheel
+#     at build time and never published as a standalone package.
+#   - Run e2e or cross-host integration tests. Release path stays fast.
+
+name: klodi adapters PyPI release
+
+# Automatic push trigger disabled until the release pipeline is green again.
+# Re-enable by uncommenting the push block below.
+on:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "adapters/hermes/**"
+  #     - "adapters/nanobot/**"
+  #     - "packages/nats-client-py/**"
+  #     - ".github/workflows/klodi-adapters-pypi-release.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit SHA on main to re-publish from (optional — defaults to current main)."
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: klodi-adapters-pypi-release
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  RUFF_VERSION: "0.6.9"
+  PYRIGHT_VERSION: "1.1.388"
+  BUILD_VERSION: "1.2.2"
+  TWINE_VERSION: "5.1.1"
+  SHARED_CLIENT_PATH: packages/nats-client-py
+
+jobs:
+  plan:
+    name: Plan (per-adapter version gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      adapters: ${{ steps.gather.outputs.adapters }}
+      any: ${{ steps.gather.outputs.any }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@<TODO> # v5.3.0 — pin SHA before merge
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build matrix from per-adapter manifest state
+        id: gather
+        run: |
+          set -euo pipefail
+          # Each adapter's importable package — the smoke step loads this
+          # and asserts `register` is callable. Source of truth: the
+          # adapter's `[project.entry-points."hermes.plugin"]` block.
+          declare -A IMPORT_PKG=(
+            [hermes]=klodi_hermes
+            [nanobot]=nanobot_tools
+          )
+          adapters='[]'
+          for adapter in hermes nanobot; do
+            ver=$(python -c "import tomllib;d=tomllib.load(open(f'adapters/${adapter}/pyproject.toml','rb'));print(d['project']['version'])")
+            if ! [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.]+)?$ ]]; then
+              echo "::error::adapter ${adapter} has non-semver version '$ver'"; exit 1
+            fi
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              "https://pypi.org/pypi/klodi-${adapter}/${ver}/json")
+            if [[ "$code" == "200" ]]; then
+              echo "klodi-${adapter}@${ver} already on PyPI — skip."
+              continue
+            fi
+            echo "klodi-${adapter}@${ver} will publish."
+            adapters=$(echo "$adapters" | jq \
+              --arg a "$adapter" \
+              --arg v "$ver" \
+              --arg p "klodi-${adapter}" \
+              --arg pkg "${IMPORT_PKG[$adapter]}" \
+              '. + [{"adapter":$a,"version":$v,"package":$p,"import_pkg":$pkg}]')
+          done
+          adapters_compact=$(echo "$adapters" | jq -c '.')
+          echo "adapters=${adapters_compact}" >> "$GITHUB_OUTPUT"
+          if [[ "$(echo "$adapters" | jq 'length')" == "0" ]]; then
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  qa:
+    name: QA — ${{ matrix.adapter }}
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.adapters) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@<TODO> # v5.3.0 — pin SHA before merge
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install QA tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            "ruff==${RUFF_VERSION}" \
+            "pyright==${PYRIGHT_VERSION}" \
+            "pytest==8.3.4" \
+            "pytest-asyncio==1.0.0"
+
+      - name: Install workspace shared client (editable, for dev-loop imports)
+        # klodi-nats-client is not on PyPI — it's vendored into the wheel
+        # at build time. For pyright/pytest to resolve `from
+        # klodi_nats_client import …` against the workspace source tree,
+        # install it editable here.
+        run: pip install -e "${SHARED_CLIENT_PATH}"
+
+      - name: Install adapter (editable, no-deps)
+        run: pip install --no-deps -e "adapters/${{ matrix.adapter }}"
+
+      - name: Format check (ruff)
+        run: ruff format --check "adapters/${{ matrix.adapter }}"
+
+      - name: Lint (ruff)
+        run: ruff check "adapters/${{ matrix.adapter }}"
+
+      - name: Type check (pyright, strict, zero warnings)
+        run: pyright --warnings "adapters/${{ matrix.adapter }}"
+
+      - name: Unit tests
+        # Hermes ships tests under adapters/hermes/tests; nanobot under
+        # adapters/nanobot/tests. Skip if no tests/ directory rather
+        # than failing — but warn so a missing test tree is visible.
+        run: |
+          if [[ -d "adapters/${{ matrix.adapter }}/tests" ]]; then
+            pytest "adapters/${{ matrix.adapter }}/tests"
+          else
+            echo "::warning::no tests/ directory for ${{ matrix.adapter }}"
+          fi
+
+  package:
+    name: Package — ${{ matrix.adapter }}
+    needs: [plan, qa]
+    if: needs.plan.outputs.any == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.adapters) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@<TODO> # v5.3.0 — pin SHA before merge
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build tooling
+        run: pip install "build==${BUILD_VERSION}" "twine==${TWINE_VERSION}"
+
+      - name: Build wheel via adapter Makefile (vendor + build)
+        # The adapter's Makefile owns the build flow: clean-build-state
+        # removes stale egg-info + build/ + dist/, vendor.py stages the
+        # adapter source + copies klodi_nats_client into a privately-
+        # namespaced peer, then `python -m build` runs from the staged
+        # tree. See adapters/<adapter>/Makefile.
+        run: make -C "adapters/${{ matrix.adapter }}" build
+
+      - name: Smoke install (clean venv, real plugin entry-points)
+        # Each adapter's `make smoke` builds the wheel, installs it into
+        # a throw-away venv, and exercises every install-time guarantee
+        # end users depend on (package importable, register callable,
+        # entry-point registered, plugin.yaml + skill bundle ship as
+        # package data). Run from /tmp inside smoke.sh to avoid CWD
+        # source shadowing.
+        run: make -C "adapters/${{ matrix.adapter }}" smoke
+
+      - name: Twine metadata check
+        run: twine check "adapters/${{ matrix.adapter }}/dist"/*.whl
+
+      - name: Wheel hygiene — no leakage
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          whls=("adapters/${ADAPTER}/dist"/*.whl)
+          if (( ${#whls[@]} != 1 )); then
+            echo "::error::expected exactly 1 wheel, got ${#whls[@]}"; exit 1
+          fi
+          contents="$(unzip -Z1 "${whls[0]}")"
+          echo "Wheel contents:"; echo "$contents"
+
+          # No secret/build leakage.
+          if echo "$contents" | grep -E '\.env$|\.pem$|\.key$|/\.git/|\.pyc$|/__pycache__/|\.egg-info/'; then
+            echo "::error::wheel contains forbidden files"; exit 1
+          fi
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@<TODO> # v4.4.x — pin SHA before merge
+        with:
+          name: dist-${{ matrix.adapter }}
+          path: adapters/${{ matrix.adapter }}/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish ${{ matrix.adapter }} to PyPI
+    needs: [plan, package]
+    if: needs.plan.outputs.any == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.adapters) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write   # OIDC trusted publisher
+    environment: pypi
+    steps:
+      - name: Download wheel
+        uses: actions/download-artifact@<TODO> # v4.x — pin SHA before merge
+        with:
+          name: dist-${{ matrix.adapter }}
+          path: dist/
+
+      - name: Publish via PyPI Trusted Publisher
+        uses: pypa/gh-action-pypi-publish@<TODO> # v1.10.x — pin SHA before merge
+        # OIDC-only; no API token. Provenance attestations on by default.
+
+  release:
+    name: GitHub Release — ${{ matrix.adapter }}
+    needs: [plan, publish]
+    if: needs.plan.outputs.any == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.adapters) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Extract CHANGELOG entry
+        env:
+          VERSION: ${{ matrix.version }}
+          ADAPTER: ${{ matrix.adapter }}
+        run: |
+          changelog="adapters/${ADAPTER}/CHANGELOG.md"
+          if [[ ! -f "$changelog" ]]; then
+            echo "::error::CHANGELOG.md missing at $changelog"; exit 1
+          fi
+          CHANGELOG_PATH="$changelog" node - <<'EOF' > RELEASE_NOTES.md
+          const fs = require('node:fs');
+          const v = process.env.VERSION;
+          const text = fs.readFileSync(process.env.CHANGELOG_PATH, 'utf8');
+          const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const re = new RegExp('## \\[' + escaped + '\\][\\s\\S]*?(?=\\n## \\[|$)');
+          const m = text.match(re);
+          if (!m) { console.error('CHANGELOG entry for ' + v + ' not found'); process.exit(1); }
+          process.stdout.write(m[0]);
+          EOF
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ matrix.version }}
+          ADAPTER: ${{ matrix.adapter }}
+        run: |
+          gh release create "klodi-${ADAPTER}-v${VERSION}" \
+            --title "klodi-${ADAPTER} v${VERSION}" \
+            --notes-file RELEASE_NOTES.md \
+            --target "${{ inputs.ref || github.sha }}"

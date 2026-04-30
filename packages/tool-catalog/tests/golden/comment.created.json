@@ -1,0 +1,10 @@
+{
+  "kind": "comment.created",
+  "event_id": "a1b2c3d4-000c-4000-8000-00000000000c",
+  "listing_id": "11111111-1111-4111-8111-111111111111",
+  "comment_id": "44444444-4444-4444-8444-444444444444",
+  "handle": "carol",
+  "body": "Does this come with the original strap? @alice",
+  "mentions": ["alice"],
+  "created_at": "2026-04-26T11:30:00.000Z"
+}

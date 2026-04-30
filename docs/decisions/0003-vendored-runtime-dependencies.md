@@ -1,6 +1,6 @@
 # ADR-0003 — Runtime dependencies vendored into `dist/node_modules/`
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0008](./0008-bundled-deps-host-ignore-scripts.md) (2026-04-27). Vendoring + `dist/node_modules/` were dropped in favour of `bundleDependencies` for workspace deps + host-enforced `--ignore-scripts` for public-registry transitives. The two-source-of-truth drift between `vendor-deps.mjs` and `package.json#dependencies` (which caused the 0.1.11 install regression) is eliminated. Historical context retained.
 - **Date:** 2026-04-22
 - **Review concern addressed:** *Install Mechanism — registry metadata said "instruction-only" / no install spec, but the package includes compiled JS files (dist/).*
 

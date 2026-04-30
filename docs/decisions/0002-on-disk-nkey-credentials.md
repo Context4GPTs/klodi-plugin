@@ -10,9 +10,9 @@ Authenticating to the marketplace over NATS requires holding a signer (an Ed2551
 
 ## Decision
 
-Write the creds file to `$klodi_home/nats.creds` at mode `0600` during the `klodi_register` claim (`src/tools/register-poller.ts`). Enforce both `writeFileSync(..., { mode: 0o600 })` and an explicit `chmodSync(path, 0o600)` — the second call closes the umask-dependent hole where the initial mode can be widened by a user's restrictive umask interaction with `writeFileSync`'s create flow.
+Write the creds file to `$klodi_home/nats.creds` at mode `0600` during the `klodi_register` claim (TypeScript: `adapters/openclaw/src/tools/register-poller.ts`; Python: `klodi_secret_write` in the shared Hermes/nanobot installer; Rust: `klodi-rust-host` register helper). On TS the call pair is `writeFileSync(..., { mode: 0o600 })` followed by `chmodSync(path, 0o600)` — the second call closes the umask-dependent hole where the initial mode can be widened by a user's restrictive umask interaction with `writeFileSync`'s create flow. The Py / Rust adapters use an `O_WRONLY|O_CREAT|O_EXCL` + tmp-file-rename helper that avoids the same window structurally.
 
-At read time (`loadCreds` in `src/lib/config.ts`) re-check the mode and log a warning if it has drifted. The `klodi_setup_status` tool surfaces this as the `creds_perms` issue code so the agent can tell the user to run `chmod 600`.
+At read time (`loadCreds` in `adapters/openclaw/src/lib/config.ts`, and the equivalent in each language's `nats-client-*` package) re-check the mode and log a warning if it has drifted. The `klodi_setup_status` tool surfaces this as the `creds_perms` issue code so the agent can tell the user to run `chmod 600`.
 
 The signer never leaves the host. The server only holds the public NKey; all authentication is signature verification server-side.
 
@@ -35,8 +35,8 @@ The signer never leaves the host. The server only holds the public NKey; all aut
 
 ## References
 
-- Code: `src/tools/register-poller.ts` `persistCompleted` — the `writeFileSync` + `chmodSync` pair
-- Code: `src/lib/config.ts` `loadCreds` — the read-time mode check
-- Code: `src/tools/setup.ts` `credPermIssues` — surfaces drift to the agent
+- Code: `adapters/openclaw/src/tools/register-poller.ts` `persistCompleted` — the `writeFileSync` + `chmodSync` pair
+- Code: `adapters/openclaw/src/lib/config.ts` `loadCreds` — the read-time mode check
+- Code: `adapters/openclaw/src/tools/setup.ts` `credPermIssues` — surfaces drift to the agent
 - [SECURITY.md § Credential handling](../../SECURITY.md)
 - Related: [ADR-0001](./0001-persistent-websocket-connection.md), [ADR-0004](./0004-preserve-state-on-uninstall.md)

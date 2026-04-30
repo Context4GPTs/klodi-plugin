@@ -1,0 +1,6 @@
+target/
+
+# Staged publish tree produced by scripts/vendor.py + the Makefile.
+# Source of truth is Cargo.toml + src/; everything in build/ is
+# regenerated on every `make build`.
+build/

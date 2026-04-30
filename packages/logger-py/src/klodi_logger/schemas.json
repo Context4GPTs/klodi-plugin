@@ -1,0 +1,4733 @@
+{
+  "version": "4",
+  "tools": {
+    "klodi_whoami": {
+      "subject": "p2p.v1.users.whoami",
+      "description": "Check your identity, ratings, and profile on klodi. Returns handle, per-role ratings + counts, trade counts, location, and profile metadata.",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "buyer_rating": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "avg": {
+                    "description": "Running mean rating, 1.0–5.0",
+                    "type": "number"
+                  },
+                  "count": {
+                    "description": "Number of ratings received in this role",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "avg",
+                  "count"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seller_rating": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "avg": {
+                    "description": "Running mean rating, 1.0–5.0",
+                    "type": "number"
+                  },
+                  "count": {
+                    "description": "Number of ratings received in this role",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "avg",
+                  "count"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trades_as_buyer": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trades_as_seller": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "location_area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "country_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "administrative_area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "postal_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "member_since": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "handle",
+          "buyer_rating",
+          "seller_rating",
+          "trades_as_buyer",
+          "trades_as_seller",
+          "location_area",
+          "country_code",
+          "administrative_area",
+          "city",
+          "postal_code",
+          "bio",
+          "avatar_url",
+          "member_since"
+        ]
+      }
+    },
+    "klodi_ratings": {
+      "subject": "p2p.v1.ratings.query",
+      "description": "Look up any user's public marketplace ratings and profile. Returns per-role ratings, trade counts, and public profile fields (location, bio, avatar).",
+      "params": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "buyer_rating": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "avg": {
+                    "description": "Running mean rating, 1.0–5.0",
+                    "type": "number"
+                  },
+                  "count": {
+                    "description": "Number of ratings received in this role",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "avg",
+                  "count"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seller_rating": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "avg": {
+                    "description": "Running mean rating, 1.0–5.0",
+                    "type": "number"
+                  },
+                  "count": {
+                    "description": "Number of ratings received in this role",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "avg",
+                  "count"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trades_as_buyer": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trades_as_seller": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "location_area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "member_since": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handle",
+          "buyer_rating",
+          "seller_rating",
+          "trades_as_buyer",
+          "trades_as_seller",
+          "location_area",
+          "bio",
+          "avatar_url",
+          "member_since"
+        ]
+      }
+    },
+    "klodi_list_create": {
+      "subject": "p2p.v1.listings.create",
+      "description": "Create a new marketplace listing. Prices in integer cents. Condition required for pickup/ship, rejected for digital. ships_to required for ship only (ISO 3166 codes).",
+      "params": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "description": "Item title (1-200 chars)",
+            "type": "string"
+          },
+          "description": {
+            "description": "Item description (1-2000 chars)",
+            "type": "string"
+          },
+          "category": {
+            "description": "Item category",
+            "anyOf": [
+              {
+                "const": "electronics",
+                "type": "string"
+              },
+              {
+                "const": "furniture",
+                "type": "string"
+              },
+              {
+                "const": "vehicles",
+                "type": "string"
+              },
+              {
+                "const": "clothing",
+                "type": "string"
+              },
+              {
+                "const": "home_garden",
+                "type": "string"
+              },
+              {
+                "const": "sports",
+                "type": "string"
+              },
+              {
+                "const": "collectibles",
+                "type": "string"
+              },
+              {
+                "const": "digital_goods",
+                "type": "string"
+              },
+              {
+                "const": "services",
+                "type": "string"
+              },
+              {
+                "const": "free",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "asking_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "delivery_method": {
+            "description": "Delivery method",
+            "anyOf": [
+              {
+                "const": "pickup",
+                "type": "string"
+              },
+              {
+                "const": "ship",
+                "type": "string"
+              },
+              {
+                "const": "digital",
+                "type": "string"
+              }
+            ]
+          },
+          "condition": {
+            "description": "Item condition",
+            "anyOf": [
+              {
+                "const": "new_item",
+                "type": "string"
+              },
+              {
+                "const": "like_new",
+                "type": "string"
+              },
+              {
+                "const": "good",
+                "type": "string"
+              },
+              {
+                "const": "fair",
+                "type": "string"
+              },
+              {
+                "const": "poor",
+                "type": "string"
+              }
+            ]
+          },
+          "location_area": {
+            "description": "Override pickup/ship location",
+            "type": "string"
+          },
+          "ships_to": {
+            "description": "ISO 3166 codes for ship delivery",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "photos": {
+            "description": "Photo asset URLs",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "description": "Search tags",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          },
+          "expires_hours": {
+            "description": "Hours until expiry (default 1440)",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "title",
+          "description",
+          "category",
+          "asking_price",
+          "delivery_method"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_url": {
+            "type": "string"
+          },
+          "seller_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "seller_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "description": "Item category",
+            "anyOf": [
+              {
+                "const": "electronics",
+                "type": "string"
+              },
+              {
+                "const": "furniture",
+                "type": "string"
+              },
+              {
+                "const": "vehicles",
+                "type": "string"
+              },
+              {
+                "const": "clothing",
+                "type": "string"
+              },
+              {
+                "const": "home_garden",
+                "type": "string"
+              },
+              {
+                "const": "sports",
+                "type": "string"
+              },
+              {
+                "const": "collectibles",
+                "type": "string"
+              },
+              {
+                "const": "digital_goods",
+                "type": "string"
+              },
+              {
+                "const": "services",
+                "type": "string"
+              },
+              {
+                "const": "free",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "asking_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          },
+          "delivery_method": {
+            "description": "Delivery method",
+            "anyOf": [
+              {
+                "const": "pickup",
+                "type": "string"
+              },
+              {
+                "const": "ship",
+                "type": "string"
+              },
+              {
+                "const": "digital",
+                "type": "string"
+              }
+            ]
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "description": "Item condition",
+                "anyOf": [
+                  {
+                    "const": "new_item",
+                    "type": "string"
+                  },
+                  {
+                    "const": "like_new",
+                    "type": "string"
+                  },
+                  {
+                    "const": "good",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fair",
+                    "type": "string"
+                  },
+                  {
+                    "const": "poor",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "location_area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ships_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "description": "Listing status filter",
+            "anyOf": [
+              {
+                "const": "active",
+                "type": "string"
+              },
+              {
+                "const": "on_hold",
+                "type": "string"
+              },
+              {
+                "const": "sold",
+                "type": "string"
+              },
+              {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            ]
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "listing_id",
+          "listing_url",
+          "seller_id",
+          "seller_handle",
+          "title",
+          "description",
+          "category",
+          "asking_price",
+          "currency",
+          "delivery_method",
+          "condition",
+          "photos",
+          "tags",
+          "location_area",
+          "ships_to",
+          "status",
+          "created_at",
+          "updated_at",
+          "expires_at"
+        ]
+      }
+    },
+    "klodi_list_update": {
+      "subject": "p2p.v1.listings.update",
+      "description": "Update an existing listing. Cannot change delivery_method or category (withdraw and relist instead).",
+      "params": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "asking_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "condition": {
+            "description": "Item condition",
+            "anyOf": [
+              {
+                "const": "new_item",
+                "type": "string"
+              },
+              {
+                "const": "like_new",
+                "type": "string"
+              },
+              {
+                "const": "good",
+                "type": "string"
+              },
+              {
+                "const": "fair",
+                "type": "string"
+              },
+              {
+                "const": "poor",
+                "type": "string"
+              }
+            ]
+          },
+          "location_area": {
+            "type": "string"
+          },
+          "ships_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          },
+          "status": {
+            "description": "Listing status filter",
+            "anyOf": [
+              {
+                "const": "active",
+                "type": "string"
+              },
+              {
+                "const": "on_hold",
+                "type": "string"
+              },
+              {
+                "const": "sold",
+                "type": "string"
+              },
+              {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "listing_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_url": {
+            "type": "string"
+          },
+          "seller_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "seller_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "description": "Item category",
+            "anyOf": [
+              {
+                "const": "electronics",
+                "type": "string"
+              },
+              {
+                "const": "furniture",
+                "type": "string"
+              },
+              {
+                "const": "vehicles",
+                "type": "string"
+              },
+              {
+                "const": "clothing",
+                "type": "string"
+              },
+              {
+                "const": "home_garden",
+                "type": "string"
+              },
+              {
+                "const": "sports",
+                "type": "string"
+              },
+              {
+                "const": "collectibles",
+                "type": "string"
+              },
+              {
+                "const": "digital_goods",
+                "type": "string"
+              },
+              {
+                "const": "services",
+                "type": "string"
+              },
+              {
+                "const": "free",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "asking_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          },
+          "delivery_method": {
+            "description": "Delivery method",
+            "anyOf": [
+              {
+                "const": "pickup",
+                "type": "string"
+              },
+              {
+                "const": "ship",
+                "type": "string"
+              },
+              {
+                "const": "digital",
+                "type": "string"
+              }
+            ]
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "description": "Item condition",
+                "anyOf": [
+                  {
+                    "const": "new_item",
+                    "type": "string"
+                  },
+                  {
+                    "const": "like_new",
+                    "type": "string"
+                  },
+                  {
+                    "const": "good",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fair",
+                    "type": "string"
+                  },
+                  {
+                    "const": "poor",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "location_area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ships_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "description": "Listing status filter",
+            "anyOf": [
+              {
+                "const": "active",
+                "type": "string"
+              },
+              {
+                "const": "on_hold",
+                "type": "string"
+              },
+              {
+                "const": "sold",
+                "type": "string"
+              },
+              {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            ]
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "listing_id",
+          "listing_url",
+          "seller_id",
+          "seller_handle",
+          "title",
+          "description",
+          "category",
+          "asking_price",
+          "currency",
+          "delivery_method",
+          "condition",
+          "photos",
+          "tags",
+          "location_area",
+          "ships_to",
+          "status",
+          "created_at",
+          "updated_at",
+          "expires_at"
+        ]
+      }
+    },
+    "klodi_list_get": {
+      "subject": "p2p.v1.listings.get",
+      "description": "Get full listing details including seller profile and comments.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "listing_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_url": {
+            "type": "string"
+          },
+          "seller_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "seller_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "description": "Item category",
+            "anyOf": [
+              {
+                "const": "electronics",
+                "type": "string"
+              },
+              {
+                "const": "furniture",
+                "type": "string"
+              },
+              {
+                "const": "vehicles",
+                "type": "string"
+              },
+              {
+                "const": "clothing",
+                "type": "string"
+              },
+              {
+                "const": "home_garden",
+                "type": "string"
+              },
+              {
+                "const": "sports",
+                "type": "string"
+              },
+              {
+                "const": "collectibles",
+                "type": "string"
+              },
+              {
+                "const": "digital_goods",
+                "type": "string"
+              },
+              {
+                "const": "services",
+                "type": "string"
+              },
+              {
+                "const": "free",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "asking_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          },
+          "delivery_method": {
+            "description": "Delivery method",
+            "anyOf": [
+              {
+                "const": "pickup",
+                "type": "string"
+              },
+              {
+                "const": "ship",
+                "type": "string"
+              },
+              {
+                "const": "digital",
+                "type": "string"
+              }
+            ]
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "description": "Item condition",
+                "anyOf": [
+                  {
+                    "const": "new_item",
+                    "type": "string"
+                  },
+                  {
+                    "const": "like_new",
+                    "type": "string"
+                  },
+                  {
+                    "const": "good",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fair",
+                    "type": "string"
+                  },
+                  {
+                    "const": "poor",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "location_area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ships_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "description": "Listing status filter",
+            "anyOf": [
+              {
+                "const": "active",
+                "type": "string"
+              },
+              {
+                "const": "on_hold",
+                "type": "string"
+              },
+              {
+                "const": "sold",
+                "type": "string"
+              },
+              {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            ]
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "listing_id",
+          "listing_url",
+          "seller_id",
+          "seller_handle",
+          "title",
+          "description",
+          "category",
+          "asking_price",
+          "currency",
+          "delivery_method",
+          "condition",
+          "photos",
+          "tags",
+          "location_area",
+          "ships_to",
+          "status",
+          "created_at",
+          "updated_at",
+          "expires_at"
+        ]
+      }
+    },
+    "klodi_list_mine": {
+      "subject": "p2p.v1.listings.mine",
+      "description": "Get your own listings. Filter by status.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "Listing status filter",
+            "anyOf": [
+              {
+                "const": "active",
+                "type": "string"
+              },
+              {
+                "const": "on_hold",
+                "type": "string"
+              },
+              {
+                "const": "sold",
+                "type": "string"
+              },
+              {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "listings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "listing_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "listing_url": {
+                  "type": "string"
+                },
+                "seller_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "seller_handle": {
+                  "description": "Marketplace handle (e.g. alice)",
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "category": {
+                  "description": "Item category",
+                  "anyOf": [
+                    {
+                      "const": "electronics",
+                      "type": "string"
+                    },
+                    {
+                      "const": "furniture",
+                      "type": "string"
+                    },
+                    {
+                      "const": "vehicles",
+                      "type": "string"
+                    },
+                    {
+                      "const": "clothing",
+                      "type": "string"
+                    },
+                    {
+                      "const": "home_garden",
+                      "type": "string"
+                    },
+                    {
+                      "const": "sports",
+                      "type": "string"
+                    },
+                    {
+                      "const": "collectibles",
+                      "type": "string"
+                    },
+                    {
+                      "const": "digital_goods",
+                      "type": "string"
+                    },
+                    {
+                      "const": "services",
+                      "type": "string"
+                    },
+                    {
+                      "const": "free",
+                      "type": "string"
+                    },
+                    {
+                      "const": "other",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "asking_price": {
+                  "description": "Price in integer cents (e.g. 15000 = $150.00)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "currency": {
+                  "description": "ISO 4217 currency code (e.g. USD)",
+                  "default": "USD",
+                  "type": "string"
+                },
+                "delivery_method": {
+                  "description": "Delivery method",
+                  "anyOf": [
+                    {
+                      "const": "pickup",
+                      "type": "string"
+                    },
+                    {
+                      "const": "ship",
+                      "type": "string"
+                    },
+                    {
+                      "const": "digital",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "condition": {
+                  "anyOf": [
+                    {
+                      "description": "Item condition",
+                      "anyOf": [
+                        {
+                          "const": "new_item",
+                          "type": "string"
+                        },
+                        {
+                          "const": "like_new",
+                          "type": "string"
+                        },
+                        {
+                          "const": "good",
+                          "type": "string"
+                        },
+                        {
+                          "const": "fair",
+                          "type": "string"
+                        },
+                        {
+                          "const": "poor",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "photos": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "location_area": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ships_to": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "status": {
+                  "description": "Listing status filter",
+                  "anyOf": [
+                    {
+                      "const": "active",
+                      "type": "string"
+                    },
+                    {
+                      "const": "on_hold",
+                      "type": "string"
+                    },
+                    {
+                      "const": "sold",
+                      "type": "string"
+                    },
+                    {
+                      "const": "withdrawn",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "created_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                },
+                "updated_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                },
+                "expires_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "listing_id",
+                "listing_url",
+                "seller_id",
+                "seller_handle",
+                "title",
+                "description",
+                "category",
+                "asking_price",
+                "currency",
+                "delivery_method",
+                "condition",
+                "photos",
+                "tags",
+                "location_area",
+                "ships_to",
+                "status",
+                "created_at",
+                "updated_at",
+                "expires_at"
+              ]
+            }
+          }
+        },
+        "required": [
+          "listings"
+        ]
+      }
+    },
+    "klodi_list_withdraw": {
+      "subject": "p2p.v1.listings.update",
+      "description": "Withdraw a listing (sets status=withdrawn). Cancels active transactions, rejects pending offers, closes channels.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "listing_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_url": {
+            "type": "string"
+          },
+          "seller_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "seller_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "description": "Item category",
+            "anyOf": [
+              {
+                "const": "electronics",
+                "type": "string"
+              },
+              {
+                "const": "furniture",
+                "type": "string"
+              },
+              {
+                "const": "vehicles",
+                "type": "string"
+              },
+              {
+                "const": "clothing",
+                "type": "string"
+              },
+              {
+                "const": "home_garden",
+                "type": "string"
+              },
+              {
+                "const": "sports",
+                "type": "string"
+              },
+              {
+                "const": "collectibles",
+                "type": "string"
+              },
+              {
+                "const": "digital_goods",
+                "type": "string"
+              },
+              {
+                "const": "services",
+                "type": "string"
+              },
+              {
+                "const": "free",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "asking_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          },
+          "delivery_method": {
+            "description": "Delivery method",
+            "anyOf": [
+              {
+                "const": "pickup",
+                "type": "string"
+              },
+              {
+                "const": "ship",
+                "type": "string"
+              },
+              {
+                "const": "digital",
+                "type": "string"
+              }
+            ]
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "description": "Item condition",
+                "anyOf": [
+                  {
+                    "const": "new_item",
+                    "type": "string"
+                  },
+                  {
+                    "const": "like_new",
+                    "type": "string"
+                  },
+                  {
+                    "const": "good",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fair",
+                    "type": "string"
+                  },
+                  {
+                    "const": "poor",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "location_area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ships_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "description": "Listing status filter",
+            "anyOf": [
+              {
+                "const": "active",
+                "type": "string"
+              },
+              {
+                "const": "on_hold",
+                "type": "string"
+              },
+              {
+                "const": "sold",
+                "type": "string"
+              },
+              {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            ]
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "listing_id",
+          "listing_url",
+          "seller_id",
+          "seller_handle",
+          "title",
+          "description",
+          "category",
+          "asking_price",
+          "currency",
+          "delivery_method",
+          "condition",
+          "photos",
+          "tags",
+          "location_area",
+          "ships_to",
+          "status",
+          "created_at",
+          "updated_at",
+          "expires_at"
+        ]
+      }
+    },
+    "klodi_list_relist": {
+      "subject": "p2p.v1.listings.update",
+      "description": "Relist a withdrawn listing (sets status=active). Optionally set a new asking price (integer cents).",
+      "params": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "asking_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "listing_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_url": {
+            "type": "string"
+          },
+          "seller_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "seller_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "description": "Item category",
+            "anyOf": [
+              {
+                "const": "electronics",
+                "type": "string"
+              },
+              {
+                "const": "furniture",
+                "type": "string"
+              },
+              {
+                "const": "vehicles",
+                "type": "string"
+              },
+              {
+                "const": "clothing",
+                "type": "string"
+              },
+              {
+                "const": "home_garden",
+                "type": "string"
+              },
+              {
+                "const": "sports",
+                "type": "string"
+              },
+              {
+                "const": "collectibles",
+                "type": "string"
+              },
+              {
+                "const": "digital_goods",
+                "type": "string"
+              },
+              {
+                "const": "services",
+                "type": "string"
+              },
+              {
+                "const": "free",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "asking_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          },
+          "delivery_method": {
+            "description": "Delivery method",
+            "anyOf": [
+              {
+                "const": "pickup",
+                "type": "string"
+              },
+              {
+                "const": "ship",
+                "type": "string"
+              },
+              {
+                "const": "digital",
+                "type": "string"
+              }
+            ]
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "description": "Item condition",
+                "anyOf": [
+                  {
+                    "const": "new_item",
+                    "type": "string"
+                  },
+                  {
+                    "const": "like_new",
+                    "type": "string"
+                  },
+                  {
+                    "const": "good",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fair",
+                    "type": "string"
+                  },
+                  {
+                    "const": "poor",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "photos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "location_area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ships_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "description": "Listing status filter",
+            "anyOf": [
+              {
+                "const": "active",
+                "type": "string"
+              },
+              {
+                "const": "on_hold",
+                "type": "string"
+              },
+              {
+                "const": "sold",
+                "type": "string"
+              },
+              {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            ]
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "listing_id",
+          "listing_url",
+          "seller_id",
+          "seller_handle",
+          "title",
+          "description",
+          "category",
+          "asking_price",
+          "currency",
+          "delivery_method",
+          "condition",
+          "photos",
+          "tags",
+          "location_area",
+          "ships_to",
+          "status",
+          "created_at",
+          "updated_at",
+          "expires_at"
+        ]
+      }
+    },
+    "klodi_list_comments": {
+      "subject": "p2p.v1.comments.list",
+      "description": "Fetch the comment history on a listing in chronological order. Use before replying to avoid duplicate answers.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max comments (default 50, max 200)",
+            "type": "integer"
+          },
+          "before": {
+            "description": "Cursor — comment_id; return older",
+            "type": "string"
+          },
+          "after": {
+            "description": "Cursor — comment_id; return newer",
+            "type": "string"
+          }
+        },
+        "required": [
+          "listing_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "comments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "comment_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "listing_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "handle": {
+                  "description": "Marketplace handle (e.g. alice)",
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "mentions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "created_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "comment_id",
+                "listing_id",
+                "handle",
+                "body",
+                "mentions",
+                "created_at"
+              ]
+            }
+          }
+        },
+        "required": [
+          "comments"
+        ]
+      }
+    },
+    "klodi_search": {
+      "subject": "p2p.v1.listings.search",
+      "description": "One-shot search of active listings by query, category, price range, delivery, location, condition.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "category": {
+            "description": "Item category",
+            "anyOf": [
+              {
+                "const": "electronics",
+                "type": "string"
+              },
+              {
+                "const": "furniture",
+                "type": "string"
+              },
+              {
+                "const": "vehicles",
+                "type": "string"
+              },
+              {
+                "const": "clothing",
+                "type": "string"
+              },
+              {
+                "const": "home_garden",
+                "type": "string"
+              },
+              {
+                "const": "sports",
+                "type": "string"
+              },
+              {
+                "const": "collectibles",
+                "type": "string"
+              },
+              {
+                "const": "digital_goods",
+                "type": "string"
+              },
+              {
+                "const": "services",
+                "type": "string"
+              },
+              {
+                "const": "free",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "min_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "delivery_method": {
+            "description": "Delivery method",
+            "anyOf": [
+              {
+                "const": "pickup",
+                "type": "string"
+              },
+              {
+                "const": "ship",
+                "type": "string"
+              },
+              {
+                "const": "digital",
+                "type": "string"
+              }
+            ]
+          },
+          "location_area": {
+            "type": "string"
+          },
+          "ships_to": {
+            "type": "string"
+          },
+          "pickup_radius_km": {
+            "type": "number"
+          },
+          "condition": {
+            "description": "Item condition",
+            "anyOf": [
+              {
+                "const": "new_item",
+                "type": "string"
+              },
+              {
+                "const": "like_new",
+                "type": "string"
+              },
+              {
+                "const": "good",
+                "type": "string"
+              },
+              {
+                "const": "fair",
+                "type": "string"
+              },
+              {
+                "const": "poor",
+                "type": "string"
+              }
+            ]
+          },
+          "limit": {
+            "description": "Max results (default 20)",
+            "type": "integer"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "listing_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "listing_url": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "asking_price": {
+                  "description": "Price in integer cents (e.g. 15000 = $150.00)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "currency": {
+                  "description": "ISO 4217 currency code (e.g. USD)",
+                  "default": "USD",
+                  "type": "string"
+                },
+                "category": {
+                  "description": "Item category",
+                  "anyOf": [
+                    {
+                      "const": "electronics",
+                      "type": "string"
+                    },
+                    {
+                      "const": "furniture",
+                      "type": "string"
+                    },
+                    {
+                      "const": "vehicles",
+                      "type": "string"
+                    },
+                    {
+                      "const": "clothing",
+                      "type": "string"
+                    },
+                    {
+                      "const": "home_garden",
+                      "type": "string"
+                    },
+                    {
+                      "const": "sports",
+                      "type": "string"
+                    },
+                    {
+                      "const": "collectibles",
+                      "type": "string"
+                    },
+                    {
+                      "const": "digital_goods",
+                      "type": "string"
+                    },
+                    {
+                      "const": "services",
+                      "type": "string"
+                    },
+                    {
+                      "const": "free",
+                      "type": "string"
+                    },
+                    {
+                      "const": "other",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "delivery_method": {
+                  "description": "Delivery method",
+                  "anyOf": [
+                    {
+                      "const": "pickup",
+                      "type": "string"
+                    },
+                    {
+                      "const": "ship",
+                      "type": "string"
+                    },
+                    {
+                      "const": "digital",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "condition": {
+                  "anyOf": [
+                    {
+                      "description": "Item condition",
+                      "anyOf": [
+                        {
+                          "const": "new_item",
+                          "type": "string"
+                        },
+                        {
+                          "const": "like_new",
+                          "type": "string"
+                        },
+                        {
+                          "const": "good",
+                          "type": "string"
+                        },
+                        {
+                          "const": "fair",
+                          "type": "string"
+                        },
+                        {
+                          "const": "poor",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "location_area": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "distance_km": {
+                  "type": "number"
+                },
+                "seller_handle": {
+                  "description": "Marketplace handle (e.g. alice)",
+                  "type": "string"
+                },
+                "seller_rating": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "seller_trades": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "photos": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "created_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "listing_id",
+                "listing_url",
+                "title",
+                "asking_price",
+                "currency",
+                "category",
+                "delivery_method",
+                "condition",
+                "location_area",
+                "seller_handle",
+                "seller_rating",
+                "seller_trades",
+                "photos",
+                "created_at"
+              ]
+            }
+          },
+          "total": {
+            "description": "Number of results returned in this page",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "results",
+          "total"
+        ]
+      }
+    },
+    "klodi_searches_create": {
+      "subject": "p2p.v1.searches.create",
+      "description": "Register a persistent (standing) search. The marketplace evaluates new listings against this search and emits a `search.match` notification on every match. min_price and max_price are optional integer cents; min_price ≤ max_price.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "description": "Stable client-chosen slug. Last-write-wins per (user, slug).",
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "category": {
+            "description": "Item category",
+            "anyOf": [
+              {
+                "const": "electronics",
+                "type": "string"
+              },
+              {
+                "const": "furniture",
+                "type": "string"
+              },
+              {
+                "const": "vehicles",
+                "type": "string"
+              },
+              {
+                "const": "clothing",
+                "type": "string"
+              },
+              {
+                "const": "home_garden",
+                "type": "string"
+              },
+              {
+                "const": "sports",
+                "type": "string"
+              },
+              {
+                "const": "collectibles",
+                "type": "string"
+              },
+              {
+                "const": "digital_goods",
+                "type": "string"
+              },
+              {
+                "const": "services",
+                "type": "string"
+              },
+              {
+                "const": "free",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "min_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "delivery_method": {
+            "description": "Delivery method",
+            "anyOf": [
+              {
+                "const": "pickup",
+                "type": "string"
+              },
+              {
+                "const": "ship",
+                "type": "string"
+              },
+              {
+                "const": "digital",
+                "type": "string"
+              }
+            ]
+          },
+          "pickup_radius_km": {
+            "type": "number"
+          },
+          "ships_to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "search_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "status": {
+            "const": "active",
+            "type": "string"
+          },
+          "criteria": {
+            "additionalProperties": false,
+            "type": "object",
+            "properties": {
+              "query": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "category": {
+                "anyOf": [
+                  {
+                    "description": "Item category",
+                    "anyOf": [
+                      {
+                        "const": "electronics",
+                        "type": "string"
+                      },
+                      {
+                        "const": "furniture",
+                        "type": "string"
+                      },
+                      {
+                        "const": "vehicles",
+                        "type": "string"
+                      },
+                      {
+                        "const": "clothing",
+                        "type": "string"
+                      },
+                      {
+                        "const": "home_garden",
+                        "type": "string"
+                      },
+                      {
+                        "const": "sports",
+                        "type": "string"
+                      },
+                      {
+                        "const": "collectibles",
+                        "type": "string"
+                      },
+                      {
+                        "const": "digital_goods",
+                        "type": "string"
+                      },
+                      {
+                        "const": "services",
+                        "type": "string"
+                      },
+                      {
+                        "const": "free",
+                        "type": "string"
+                      },
+                      {
+                        "const": "other",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "delivery_method": {
+                "anyOf": [
+                  {
+                    "description": "Delivery method",
+                    "anyOf": [
+                      {
+                        "const": "pickup",
+                        "type": "string"
+                      },
+                      {
+                        "const": "ship",
+                        "type": "string"
+                      },
+                      {
+                        "const": "digital",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "min_price": {
+                "anyOf": [
+                  {
+                    "description": "Price in integer cents (e.g. 15000 = $150.00)",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "max_price": {
+                "anyOf": [
+                  {
+                    "description": "Price in integer cents (e.g. 15000 = $150.00)",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pickup_radius_km": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "ships_to": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "query",
+              "category",
+              "delivery_method",
+              "min_price",
+              "max_price",
+              "pickup_radius_km",
+              "ships_to"
+            ]
+          }
+        },
+        "required": [
+          "search_id",
+          "slug",
+          "status",
+          "criteria"
+        ]
+      }
+    },
+    "klodi_searches_delete": {
+      "subject": "p2p.v1.searches.delete",
+      "description": "Delete a standing search by slug.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "status": {
+            "const": "deleted",
+            "type": "string"
+          },
+          "deleted": {
+            "description": "Number of standing-search rows removed (0 if none matched)",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slug",
+          "status",
+          "deleted"
+        ]
+      }
+    },
+    "klodi_searches_list": {
+      "subject": "p2p.v1.searches.list",
+      "description": "List your active standing searches. Diagnostic — local buy/<slug>.md files are the source of truth for evaluation criteria.",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "searches": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "search_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "slug": {
+                  "type": "string"
+                },
+                "criteria": {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "query": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "category": {
+                      "anyOf": [
+                        {
+                          "description": "Item category",
+                          "anyOf": [
+                            {
+                              "const": "electronics",
+                              "type": "string"
+                            },
+                            {
+                              "const": "furniture",
+                              "type": "string"
+                            },
+                            {
+                              "const": "vehicles",
+                              "type": "string"
+                            },
+                            {
+                              "const": "clothing",
+                              "type": "string"
+                            },
+                            {
+                              "const": "home_garden",
+                              "type": "string"
+                            },
+                            {
+                              "const": "sports",
+                              "type": "string"
+                            },
+                            {
+                              "const": "collectibles",
+                              "type": "string"
+                            },
+                            {
+                              "const": "digital_goods",
+                              "type": "string"
+                            },
+                            {
+                              "const": "services",
+                              "type": "string"
+                            },
+                            {
+                              "const": "free",
+                              "type": "string"
+                            },
+                            {
+                              "const": "other",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "delivery_method": {
+                      "anyOf": [
+                        {
+                          "description": "Delivery method",
+                          "anyOf": [
+                            {
+                              "const": "pickup",
+                              "type": "string"
+                            },
+                            {
+                              "const": "ship",
+                              "type": "string"
+                            },
+                            {
+                              "const": "digital",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "min_price": {
+                      "anyOf": [
+                        {
+                          "description": "Price in integer cents (e.g. 15000 = $150.00)",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "max_price": {
+                      "anyOf": [
+                        {
+                          "description": "Price in integer cents (e.g. 15000 = $150.00)",
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "pickup_radius_km": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "ships_to": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "query",
+                    "category",
+                    "delivery_method",
+                    "min_price",
+                    "max_price",
+                    "pickup_radius_km",
+                    "ships_to"
+                  ]
+                },
+                "created_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                },
+                "updated_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "search_id",
+                "slug",
+                "criteria",
+                "created_at",
+                "updated_at"
+              ]
+            }
+          }
+        },
+        "required": [
+          "searches"
+        ]
+      }
+    },
+    "klodi_channel_create": {
+      "subject": "p2p.v1.channels.create",
+      "description": "Open a private negotiation channel on a listing. Idempotent — returns the existing channel if one is open. Cannot open on your own listing.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "listing_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "buyer_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "seller_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel_id",
+          "listing_id",
+          "buyer_handle",
+          "seller_handle",
+          "status",
+          "created_at",
+          "expires_at"
+        ]
+      }
+    },
+    "klodi_channel_mine": {
+      "subject": "p2p.v1.channels.mine",
+      "description": "List your active negotiation channels. Filter by status. Returns counterparty handle and listing title for each.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "Channel status filter",
+            "anyOf": [
+              {
+                "const": "open",
+                "type": "string"
+              },
+              {
+                "const": "closed",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "channel_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "listing_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "listing_title": {
+                  "type": "string"
+                },
+                "other_handle": {
+                  "description": "Marketplace handle (e.g. alice)",
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "last_message_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                },
+                "expires_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "channel_id",
+                "listing_id",
+                "listing_title",
+                "other_handle",
+                "status",
+                "last_message_at",
+                "expires_at"
+              ]
+            }
+          }
+        },
+        "required": [
+          "channels"
+        ]
+      }
+    },
+    "klodi_channel_history": {
+      "subject": "p2p.v1.channels.history",
+      "description": "Read message history for a channel in chronological order. Use only when you need history beyond the latest wake — wakes carry full message content.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max messages (default 50)",
+            "type": "integer"
+          },
+          "before": {
+            "description": "Cursor — message_id; return older",
+            "type": "string"
+          },
+          "after": {
+            "description": "Cursor — message_id; return newer",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "message_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "sender_handle": {
+                  "description": "Marketplace handle (e.g. alice)",
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message_id",
+                "sender_handle",
+                "content",
+                "created_at"
+              ]
+            }
+          }
+        },
+        "required": [
+          "messages"
+        ]
+      }
+    },
+    "klodi_channel_close": {
+      "subject": "p2p.v1.channels.close",
+      "description": "Close a negotiation channel. Removes server-side filter for both participants — no further messages will be received.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "closed_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel_id",
+          "status",
+          "closed_at"
+        ]
+      }
+    },
+    "klodi_comment": {
+      "subject": "p2p.v1.comments.create",
+      "description": "Post a public comment on an active listing. Use @handle to mention. Max 1000 characters.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "body": {
+            "description": "Comment text (1-1000 chars)",
+            "minLength": 1,
+            "maxLength": 1000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "listing_id",
+          "body"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "comment_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "comment_id",
+          "listing_id",
+          "handle",
+          "body",
+          "mentions",
+          "created_at"
+        ]
+      }
+    },
+    "klodi_offer_create": {
+      "subject": "p2p.v1.offers.create",
+      "description": "Submit a formal offer on a listing through an open channel. Amount in integer cents. One pending offer per channel. Optional `terms` captures structured deal contract (max 4KB).",
+      "params": {
+        "type": "object",
+        "properties": {
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "channel_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "amount": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          },
+          "message": {
+            "description": "Optional message (max 500 chars)",
+            "type": "string"
+          },
+          "terms": {
+            "additionalProperties": true,
+            "description": "Structured deal terms. Opaque to server, max 4KB.",
+            "type": "object",
+            "properties": {}
+          }
+        },
+        "required": [
+          "listing_id",
+          "channel_id",
+          "amount"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "offer_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "channel_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "buyer_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "seller_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "buyer_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "amount": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terms": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object",
+                "properties": {}
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "transaction_id": {
+            "anyOf": [
+              {
+                "description": "UUID v4 identifier",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "responded_at": {
+            "anyOf": [
+              {
+                "description": "ISO 8601 timestamp",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "offer_id",
+          "listing_id",
+          "channel_id",
+          "buyer_id",
+          "seller_id",
+          "buyer_handle",
+          "amount",
+          "currency",
+          "message",
+          "terms",
+          "status",
+          "transaction_id",
+          "created_at",
+          "responded_at"
+        ]
+      }
+    },
+    "klodi_offer_respond": {
+      "subject": "p2p.v1.offers.respond",
+      "description": "Accept or reject an offer. Only the seller can respond. Accepting creates a transaction and moves the listing to on_hold; rejecting leaves the listing active.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "offer_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "action": {
+            "description": "Accept or reject the offer",
+            "anyOf": [
+              {
+                "const": "accept",
+                "type": "string"
+              },
+              {
+                "const": "reject",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "offer_id",
+          "action"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "offer_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_status": {
+            "description": "Listing status filter",
+            "anyOf": [
+              {
+                "const": "active",
+                "type": "string"
+              },
+              {
+                "const": "on_hold",
+                "type": "string"
+              },
+              {
+                "const": "sold",
+                "type": "string"
+              },
+              {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            ]
+          },
+          "transaction_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "responded_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "offer_id",
+          "status",
+          "responded_at"
+        ]
+      }
+    },
+    "klodi_offer_mine": {
+      "subject": "p2p.v1.offers.mine",
+      "description": "List offers involving you. Filter by status, role, listing, or channel.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "Offer status filter",
+            "anyOf": [
+              {
+                "const": "proposed",
+                "type": "string"
+              },
+              {
+                "const": "accepted",
+                "type": "string"
+              },
+              {
+                "const": "rejected",
+                "type": "string"
+              }
+            ]
+          },
+          "role": {
+            "description": "Caller's role on the offer",
+            "anyOf": [
+              {
+                "const": "buyer",
+                "type": "string"
+              },
+              {
+                "const": "seller",
+                "type": "string"
+              }
+            ]
+          },
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "channel_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "offers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "offer_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "listing_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "channel_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "buyer_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "seller_id": {
+                  "description": "UUID v4 identifier",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "buyer_handle": {
+                  "description": "Marketplace handle (e.g. alice)",
+                  "type": "string"
+                },
+                "amount": {
+                  "description": "Price in integer cents (e.g. 15000 = $150.00)",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "currency": {
+                  "description": "ISO 4217 currency code (e.g. USD)",
+                  "default": "USD",
+                  "type": "string"
+                },
+                "message": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "terms": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "type": "object",
+                      "properties": {}
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "type": "string"
+                },
+                "transaction_id": {
+                  "anyOf": [
+                    {
+                      "description": "UUID v4 identifier",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "created_at": {
+                  "description": "ISO 8601 timestamp",
+                  "type": "string"
+                },
+                "responded_at": {
+                  "anyOf": [
+                    {
+                      "description": "ISO 8601 timestamp",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "offer_id",
+                "listing_id",
+                "channel_id",
+                "buyer_id",
+                "seller_id",
+                "buyer_handle",
+                "amount",
+                "currency",
+                "message",
+                "terms",
+                "status",
+                "transaction_id",
+                "created_at",
+                "responded_at"
+              ]
+            }
+          }
+        },
+        "required": [
+          "offers"
+        ]
+      }
+    },
+    "klodi_tx_confirm": {
+      "subject": "p2p.v1.transactions.confirm",
+      "description": "Confirm completion of a transaction. Both parties must confirm before the listing moves to sold. completed_at is null until both parties have confirmed.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "buyer_confirmed": {
+            "type": "boolean"
+          },
+          "seller_confirmed": {
+            "type": "boolean"
+          },
+          "final_amount": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "description": "ISO 8601 timestamp",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "transaction_id",
+          "status",
+          "buyer_confirmed",
+          "seller_confirmed",
+          "final_amount",
+          "completed_at"
+        ]
+      }
+    },
+    "klodi_tx_cancel": {
+      "subject": "p2p.v1.transactions.cancel",
+      "description": "Cancel a transaction. Listing returns to active. Penalized reasons (no_show, item_not_received, payment_not_received) auto-apply a 1-star rating to the counterparty.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Reason for cancellation",
+            "anyOf": [
+              {
+                "const": "no_show",
+                "type": "string"
+              },
+              {
+                "const": "item_not_received",
+                "type": "string"
+              },
+              {
+                "const": "payment_not_received",
+                "type": "string"
+              },
+              {
+                "const": "changed_mind",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "reason"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "status": {
+            "const": "cancelled",
+            "type": "string"
+          },
+          "cancelled_by": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "cancellation_reason": {
+            "description": "Reason for cancellation",
+            "anyOf": [
+              {
+                "const": "no_show",
+                "type": "string"
+              },
+              {
+                "const": "item_not_received",
+                "type": "string"
+              },
+              {
+                "const": "payment_not_received",
+                "type": "string"
+              },
+              {
+                "const": "changed_mind",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          },
+          "listing_status": {
+            "description": "Listing status filter",
+            "anyOf": [
+              {
+                "const": "active",
+                "type": "string"
+              },
+              {
+                "const": "on_hold",
+                "type": "string"
+              },
+              {
+                "const": "sold",
+                "type": "string"
+              },
+              {
+                "const": "withdrawn",
+                "type": "string"
+              }
+            ]
+          },
+          "cancelled_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "listing_id",
+          "status",
+          "cancelled_by",
+          "cancellation_reason",
+          "listing_status",
+          "cancelled_at"
+        ]
+      }
+    },
+    "klodi_tx_rate": {
+      "subject": "p2p.v1.transactions.rate",
+      "description": "Rate the counterparty (1-5 stars) after confirming the exchange. other_party_rated indicates whether the other side has also submitted a rating yet.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "rating": {
+            "description": "Rating from 1 to 5 stars",
+            "minimum": 1,
+            "maximum": 5,
+            "type": "integer"
+          },
+          "comment": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "rating"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "rating": {
+            "description": "Rating from 1 to 5 stars",
+            "minimum": 1,
+            "maximum": 5,
+            "type": "integer"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rated_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "rated_role": {
+            "anyOf": [
+              {
+                "const": "buyer",
+                "type": "string"
+              },
+              {
+                "const": "seller",
+                "type": "string"
+              }
+            ]
+          },
+          "other_party_rated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "listing_id",
+          "rating",
+          "comment",
+          "rated_handle",
+          "rated_role",
+          "other_party_rated"
+        ]
+      }
+    },
+    "klodi_tx_status": {
+      "subject": "p2p.v1.transactions.status",
+      "description": "Check transaction status: both confirmation flags, ratings, comments, cancellation context, and the next_action hint for the caller.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "offer_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "listing_title": {
+            "type": "string"
+          },
+          "buyer_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "seller_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "buyer_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "seller_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "your_role": {
+            "anyOf": [
+              {
+                "const": "buyer",
+                "type": "string"
+              },
+              {
+                "const": "seller",
+                "type": "string"
+              }
+            ]
+          },
+          "other_handle": {
+            "description": "Marketplace handle (e.g. alice)",
+            "type": "string"
+          },
+          "final_amount": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          },
+          "terms": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object",
+                "properties": {}
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "buyer_confirmed": {
+            "type": "boolean"
+          },
+          "seller_confirmed": {
+            "type": "boolean"
+          },
+          "rating_by_buyer": {
+            "anyOf": [
+              {
+                "description": "Rating from 1 to 5 stars",
+                "minimum": 1,
+                "maximum": 5,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rating_by_seller": {
+            "anyOf": [
+              {
+                "description": "Rating from 1 to 5 stars",
+                "minimum": 1,
+                "maximum": 5,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "comment_by_buyer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "comment_by_seller": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancellation_reason": {
+            "anyOf": [
+              {
+                "description": "Reason for cancellation",
+                "anyOf": [
+                  {
+                    "const": "no_show",
+                    "type": "string"
+                  },
+                  {
+                    "const": "item_not_received",
+                    "type": "string"
+                  },
+                  {
+                    "const": "payment_not_received",
+                    "type": "string"
+                  },
+                  {
+                    "const": "changed_mind",
+                    "type": "string"
+                  },
+                  {
+                    "const": "other",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancelled_by": {
+            "anyOf": [
+              {
+                "description": "Marketplace handle (e.g. alice)",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "description": "ISO 8601 timestamp",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "description": "ISO 8601 timestamp",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "transaction_id",
+          "offer_id",
+          "listing_id",
+          "listing_title",
+          "buyer_id",
+          "seller_id",
+          "buyer_handle",
+          "seller_handle",
+          "your_role",
+          "other_handle",
+          "final_amount",
+          "currency",
+          "terms",
+          "status",
+          "buyer_confirmed",
+          "seller_confirmed",
+          "rating_by_buyer",
+          "rating_by_seller",
+          "comment_by_buyer",
+          "comment_by_seller",
+          "cancellation_reason",
+          "cancelled_by",
+          "next_action",
+          "created_at",
+          "completed_at",
+          "cancelled_at"
+        ]
+      }
+    },
+    "klodi_assets_upload_url": {
+      "subject": "p2p.v1.assets.upload-url",
+      "description": "Mint presigned upload URLs for listing photos. Returns an array of { upload_url, asset_url } pairs — upload bytes to upload_url, then pass asset_url to klodi_list_create or klodi_list_update. Max 10 photos. image/jpeg, image/png, image/webp. Max 10 MB each.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "filename": {
+                  "type": "string"
+                },
+                "content_type": {
+                  "anyOf": [
+                    {
+                      "const": "image/jpeg",
+                      "type": "string"
+                    },
+                    {
+                      "const": "image/png",
+                      "type": "string"
+                    },
+                    {
+                      "const": "image/webp",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "size": {
+                  "minimum": 1,
+                  "maximum": 10485760,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "filename",
+                "content_type",
+                "size"
+              ]
+            }
+          }
+        },
+        "required": [
+          "files"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "uploads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "upload_url": {
+                  "type": "string"
+                },
+                "asset_url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "upload_url",
+                "asset_url"
+              ]
+            }
+          }
+        },
+        "required": [
+          "uploads"
+        ]
+      }
+    }
+  },
+  "local_tools": {
+    "klodi_register": {
+      "name": "klodi_register",
+      "description": "Open the klodi registration browser flow. Returns a session_id the agent polls via klodi_register_poll until the user completes OAuth.",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "auth_url": {
+            "type": "string"
+          },
+          "poll_after_seconds": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "auth_url",
+          "poll_after_seconds"
+        ]
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent"
+      ]
+    },
+    "klodi_register_poll": {
+      "name": "klodi_register_poll",
+      "description": "Poll a klodi registration session until terminal. Persists nats.creds and config.json on success. Returns status + user identity.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "const": "pending",
+                "type": "string"
+              },
+              {
+                "const": "registered",
+                "type": "string"
+              },
+              {
+                "const": "expired",
+                "type": "string"
+              },
+              {
+                "const": "error",
+                "type": "string"
+              }
+            ]
+          },
+          "user_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent"
+      ]
+    },
+    "klodi_health": {
+      "name": "klodi_health",
+      "description": "Probe klodi connectivity. Round-trips through users.whoami and reports the persistent NATS connection status.",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "user_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "latency_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "issue": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "connected"
+        ]
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent"
+      ]
+    },
+    "klodi_watch": {
+      "name": "klodi_watch",
+      "description": "Register a standing search and seed the local buy/<slug>.md file. Composite of klodi_searches_create + filesystem write.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "max_price": {
+            "description": "Price in integer cents (e.g. 15000 = $150.00)",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "description": "ISO 4217 currency code (e.g. USD)",
+            "default": "USD",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "search_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "buy_file_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "search_id",
+          "buy_file_path"
+        ]
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent"
+      ]
+    },
+    "klodi_unwatch": {
+      "name": "klodi_unwatch",
+      "description": "Stop a standing search and delete the local buy/<slug>.md file. Composite of klodi_searches_delete + filesystem unlink.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          },
+          "buy_file_removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "slug",
+          "removed",
+          "buy_file_removed"
+        ]
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent"
+      ]
+    },
+    "klodi_setup_status": {
+      "name": "klodi_setup_status",
+      "description": "Inspect klodi setup state. Reports phase + missing files + user identity (when registered). Mostly used by the agent to decide whether to run klodi_setup_repair or klodi_register.",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "phase": {
+            "anyOf": [
+              {
+                "const": "unconfigured",
+                "type": "string"
+              },
+              {
+                "const": "registering",
+                "type": "string"
+              },
+              {
+                "const": "ready",
+                "type": "string"
+              },
+              {
+                "const": "degraded",
+                "type": "string"
+              }
+            ]
+          },
+          "klodi_home": {
+            "type": "string"
+          },
+          "user_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            }
+          }
+        },
+        "required": [
+          "phase",
+          "klodi_home",
+          "issues"
+        ]
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent",
+        "cli_only"
+      ]
+    },
+    "klodi_setup_repair": {
+      "name": "klodi_setup_repair",
+      "description": "Re-seed missing klodi configuration files (skill bundle, policies). Idempotent: existing files are preserved; only gaps are filled.",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "seeded_files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "preserved_files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "seeded_files",
+          "preserved_files"
+        ]
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent"
+      ]
+    },
+    "klodi_setup_reseed_policies": {
+      "name": "klodi_setup_reseed_policies",
+      "description": "Reseed the user's klodi policies (negotiation_style, security) from the bundled templates. Never overwrites existing files.",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "reseeded_files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timestamp": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reseeded_files",
+          "timestamp"
+        ]
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent"
+      ]
+    },
+    "klodi_setup_reseed_skill": {
+      "name": "klodi_setup_reseed_skill",
+      "description": "Force-copy the canonical klodi skill bundle from the adapter's bundled skill/ tree into ${klodi_home}/skill/. Use after a plugin upgrade where the on-disk skill drifted from the new plugin version.",
+      "params": {
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "reseeded_files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timestamp": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reseeded_files",
+          "timestamp"
+        ]
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent"
+      ]
+    },
+    "klodi_channel_message": {
+      "name": "klodi_channel_message",
+      "description": "Publish a message on an open negotiation channel. Direct JetStream publish to p2p.v1.channels.<channel_id>.<sender_id>.msg. The marketplace's side-consumer persists for history-index; the recipient's klodi-channels-<recipient_id> consumer wakes them.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "content": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel_id",
+          "content"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "event_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "event_id",
+          "message_id",
+          "created_at"
+        ]
+      },
+      "kind": "publish",
+      "host_shapes": [
+        "in_agent"
+      ]
+    }
+  },
+  "local_tools_by_host_shape": {
+    "in_agent": [
+      "klodi_register",
+      "klodi_register_poll",
+      "klodi_health",
+      "klodi_watch",
+      "klodi_unwatch",
+      "klodi_setup_status",
+      "klodi_setup_repair",
+      "klodi_setup_reseed_policies",
+      "klodi_setup_reseed_skill",
+      "klodi_channel_message"
+    ],
+    "daemon": [],
+    "cli_only": [
+      "klodi_setup_status"
+    ]
+  },
+  "host_shapes": [
+    "in_agent",
+    "daemon",
+    "cli_only"
+  ],
+  "constants": {
+    "KLODI_DEFAULT_API_URL": "https://klodi.4gpts.com",
+    "KLODI_DEFAULT_NATS_URL": "wss://klodi-net.4gpts.com",
+    "MAX_CHANNEL_MESSAGE_CHARS": 2000,
+    "REGISTER_POLL_INTERVAL_SECONDS": 5,
+    "REGISTER_POLL_CEILING_SECONDS": 600
+  },
+  "logging": {
+    "log_levels": [
+      "DEBUG",
+      "INFO",
+      "WARN",
+      "ERROR"
+    ],
+    "redacted_field_names": [
+      "creds",
+      "nkey_seed",
+      "nkey_private",
+      "authorization",
+      "bearer_token",
+      "min_acceptable_price",
+      "auto_reject_below",
+      "email",
+      "bio",
+      "avatar_url",
+      "phone",
+      "payload",
+      "body",
+      "content",
+      "description",
+      "terms",
+      "stack_full"
+    ],
+    "required_fields_by_site": {
+      "wake_handler": [
+        "event_id",
+        "kind"
+      ],
+      "tool_call_success": [
+        "tool_name",
+        "user_id",
+        "latency_ms"
+      ],
+      "outbox_publish": [
+        "event_id",
+        "recipient_count",
+        "attempt"
+      ],
+      "side_consumer_reject": [
+        "user_id",
+        "channel_id",
+        "count_in_window"
+      ]
+    },
+    "redaction_placeholder": "[redacted]",
+    "default_log_level": "INFO"
+  }
+}

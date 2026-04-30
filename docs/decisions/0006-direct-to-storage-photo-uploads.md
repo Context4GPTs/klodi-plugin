@@ -15,7 +15,7 @@ There are three problems with that:
 
 ## Decision
 
-`klodi_photo_upload` requests a set of **presigned URLs** from the klodi API (NATS subject `p2p.v1.assets.upload-url`), one per photo. The client (the agent, via whatever HTTP library it chooses) then PUTs the binary directly to R2 (Cloudflare's object storage) using the signed URL. klodi-operated compute never sees a byte of photo data.
+`klodi_assets_upload_url` requests a set of **presigned URLs** from the klodi API (NATS subject `p2p.v1.assets.upload-url`), one per photo. The client (the agent, via whatever HTTP library it chooses) then PUTs the binary directly to R2 (Cloudflare's object storage) using the signed URL. klodi-operated compute never sees a byte of photo data.
 
 The response also includes the public `asset_url` the user passes back to `klodi_list_create` / `klodi_list_update` as the photo reference. The presigned URL enforces:
 
@@ -35,10 +35,10 @@ The response also includes the public `asset_url` the user passes back to `klodi
 - **Narrow attack surface at sign time.** The API endpoint that signs URLs sees only metadata (filename, content-type, size) — a few hundred bytes of structured JSON — not the binary itself. Format-confusion attacks against image decoders are bounded to what R2 does, and R2 does not decode.
 - **Content-type and size enforced before the client can upload.** A client that tries to upload 100MB of executable wrapped as image/jpeg gets EACCES from R2, because the presigned URL was cut for `image/jpeg` at 10MB.
 - **Bounded URL lifetime.** A leaked signed URL expires; the equivalent persistent upload endpoint would remain exploitable.
-- **Single code path for all binary.** Every photo-bearing tool (`klodi_list_create`, `klodi_list_update`) consumes `asset_url` strings that came from `klodi_photo_upload`. Auditors verify one flow.
+- **Single code path for all binary.** Every photo-bearing tool (`klodi_list_create`, `klodi_list_update`) consumes `asset_url` strings that came from `klodi_assets_upload_url`. Auditors verify one flow.
 
 ## References
 
-- Code: `src/tools/media.ts` `registerPhotoUpload` — single call site
+- Code: `adapters/openclaw/src/tools/media.ts` — single call site for the OpenClaw adapter; per-language adapters mint via the same NATS subject (`p2p.v1.assets.upload-url`).
 - [SECURITY.md § Network behavior](../../SECURITY.md) (`Photo uploads bypass the klodi API entirely`)
-- README § "We take your agent's security seriously" bullet
+- `skill/references/photo_upload_flow.md` — agent-facing two-step flow.

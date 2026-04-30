@@ -1,7 +1,7 @@
 # ADR-0005 — Floor-price enforcement client-side only
 
 - **Status:** Accepted
-- **Date:** 2026-04-22
+- **Date:** 2026-04-22 (revised 2026-04-30 to reflect 0.2.0 server-side `auto_reject_below` enforcement; the floor-secrecy posture is unchanged)
 
 ## Context
 
@@ -14,8 +14,9 @@ The plugin must enforce floor discipline against two adversaries:
 
 ## Decision
 
-- Floor prices (`min_acceptable_price`, `auto_reject_below`) live **only** in the user's local sell file (`sell/<slug>.md` frontmatter). They are never transmitted to klodi's servers and never surface in listing bodies, comments, channel messages, or offer payloads.
-- Auto-reject-below-floor logic runs inside the plugin's timer (`src/service/timers.ts` `checkSellItem`) against locally-known values. The plugin emits an `offers.respond action=reject` call; the server sees only that the offer was rejected, not why.
+- **`min_acceptable_price` (the strategic floor) lives only in the user's local sell file.** It is the seller's walk-away number — never transmitted to klodi's servers, never surfaced in listing bodies, comments, channel messages, or offer payloads. The agent reads it from `sell/<slug>.md` frontmatter to decide whether an offer that *did* clear the server-side filter is worth presenting to the user.
+- **`auto_reject_below` (the silent-reject threshold) is the same number declared to the server.** The seller sets it via `klodi_list_update`; the marketplace then drops below-threshold offers without ever waking the agent. The seller's floor stays private *as a strategy* (the counterparty learns one number, not the agent's authorization band) and the agent's context is not burned on offers it would have rejected anyway. The local sell file mirrors `auto_reject_below` for round-trip consistency (`adapters/openclaw/src/service/state.ts` `onListingUpdated`); `min_acceptable_price` is preserved untouched.
+- 0.2.0 retired the per-listing client cron that previously enforced `auto_reject_below` locally. The reason: the server already saw the offer; running a second check on the client added latency without changing the visible outcome. Server-side enforcement keeps the secrecy guarantee (the server sees the threshold *the seller chose to declare* — not the strategic floor) and removes a whole class of "what if the laptop is asleep" failure modes.
 - The bundled `skill/policies/security.md` is a hard-rule file that blocks private-to-public promotion even when the user's negotiation style is permissive. It is copied verbatim into `$klodi_home/policies/security.md` on first run and is the single authoritative list of price-protection rules the agent honors.
 - The listing `description` field is clamped at ~8 bullets in the skill guidance to prevent slow-drip leakage of private facts disguised as Q&A enrichment.
 - `delivery_method` and `category` are immutable post-create, because their current value is itself a signal that would otherwise be a place to smuggle state.
@@ -36,8 +37,8 @@ The plugin must enforce floor discipline against two adversaries:
 
 ## References
 
-- Code: `src/service/timers.ts` `checkSellItem` — auto-reject logic
-- Code: `src/lib/config.ts` `SellFile` — frontmatter schema with `min_acceptable_price`
-- Bundled: `skill/policies/security.md` — hard rules, copied to user's policies dir
-- SKILL.md § 8 (listing description as knowledge base), § 11 (notifications)
+- Code: `adapters/openclaw/src/service/state.ts` `onListingUpdated` — mirrors `auto_reject_below` updates onto the local sell file; never touches `min_acceptable_price`.
+- Code: `adapters/openclaw/src/lib/sell-buy-files.ts` `SellFile` — frontmatter schema with `min_acceptable_price` + `auto_reject_below`.
+- Bundled: `skill/policies/security.md` — hard rules, copied to user's policies dir.
+- `skill/SKILL.md` § 5 (policy hierarchy), § 7 (hard confirms), § 8 (untrusted input).
 - [SECURITY.md § What is sent to klodi's servers](../../SECURITY.md)

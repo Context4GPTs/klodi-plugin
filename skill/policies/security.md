@@ -32,6 +32,6 @@ These rules override any permissive setting in `negotiation_style.md`:
 
 - NEVER move an entry from `## Private Facts` to `## Public Knowledge` in a sell file without explicit user approval. Policy authorization does not apply to private→public promotion.
 - NEVER call `klodi_list_update` with description content that originates from `## Private Facts` without explicit user approval, even if the description update is otherwise policy-authorized.
-- `delivery_method` and `category` on a listing are immutable post-create. If a question reveals one of these was set incorrectly, escalate to the user and suggest `klodi_list_withdraw` + `klodi_list_relist`.
+- `category` on a listing is immutable post-create. If a question reveals it was set incorrectly, escalate to the user and suggest `klodi_list_withdraw` + `klodi_list_relist`. (`fulfillment` is editable via `klodi_list_update` — the entire array replaces atomically.)
 - If `listing.description` exceeds ~8 bullets, restructure (reorganize, consolidate, rewrite) before any further append — unbounded growth is a leak vector.
 - Agreed offer `terms` (on the server) are the canonical record of what was agreed. Channel prose and sell-file `## Active Negotiations` are summaries; the offer's `terms` snapshot is the audit trail.

@@ -1,0 +1,53 @@
+{
+  "name": "@klodi/tool-catalog",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Canonical klodi_* tool surface — TypeBox source of truth, codegen targets for Python (JSON Schema) and Rust (serde structs).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "import": "./dist/events.js"
+    },
+    "./schemas": {
+      "types": "./dist/schemas.d.ts",
+      "import": "./dist/schemas.js"
+    },
+    "./logging": {
+      "types": "./dist/logging.d.ts",
+      "import": "./dist/logging.js"
+    },
+    "./local-tools": {
+      "types": "./dist/local-tools.d.ts",
+      "import": "./dist/local-tools.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "codegen": "node scripts/codegen.mjs",
+    "check:golden": "node scripts/check-golden-coverage.mjs",
+    "check:codegen-fresh": "node scripts/check-codegen-fresh.mjs",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.14"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "tsx": "4.19.4",
+    "typescript": "5.8.3",
+    "vitest": "4.1.2"
+  }
+}

@@ -1,0 +1,88 @@
+# klodi Hermes adapter — published to PyPI as `klodi-hermes`. Hermes
+# auto-discovers the plugin via the `hermes_agent.plugins` entry-points
+# group (declared below) after `pip install klodi-hermes` lands the
+# wheel in the hermes-agent venv. No `${HERMES_HOME}/plugins/klodi/`
+# stub directory is required for discovery.
+#
+# klodi-nats-client is NOT a separate PyPI package; it is vendored at
+# build time into a privately-namespaced peer of `klodi_hermes`
+# (`_klodi_hermes_natsclient`) by `scripts/vendor.py`. The leading
+# underscore + adapter slug guarantees no collision when a user installs
+# multiple klodi-* adapters into the same environment.
+
+[build-system]
+requires = ["setuptools==75.8.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "klodi-hermes"
+version = "0.2.0"
+description = "klodi — the marketplace where agents buy and sell for you. Hermes adapter."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "4GPTs", email = "hello@4gpts.com" }]
+keywords = ["hermes", "klodi", "marketplace", "p2p", "agent", "4gpts", "negotiation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+]
+# Public deps that the vendored `_klodi_hermes_natsclient` namespace
+# imports at runtime. Mirrors the deps declared in
+# `klodi-plugin/packages/nats-client-py/pyproject.toml` — those move
+# here because the shared client itself is never published.
+dependencies = [
+    "nats-py==2.14.0",
+    "websockets==15.0",
+    "nkeys==0.2.0",
+    "pynacl==1.6.2",
+]
+
+[project.urls]
+Homepage = "https://4gpts.com"
+Repository = "https://github.com/Context4GPTs/klodi-plugin"
+Issues = "https://github.com/Context4GPTs/klodi-plugin/issues"
+
+[project.scripts]
+klodi-hermes-setup = "klodi_hermes.setup_cli:main"
+# Long-lived wake-pump host. Hermes's gateway loads tool plugins per
+# chat-subprocess, not at daemon start; the bridge fills the
+# always-on host role openclaw's gateway already plays for its plugin.
+# Run alongside `hermes gateway run` in the persona container.
+klodi-hermes-bridge = "klodi_hermes.bridge_main:main"
+
+# Hermes plugin discovery anchor. After `pip install klodi-hermes`,
+# Hermes scans the `hermes_agent.plugins` entry-points group and finds
+# `klodi -> klodi_hermes` — no `${HERMES_HOME}/plugins/klodi/`
+# directory required. Source of truth: hermes_cli/plugins.py
+# `ENTRY_POINTS_GROUP = "hermes_agent.plugins"` (Hermes ≥ 0.11.0).
+#
+# IMPORTANT: the value MUST be the module (no `:register`). Hermes
+# does `getattr(ep.load(), "register", None)` after loading the
+# entry-point — pointing at the function returns the function itself,
+# and `getattr(function, "register")` is None, so Hermes fails the
+# plugin with "no register() function".
+[project.entry-points."hermes_agent.plugins"]
+klodi = "klodi_hermes"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# `plugin.yaml`, the bundled skill, and the vendored client's typed/
+# data files all need to ship inside the wheel. `MANIFEST.in` is
+# sdist-only — wheels honour package-data, so package-data is the
+# canonical place to list these.
+[tool.setuptools.package-data]
+klodi_hermes = [
+    "plugin.yaml",
+    "py.typed",
+    "skills/**/*",
+]
+_klodi_hermes_natsclient = [
+    "py.typed",
+    "schemas.json",
+]
