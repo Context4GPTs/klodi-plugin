@@ -35,7 +35,7 @@
 #   1. PyPI Trusted Publisher binding for klodi-hermes AND klodi-nanobot
 #      → this repo → this workflow path → `pypi` GitHub Environment.
 #      One binding per package; both must exist.
-#   2. klodi-plugin/adapters/{hermes,nanobot}/CHANGELOG.md created.
+#   2. adapters/{hermes,nanobot}/CHANGELOG.md created.
 #   3. Every action below pinned to a full SHA and zizmor-scanned per
 #      .claude/rules/infra-rules.md.
 #
@@ -52,9 +52,9 @@ on:
   # push:
   #   branches: [main]
   #   paths:
-  #     - "klodi-plugin/adapters/hermes/**"
-  #     - "klodi-plugin/adapters/nanobot/**"
-  #     - "klodi-plugin/packages/nats-client-py/**"
+  #     - "adapters/hermes/**"
+  #     - "adapters/nanobot/**"
+  #     - "packages/nats-client-py/**"
   #     - ".github/workflows/klodi-adapters-pypi-release.yml"
   workflow_dispatch:
     inputs:
@@ -75,7 +75,7 @@ env:
   PYRIGHT_VERSION: "1.1.388"
   BUILD_VERSION: "1.2.2"
   TWINE_VERSION: "5.1.1"
-  SHARED_CLIENT_PATH: klodi-plugin/packages/nats-client-py
+  SHARED_CLIENT_PATH: packages/nats-client-py
 
 jobs:
   plan:
@@ -112,7 +112,7 @@ jobs:
           )
           adapters='[]'
           for adapter in hermes nanobot; do
-            ver=$(python -c "import tomllib;d=tomllib.load(open(f'klodi-plugin/adapters/${adapter}/pyproject.toml','rb'));print(d['project']['version'])")
+            ver=$(python -c "import tomllib;d=tomllib.load(open(f'adapters/${adapter}/pyproject.toml','rb'));print(d['project']['version'])")
             if ! [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.]+)?$ ]]; then
               echo "::error::adapter ${adapter} has non-semver version '$ver'"; exit 1
             fi
@@ -180,24 +180,24 @@ jobs:
         run: pip install -e "${SHARED_CLIENT_PATH}"
 
       - name: Install adapter (editable, no-deps)
-        run: pip install --no-deps -e "klodi-plugin/adapters/${{ matrix.adapter }}"
+        run: pip install --no-deps -e "adapters/${{ matrix.adapter }}"
 
       - name: Format check (ruff)
-        run: ruff format --check "klodi-plugin/adapters/${{ matrix.adapter }}"
+        run: ruff format --check "adapters/${{ matrix.adapter }}"
 
       - name: Lint (ruff)
-        run: ruff check "klodi-plugin/adapters/${{ matrix.adapter }}"
+        run: ruff check "adapters/${{ matrix.adapter }}"
 
       - name: Type check (pyright, strict, zero warnings)
-        run: pyright --warnings "klodi-plugin/adapters/${{ matrix.adapter }}"
+        run: pyright --warnings "adapters/${{ matrix.adapter }}"
 
       - name: Unit tests
-        # Hermes ships tests under klodi-plugin/adapters/hermes/tests; nanobot under
-        # klodi-plugin/adapters/nanobot/tests. Skip if no tests/ directory rather
+        # Hermes ships tests under adapters/hermes/tests; nanobot under
+        # adapters/nanobot/tests. Skip if no tests/ directory rather
         # than failing — but warn so a missing test tree is visible.
         run: |
-          if [[ -d "klodi-plugin/adapters/${{ matrix.adapter }}/tests" ]]; then
-            pytest "klodi-plugin/adapters/${{ matrix.adapter }}/tests"
+          if [[ -d "adapters/${{ matrix.adapter }}/tests" ]]; then
+            pytest "adapters/${{ matrix.adapter }}/tests"
           else
             echo "::warning::no tests/ directory for ${{ matrix.adapter }}"
           fi
@@ -234,8 +234,8 @@ jobs:
         # removes stale egg-info + build/ + dist/, vendor.py stages the
         # adapter source + copies klodi_nats_client into a privately-
         # namespaced peer, then `python -m build` runs from the staged
-        # tree. See klodi-plugin/adapters/<adapter>/Makefile.
-        run: make -C "klodi-plugin/adapters/${{ matrix.adapter }}" build
+        # tree. See adapters/<adapter>/Makefile.
+        run: make -C "adapters/${{ matrix.adapter }}" build
 
       - name: Smoke install (clean venv, real plugin entry-points)
         # Each adapter's `make smoke` builds the wheel, installs it into
@@ -244,10 +244,10 @@ jobs:
         # entry-point registered, plugin.yaml + skill bundle ship as
         # package data). Run from /tmp inside smoke.sh to avoid CWD
         # source shadowing.
-        run: make -C "klodi-plugin/adapters/${{ matrix.adapter }}" smoke
+        run: make -C "adapters/${{ matrix.adapter }}" smoke
 
       - name: Twine metadata check
-        run: twine check "klodi-plugin/adapters/${{ matrix.adapter }}/dist"/*.whl
+        run: twine check "adapters/${{ matrix.adapter }}/dist"/*.whl
 
       - name: Wheel hygiene — no leakage
         env:
@@ -255,7 +255,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          whls=("klodi-plugin/adapters/${ADAPTER}/dist"/*.whl)
+          whls=("adapters/${ADAPTER}/dist"/*.whl)
           if (( ${#whls[@]} != 1 )); then
             echo "::error::expected exactly 1 wheel, got ${#whls[@]}"; exit 1
           fi
@@ -271,7 +271,7 @@ jobs:
         uses: actions/upload-artifact@<TODO> # v4.4.x — pin SHA before merge
         with:
           name: dist-${{ matrix.adapter }}
-          path: klodi-plugin/adapters/${{ matrix.adapter }}/dist/
+          path: adapters/${{ matrix.adapter }}/dist/
           if-no-files-found: error
           retention-days: 7
 
@@ -323,7 +323,7 @@ jobs:
           VERSION: ${{ matrix.version }}
           ADAPTER: ${{ matrix.adapter }}
         run: |
-          changelog="klodi-plugin/adapters/${ADAPTER}/CHANGELOG.md"
+          changelog="adapters/${ADAPTER}/CHANGELOG.md"
           if [[ ! -f "$changelog" ]]; then
             echo "::error::CHANGELOG.md missing at $changelog"; exit 1
           fi

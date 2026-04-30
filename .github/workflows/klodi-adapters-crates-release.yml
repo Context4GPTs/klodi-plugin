@@ -41,9 +41,9 @@
 #      → `crates-io` GitHub Environment. One binding per crate.
 #      Trusted Publishing is in beta; if not yet GA, swap the publish
 #      step for `cargo publish --token "$CARGO_REGISTRY_TOKEN"`.
-#   2. klodi-plugin/adapters/{ironclaw,moltis,zeroclaw}/CHANGELOG.md
+#   2. adapters/{ironclaw,moltis,zeroclaw}/CHANGELOG.md
 #      created.
-#   3. klodi-plugin/packages/nats-client-rs published to crates.io at
+#   3. packages/nats-client-rs published to crates.io at
 #      the version each adapter pins. Each adapter's [dependencies]
 #      MUST migrate from `path = "../../packages/nats-client-rs"` to
 #      `path = "...", version = "=X.Y.Z"` before the first publish
@@ -64,9 +64,9 @@ on:
   # push:
   #   branches: [main]
   #   paths:
-  #     - "klodi-plugin/adapters/ironclaw/**"
-  #     - "klodi-plugin/adapters/moltis/**"
-  #     - "klodi-plugin/adapters/zeroclaw/**"
+  #     - "adapters/ironclaw/**"
+  #     - "adapters/moltis/**"
+  #     - "adapters/zeroclaw/**"
   #     - ".github/workflows/klodi-adapters-crates-release.yml"
   workflow_dispatch:
     inputs:
@@ -115,7 +115,7 @@ jobs:
           set -euo pipefail
           adapters='[]'
           for adapter in ironclaw moltis zeroclaw; do
-            manifest="klodi-plugin/adapters/${adapter}/Cargo.toml"
+            manifest="adapters/${adapter}/Cargo.toml"
             ver=$(cargo metadata --no-deps --format-version 1 \
               --manifest-path "$manifest" \
               | jq -r '.packages[0].version')
@@ -172,7 +172,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@<TODO> # v2.7.x — pin SHA before merge
         with:
-          workspaces: klodi-plugin/adapters/${{ matrix.adapter }} -> target
+          workspaces: adapters/${{ matrix.adapter }} -> target
 
       - name: Path-deps must declare a version
         # cargo refuses to publish a crate whose deps use only `path = "..."`.
@@ -182,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           violations=$(cargo metadata --no-deps --format-version 1 \
-            --manifest-path "klodi-plugin/adapters/${ADAPTER}/Cargo.toml" \
+            --manifest-path "adapters/${ADAPTER}/Cargo.toml" \
             | jq -r '.packages[0].dependencies[]
                      | select(.path != null and (.req == "*" or .req == ""))
                      | .name')
@@ -195,19 +195,19 @@ jobs:
           fi
 
       - name: Format check (cargo fmt)
-        working-directory: klodi-plugin/adapters/${{ matrix.adapter }}
+        working-directory: adapters/${{ matrix.adapter }}
         run: cargo fmt --all --check
 
       - name: Lint (cargo clippy, deny warnings)
-        working-directory: klodi-plugin/adapters/${{ matrix.adapter }}
+        working-directory: adapters/${{ matrix.adapter }}
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Type check (cargo check)
-        working-directory: klodi-plugin/adapters/${{ matrix.adapter }}
+        working-directory: adapters/${{ matrix.adapter }}
         run: cargo check --locked --all-targets
 
       - name: Unit tests (release)
-        working-directory: klodi-plugin/adapters/${{ matrix.adapter }}
+        working-directory: adapters/${{ matrix.adapter }}
         run: cargo test --locked --release
 
   package:
@@ -237,14 +237,14 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@<TODO> # v2.7.x — pin SHA before merge
         with:
-          workspaces: klodi-plugin/adapters/${{ matrix.adapter }} -> target
+          workspaces: adapters/${{ matrix.adapter }} -> target
 
       - name: Build (release, locked)
-        working-directory: klodi-plugin/adapters/${{ matrix.adapter }}
+        working-directory: adapters/${{ matrix.adapter }}
         run: cargo build --release --locked
 
       - name: Binary --help smoke (every declared [[bin]])
-        working-directory: klodi-plugin/adapters/${{ matrix.adapter }}
+        working-directory: adapters/${{ matrix.adapter }}
         env:
           ADAPTER: ${{ matrix.adapter }}
         run: |
@@ -261,14 +261,14 @@ jobs:
           done
 
       - name: cargo package (full publish dry-run)
-        working-directory: klodi-plugin/adapters/${{ matrix.adapter }}
+        working-directory: adapters/${{ matrix.adapter }}
         # cargo extracts the .crate, rebuilds it from scratch, and
         # verifies it would publish. Catches files-section drift,
         # README/license errors, and "publish would have failed" cases.
         run: cargo package --locked
 
       - name: Crate hygiene
-        working-directory: klodi-plugin/adapters/${{ matrix.adapter }}
+        working-directory: adapters/${{ matrix.adapter }}
         env:
           CRATE: ${{ matrix.crate }}
           VERSION: ${{ matrix.version }}
@@ -294,7 +294,7 @@ jobs:
         uses: actions/upload-artifact@<TODO> # v4.4.x — pin SHA before merge
         with:
           name: crate-${{ matrix.adapter }}
-          path: klodi-plugin/adapters/${{ matrix.adapter }}/target/package/*.crate
+          path: adapters/${{ matrix.adapter }}/target/package/*.crate
           if-no-files-found: error
           retention-days: 7
 
@@ -330,7 +330,7 @@ jobs:
           set -euo pipefail
           # Resolve the shared crate's pinned version from the adapter manifest.
           dep_version=$(cargo metadata --no-deps --format-version 1 \
-            --manifest-path "klodi-plugin/adapters/${ADAPTER}/Cargo.toml" \
+            --manifest-path "adapters/${ADAPTER}/Cargo.toml" \
             | jq -r --arg name "${SHARED_CRATE}" \
                 '.packages[0].dependencies[] | select(.name==$name) | .req' \
             | sed -E 's/^=//')
@@ -351,7 +351,7 @@ jobs:
           fi
 
       - name: cargo publish
-        working-directory: klodi-plugin/adapters/${{ matrix.adapter }}
+        working-directory: adapters/${{ matrix.adapter }}
         # --no-verify because `cargo package` in the package job already
         # rebuilt and verified the crate. Skipping the rebuild here halves
         # publish time without weakening any gate.
@@ -381,7 +381,7 @@ jobs:
           VERSION: ${{ matrix.version }}
           ADAPTER: ${{ matrix.adapter }}
         run: |
-          changelog="klodi-plugin/adapters/${ADAPTER}/CHANGELOG.md"
+          changelog="adapters/${ADAPTER}/CHANGELOG.md"
           if [[ ! -f "$changelog" ]]; then
             echo "::error::CHANGELOG.md missing at $changelog"; exit 1
           fi

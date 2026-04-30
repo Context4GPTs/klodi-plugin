@@ -18,7 +18,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@klodi/tool-catalog": "workspace:*"
+    "@klodi/tool-catalog": "file:../tool-catalog"
   },
   "devDependencies": {
     "@types/node": "22.15.3",

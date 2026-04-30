@@ -1,5 +1,5 @@
 # Auto-publish klodi-nats-client (Rust) to crates.io on every merge to
-# main that bumps klodi-plugin/packages/nats-client-rs/Cargo.toml. Path
+# main that bumps packages/nats-client-rs/Cargo.toml. Path
 # filtered so unrelated merges don't even start the job. Version-existence
 # check is the hard gate: if crates.io already has the target version,
 # the workflow exits cleanly — re-running against an old commit is a
@@ -33,7 +33,7 @@
 #      Trusted Publishing on crates.io is in beta; if not yet GA, swap
 #      the publish step for `cargo publish --token $CARGO_REGISTRY_TOKEN`
 #      with the token stored as an environment secret.
-#   2. klodi-plugin/packages/nats-client-rs/CHANGELOG.md created.
+#   2. packages/nats-client-rs/CHANGELOG.md created.
 #   3. Every action below pinned to a full SHA and zizmor-scanned per
 #      .claude/rules/infra-rules.md.
 #
@@ -48,7 +48,7 @@ on:
   # push:
   #   branches: [main]
   #   paths:
-  #     - "klodi-plugin/packages/nats-client-rs/**"
+  #     - "packages/nats-client-rs/**"
   #     - ".github/workflows/klodi-shared-crates-release.yml"
   workflow_dispatch:
     inputs:
@@ -66,7 +66,7 @@ concurrency:
 env:
   RUST_TOOLCHAIN: "1.85"
   CRATE_NAME: klodi-nats-client
-  CRATE_PATH: klodi-plugin/packages/nats-client-rs
+  CRATE_PATH: packages/nats-client-rs
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 

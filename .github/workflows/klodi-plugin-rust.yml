@@ -15,22 +15,22 @@ name: klodi-plugin rust
 on:
   # pull_request:
   #   paths:
-  #     - "klodi-plugin/packages/logger-rs/**"
-  #     - "klodi-plugin/packages/nats-client-rs/**"
-  #     - "klodi-plugin/packages/klodi-rust-host/**"
-  #     - "klodi-plugin/adapters/moltis/**"
-  #     - "klodi-plugin/adapters/ironclaw/**"
-  #     - "klodi-plugin/adapters/zeroclaw/**"
+  #     - "packages/logger-rs/**"
+  #     - "packages/nats-client-rs/**"
+  #     - "packages/klodi-rust-host/**"
+  #     - "adapters/moltis/**"
+  #     - "adapters/ironclaw/**"
+  #     - "adapters/zeroclaw/**"
   #     - ".github/workflows/klodi-plugin-rust.yml"
   # push:
   #   branches: [main]
   #   paths:
-  #     - "klodi-plugin/packages/logger-rs/**"
-  #     - "klodi-plugin/packages/nats-client-rs/**"
-  #     - "klodi-plugin/packages/klodi-rust-host/**"
-  #     - "klodi-plugin/adapters/moltis/**"
-  #     - "klodi-plugin/adapters/ironclaw/**"
-  #     - "klodi-plugin/adapters/zeroclaw/**"
+  #     - "packages/logger-rs/**"
+  #     - "packages/nats-client-rs/**"
+  #     - "packages/klodi-rust-host/**"
+  #     - "adapters/moltis/**"
+  #     - "adapters/ironclaw/**"
+  #     - "adapters/zeroclaw/**"
   #     - ".github/workflows/klodi-plugin-rust.yml"
   workflow_dispatch:
 
@@ -60,12 +60,12 @@ jobs:
       fail-fast: false
       matrix:
         crate:
-          - { name: "klodi-logger", manifest: "klodi-plugin/packages/logger-rs/Cargo.toml" }
-          - { name: "nats-client-rs", manifest: "klodi-plugin/packages/nats-client-rs/Cargo.toml" }
-          - { name: "klodi-rust-host", manifest: "klodi-plugin/packages/klodi-rust-host/Cargo.toml" }
-          - { name: "klodi-moltis", manifest: "klodi-plugin/adapters/moltis/Cargo.toml" }
-          - { name: "klodi-ironclaw", manifest: "klodi-plugin/adapters/ironclaw/Cargo.toml" }
-          - { name: "klodi-zeroclaw", manifest: "klodi-plugin/adapters/zeroclaw/Cargo.toml" }
+          - { name: "klodi-logger", manifest: "packages/logger-rs/Cargo.toml" }
+          - { name: "nats-client-rs", manifest: "packages/nats-client-rs/Cargo.toml" }
+          - { name: "klodi-rust-host", manifest: "packages/klodi-rust-host/Cargo.toml" }
+          - { name: "klodi-moltis", manifest: "adapters/moltis/Cargo.toml" }
+          - { name: "klodi-ironclaw", manifest: "adapters/ironclaw/Cargo.toml" }
+          - { name: "klodi-zeroclaw", manifest: "adapters/zeroclaw/Cargo.toml" }
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

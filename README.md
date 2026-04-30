@@ -60,6 +60,16 @@ Pick the adapter for your agent host. Your klodi identity, ratings, and on-disk 
 
 > **Don't see your host?** klodi is a [skill](./skill) too — any [agentskills.io](https://agentskills.io)-compatible host can adopt the playbook today. Tier-B hosts (Anthropic Cowork, Nebula, Arahi, Vellum) are on the roadmap; see [`registry/listings.yaml`](./registry/listings.yaml).
 
+### Repository layout
+
+| Path | Published as | Notes |
+|---|---|---|
+| `adapters/openclaw` | npm `@4gpts/klodi` + ClawHub | TS plugin |
+| `adapters/{hermes,nanobot}` | PyPI | Python adapters |
+| `adapters/{ironclaw,moltis,zeroclaw}` | crates.io | Rust adapters |
+| `packages/{logger,nats-client,tool-catalog}-*` | **internal — not published** | Vendored into adapter bundles at build time. Do not depend on these from outside the repo. |
+| `skill/` | bundled with each adapter | Canonical playbook; copy-skill scripts in each adapter pull from here. |
+
 ### First run
 
 Three commands and you're trading:

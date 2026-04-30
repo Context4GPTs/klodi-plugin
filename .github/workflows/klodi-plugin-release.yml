@@ -1,5 +1,5 @@
 # Auto-publish @4gpts/klodi to ClawHub + npm on every merge to main that
-# bumps klodi-plugin/package.json version. Path-filtered so unrelated
+# bumps adapters/openclaw/package.json version. Path-filtered so unrelated
 # merges don't even start the job. Version existence check is the hard
 # gate: if both registries already have the target version, the workflow
 # exits cleanly without publishing, so re-running against an old commit
@@ -35,7 +35,9 @@ on:
   # push:
   #   branches: [main]
   #   paths:
-  #     - "klodi-plugin/**"
+  #     - "adapters/openclaw/**"
+  #     - "packages/**"
+  #     - "skill/**"
   #     - ".github/workflows/klodi-plugin-release.yml"
   workflow_dispatch:
     inputs:
@@ -112,12 +114,12 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
-      - name: Read target version from klodi-plugin/package.json
+      - name: Read target version from adapters/openclaw/package.json
         id: read
         run: |
-          version=$(jq -r '.version' klodi-plugin/package.json)
+          version=$(jq -r '.version' adapters/openclaw/package.json)
           if [[ -z "$version" || "$version" == "null" ]]; then
-            echo "::error::klodi-plugin/package.json has no version"
+            echo "::error::adapters/openclaw/package.json has no version"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -156,15 +158,23 @@ jobs:
           node-version: "22"
           cache: pnpm
 
-      - name: Install dependencies (frozen)
+      - name: Install + build TS deps (file: refs, no workspace)
         if: steps.check.outputs.should_publish == 'true'
-        run: pnpm install --frozen-lockfile
+        run: |
+          # @klodi/tool-catalog and @klodi/nats-client are file: deps;
+          # they need their own install + build before openclaw's tsc
+          # can resolve their dist/ shipped types.
+          for pkg in packages/tool-catalog packages/nats-client-ts; do
+            ( cd "$pkg" && pnpm install --frozen-lockfile && pnpm build )
+          done
+          ( cd adapters/openclaw && pnpm install --frozen-lockfile )
 
       - name: Typecheck + unit tests
         if: steps.check.outputs.should_publish == 'true'
         run: |
-          pnpm --filter @4gpts/klodi typecheck
-          pnpm --filter @4gpts/klodi test
+          cd adapters/openclaw
+          pnpm typecheck
+          pnpm test
 
   publish:
     name: Publish to ClawHub + npm
@@ -194,14 +204,18 @@ jobs:
           registry-url: "https://registry.npmjs.org/"
           cache: pnpm
 
-      - name: Install dependencies (frozen)
-        run: pnpm install --frozen-lockfile
+      - name: Install + build TS deps (file: refs, no workspace)
+        run: |
+          for pkg in packages/tool-catalog packages/nats-client-ts; do
+            ( cd "$pkg" && pnpm install --frozen-lockfile && pnpm build )
+          done
+          ( cd adapters/openclaw && pnpm install --frozen-lockfile )
 
       - name: Build plugin
         run: |
-          pnpm --filter @4gpts/klodi build
-          if [[ ! -s klodi-plugin/dist/index.js ]]; then
-            echo "::error::klodi-plugin/dist/index.js missing or empty after build"
+          cd adapters/openclaw && pnpm build
+          if [[ ! -s dist/index.js ]]; then
+            echo "::error::adapters/openclaw/dist/index.js missing or empty after build"
             exit 1
           fi
 
@@ -216,26 +230,37 @@ jobs:
             "git+https://github.com/openclaw/clawhub.git#${CLAWHUB_REF}"
           clawhub --version
 
+      - name: Pack tarball with bundleDependencies materialized
+        run: |
+          # @klodi/* are file: deps; pack-with-bundles.mjs rewrites them
+          # to concrete versions and materializes the dep contents under
+          # node_modules/@klodi/<name>/ inside the tarball, so ClawHub and
+          # npm can both ingest a self-contained artifact.
+          mkdir -p /tmp/klodi-pack
+          ( cd adapters/openclaw && \
+            node scripts/pack-with-bundles.mjs --pack-destination /tmp/klodi-pack )
+          tarball="$(ls /tmp/klodi-pack/*.tgz | head -1)"
+          echo "TARBALL=$tarball" >> "$GITHUB_ENV"
+
       - name: Publish to ClawHub (OIDC trusted publisher)
         run: |
-          clawhub package publish ./klodi-plugin \
+          clawhub package publish "$TARBALL" \
             --tags latest \
             --source-repo "${{ github.repository }}" \
             --source-commit "${{ github.sha }}" \
             --source-ref "${{ github.ref }}" \
-            --source-path klodi-plugin
+            --source-path adapters/openclaw
 
       - name: Publish to npm (trusted publisher + provenance)
         run: |
-          pnpm --filter @4gpts/klodi publish \
-            --access public --provenance --no-git-checks
+          npm publish "$TARBALL" --access public --provenance
 
       - name: Extract CHANGELOG entry for this version
         run: |
           node - <<'EOF' > RELEASE_NOTES.md
           const fs = require('node:fs');
           const v = process.env.VERSION;
-          const text = fs.readFileSync('klodi-plugin/CHANGELOG.md', 'utf8');
+          const text = fs.readFileSync('CHANGELOG.md', 'utf8');
           const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           const re = new RegExp('## \\[' + escaped + '\\][\\s\\S]*?(?=\\n## \\[|$)');
           const m = text.match(re);

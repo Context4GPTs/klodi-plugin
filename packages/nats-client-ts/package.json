@@ -20,7 +20,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@klodi/tool-catalog": "workspace:*",
+    "@klodi/tool-catalog": "file:../tool-catalog",
     "@nats-io/jetstream": "3.3.1",
     "@nats-io/nats-core": "3.3.1",
     "ws": "8.18.0"
@@ -28,7 +28,7 @@
   "devDependencies": {
     "@types/node": "22.15.3",
     "@types/ws": "8.5.14",
-    "nats": "catalog:",
+    "nats": "2.29.3",
     "typescript": "5.8.3",
     "vitest": "4.1.2"
   }

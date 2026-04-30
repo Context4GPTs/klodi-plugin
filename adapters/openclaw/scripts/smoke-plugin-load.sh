@@ -83,12 +83,16 @@ command -v pnpm   >/dev/null || { log "pnpm not found on PATH";   exit 2; }
 # delegates to npm pack (pnpm pack rejects bundleDependencies under
 # node-linker=isolated).
 
-log "Building @4gpts/klodi (with workspace deps)..."
-# `<pkg>...` filter selects @4gpts/klodi and its workspace deps
-# (@klodi/tool-catalog, @klodi/nats-client) in topological order.
-# Direct `pnpm build` here would skip those, and tsc would fail on
-# missing module declarations in a fresh CI tree.
-( cd "$ROOT/../../.." && pnpm --filter "@4gpts/klodi..." build >/dev/null )
+log "Building @4gpts/klodi and its file: deps in topological order..."
+# Each TS package is independent (file: refs, not a pnpm workspace).
+# Build deps first so @klodi/tool-catalog and @klodi/nats-client have
+# dist/ ready by the time openclaw's tsc runs and its pnpm install
+# resolves the file: links.
+readonly REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
+for pkg in packages/tool-catalog packages/nats-client-ts; do
+  ( cd "$REPO_ROOT/$pkg" && pnpm install >/dev/null && pnpm build >/dev/null )
+done
+( cd "$ROOT" && pnpm install >/dev/null && pnpm build >/dev/null )
 
 STAGE_DIR="$(mktemp -d)"
 log "Packing plugin tarball into $STAGE_DIR ..."

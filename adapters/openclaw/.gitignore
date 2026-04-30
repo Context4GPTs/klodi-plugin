@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tgz
+
+# copy-skill.mjs writes the canonical klodi-plugin/skill/ here at build
+# time. The adapter-local copy is a build artifact; the source of truth
+# is the repo-root skill/ directory shared by all hosts.
+skill/

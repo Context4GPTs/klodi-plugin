@@ -6,33 +6,31 @@
  *
  *   1. ClawHub strips `package/dist/node_modules/` on ingest. Anything
  *      relied on at runtime that lives only there is gone post-publish.
- *      Workspace deps (@klodi/nats-client, @klodi/tool-catalog) are
+ *      Internal deps (@klodi/nats-client, @klodi/tool-catalog) are
  *      not on the public registry, so a normal `npm install` on the
  *      user's host 404s — they have to ride into the tarball under a
  *      path ClawHub preserves: top-level `node_modules/<name>/`.
  *      `bundleDependencies` is the npm-spec mechanism for that.
  *
- *   2. pnpm pack refuses bundleDependencies when the workspace uses
- *      node-linker=isolated (ERR_PNPM_BUNDLED_DEPENDENCIES_WITHOUT_HOISTED).
- *      Switching the whole workspace to hoisted is too invasive.
- *      `npm pack` honors bundleDependencies regardless of pnpm linker.
+ *   2. pnpm pack refuses bundleDependencies under node-linker=isolated
+ *      (ERR_PNPM_BUNDLED_DEPENDENCIES_WITHOUT_HOISTED). `npm pack`
+ *      honors bundleDependencies regardless of pnpm linker.
  *
- *   3. pnpm symlinks `node_modules/@klodi/nats-client` → the workspace
- *      source tree (`klodi-plugin/packages/nats-client-ts/`), which
- *      contains src/, tests/, .claude/, node_modules/. Following the
- *      symlink during pack would bloat the tarball and trip OpenClaw's
- *      safety scan on test files that mock process.env. We replace
- *      each symlink with a lean directory holding only dist/ +
- *      package.json before pack, restore the symlink after.
+ *   3. With `file:` deps, pnpm symlinks `node_modules/@klodi/<name>` →
+ *      `node_modules/.pnpm/...`, where the store path holds a filtered
+ *      copy of the source (filtered by the source's package.json#files).
+ *      We replace each symlink with a lean directory holding only
+ *      dist/ + a deps-stripped package.json before pack, then restore
+ *      the symlink after.
  *
- * `npm pack` also doesn't rewrite `workspace:*` specifiers (that's a
- * pnpm thing). Without rewrite, the published package.json carries
- * `"workspace:*"` which npm install rejects. The script does the
- * rewrite using the version each bundled package declares.
+ * `npm pack` also doesn't rewrite `file:` specifiers; without rewrite,
+ * the published package.json carries `"file:..."` which npm install on
+ * a user's host can't resolve. The script rewrites each bundled dep
+ * to the concrete version declared in its own package.json.
  *
  * Atomic via try/finally: source tree is restored on success or
  * failure. Mutations are confined to:
- *   - package.json (workspace:* → concrete version)
+ *   - package.json (file:... → concrete version)
  *   - node_modules/<bundleDep>/ (symlink → lean dir)
  * Both are recorded before mutation and restored after.
  *
@@ -57,8 +55,6 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const PACKAGE_DIR = resolve(HERE, '..')
 const PACKAGE_JSON_PATH = join(PACKAGE_DIR, 'package.json')
 const NODE_MODULES = join(PACKAGE_DIR, 'node_modules')
-const REPO_ROOT = resolve(PACKAGE_DIR, '../../..')
-const WORKSPACE_PACKAGES_DIR = join(REPO_ROOT, 'klodi-plugin', 'packages')
 
 function logInfo(msg) {
   console.info(`[pack-with-bundles] ${msg}`)
@@ -79,10 +75,15 @@ function readPackageJson() {
 }
 
 /**
- * Locate a bundled workspace dep's source directory by reading the
- * pnpm symlink at node_modules/<name>/. The symlink is the single
- * source of truth for which workspace tree the dep maps to —
- * hand-coded mappings drift.
+ * Locate a bundled dep's resolved source by reading the pnpm symlink
+ * at node_modules/<name>/. With `file:` deps pnpm points the symlink
+ * at `node_modules/.pnpm/<addressed-id>/node_modules/<name>/`, which
+ * holds a copy of the source filtered by the source's package.json#files.
+ *
+ * We refuse to bundle content from outside this package's node_modules,
+ * which is a strong-enough invariant: the .pnpm store is part of the
+ * install we just did, and the only way content arrives there is via
+ * a `file:` ref this package's package.json declared.
  */
 function resolveBundleSource(name) {
   const linkPath = join(NODE_MODULES, name)
@@ -100,10 +101,10 @@ function resolveBundleSource(name) {
   }
   const linkTarget = readlinkSync(linkPath)
   const sourceDir = resolve(dirname(linkPath), linkTarget)
-  if (!sourceDir.startsWith(WORKSPACE_PACKAGES_DIR)) {
+  if (!sourceDir.startsWith(NODE_MODULES + '/')) {
     throw new Error(
-      `${name} resolves to ${sourceDir}, outside ${WORKSPACE_PACKAGES_DIR}. ` +
-      'Refusing to bundle content from outside the workspace.',
+      `${name} resolves to ${sourceDir}, outside ${NODE_MODULES}. ` +
+      'Refusing to bundle content from outside the local install tree.',
     )
   }
   const sourcePkgPath = join(sourceDir, 'package.json')
@@ -134,7 +135,10 @@ function materialize(bundle) {
   const distSrc = join(sourceDir, 'dist')
   if (!existsSync(distSrc)) {
     throw new Error(
-      `${distSrc} missing. Run \`pnpm --filter @4gpts/klodi... build\` first.`,
+      `${distSrc} missing. Build deps first: ` +
+      `(cd packages/tool-catalog && pnpm install && pnpm build) && ` +
+      `(cd packages/nats-client-ts && pnpm install && pnpm build) && ` +
+      `(cd adapters/openclaw && pnpm install && pnpm build).`,
     )
   }
 
@@ -167,9 +171,10 @@ function materialize(bundle) {
 }
 
 /**
- * Rewrite workspace:* specifiers to concrete versions read from each
- * bundled package's own package.json. npm pack doesn't do this and
- * `workspace:*` in a published tarball is a non-installable specifier.
+ * Rewrite `file:...` specifiers to the concrete version declared in
+ * each bundled package's own package.json. npm pack doesn't do this,
+ * and `file:` paths in a published tarball can't be resolved on a
+ * user's host.
  */
 function rewritePackageJson(bundles) {
   const original = readFileSync(PACKAGE_JSON_PATH, 'utf8')
@@ -177,11 +182,11 @@ function rewritePackageJson(bundles) {
   const versions = new Map(bundles.map((b) => [b.name, b.version]))
   const newDeps = {}
   for (const [depName, depRange] of Object.entries(pkg.dependencies ?? {})) {
-    if (depRange === 'workspace:*') {
+    if (typeof depRange === 'string' && depRange.startsWith('file:')) {
       const concrete = versions.get(depName)
       if (!concrete) {
         throw new Error(
-          `${depName} declared as workspace:* but not in bundleDependencies. ` +
+          `${depName} declared as ${depRange} but not in bundleDependencies. ` +
           'Add it to bundleDependencies or pin a registry version.',
         )
       }
@@ -222,7 +227,7 @@ function main() {
   let packed = false
   try {
     restores.push(rewritePackageJson(bundles))
-    logInfo('rewrote workspace:* → concrete versions')
+    logInfo('rewrote file: → concrete versions')
     for (const bundle of bundles) {
       restores.push(materialize(bundle))
       logInfo(`materialized ${bundle.name}@${bundle.version}`)
