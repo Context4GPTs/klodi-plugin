@@ -18,7 +18,16 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
-    "klodi-nats-client==0.1.0",
+    # Runtime deps the vendored `_klodi_nanobot_natsclient` namespace
+    # imports. Mirrors `klodi-plugin/packages/nats-client-py/pyproject.toml`
+    # — those deps move here because the shared client itself is never
+    # published. `vendor.py` strips the placeholder `klodi-nats-client`
+    # entry but does not synthesize these; declaring them inline is the
+    # contract.
+    "nats-py==2.14.0",
+    "websockets==15.0",
+    "nkeys==0.2.0",
+    "pynacl==1.6.2",
 ]
 
 [project.optional-dependencies]

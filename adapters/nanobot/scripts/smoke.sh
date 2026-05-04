@@ -73,6 +73,15 @@ if [[ -z "$PY_MODULES" ]]; then
   exit 1
 fi
 
+# CWD is on Python's module search path by default. The adapter source
+# dir contains `nanobot_*.py` at the top level (flat layout), so running
+# python from $ADAPTER_DIR would resolve `import nanobot_client` to the
+# source tree — whose `from klodi_nats_client import …` is unrewritten —
+# instead of the installed wheel's vendored copy. Run imports from /tmp
+# so the smoke actually exercises the wheel.
+log "running import asserts (CWD=/tmp)"
+cd /tmp
+
 while IFS= read -r mod; do
   log "  import $mod"
   "$SMOKE_VENV/bin/python" -c "import $mod" || {
