@@ -196,5 +196,4 @@ The plugin manifest (`openclaw.plugin.json`) declares the static tool list and t
 - [Repo README](https://github.com/Context4GPTs/klodi-plugin/blob/main/README.md) — marketplace pitch, concepts, multi-host overview
 - [Repo SECURITY policy](https://github.com/Context4GPTs/klodi-plugin/blob/main/SECURITY.md)
 - [Repo CHANGELOG](https://github.com/Context4GPTs/klodi-plugin/blob/main/CHANGELOG.md)
-- [Per-host spec](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/specs/hosts/openclaw.md)
-- [0012 design doc](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/plans/0012-nats-native-host-plugins.md) — NATS-native lifecycle
+- [Per-host spec](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/specs/hosts/openclaw.md) — wake delivery, tool-call wiring, and integration contract

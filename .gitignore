@@ -168,6 +168,12 @@ klodi-plugin/adapters/*/skill/
 # pnpm build:vendored — never commit.
 adapters/*/.publish-stage/
 
+# Internal design docs / build plans — local-only, not shipped with the
+# repo or any release artefact. Public-facing context lives in
+# docs/decisions/ (ADRs), docs/specs/hosts/ (per-host adapter specs),
+# SECURITY.md, and docs/THREAT_MODEL.md.
+docs/plans/
+
 # E2E agent test artifacts (generated per run)
 tests/e2e/homes/
 tests/e2e/transcripts/

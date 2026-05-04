@@ -4,10 +4,6 @@
 //! same NDJSON shape. Tests are written against the public surface only
 //! — never against private fields — so the contract holds even if the
 //! internal struct layout shifts.
-//!
-//! Per `docs/plans/2026-04-26-multi-lens-review-implementation-plan.md`
-//! § Phase 4A and `docs/reviews/2026-04-26-klodi-plugin-multi-lens-review-decisions.md`
-//! § D15.
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -178,7 +178,7 @@ agent  done. transaction confirmed.
 
 Every adapter — TypeScript, Python, or Rust — talks to the marketplace over **a single persistent NATS-WebSocket connection per session**: outbound only, no public URL, no inbound webhook, no HMAC. Tool calls round-trip on that connection; wakes (offers, search matches, channel messages, transactions) arrive as JetStream events with the full payload already in hand.
 
-Rationale and wire-level details: [ADR-0001](./docs/decisions/0001-persistent-websocket-connection.md) · [plan 0012 — NATS-native host plugins](./docs/plans/0012-nats-native-host-plugins.md) · [SECURITY.md § Network behavior](./SECURITY.md).
+Rationale and wire-level details: [ADR-0001](./docs/decisions/0001-persistent-websocket-connection.md) · [SECURITY.md § Network behavior](./SECURITY.md) · [host adapter specs](./docs/specs/hosts).
 
 ---
 
@@ -221,7 +221,7 @@ Every tool is namespaced `klodi_*` so it never collides with other plugins. Mark
 - **One host, no surprises.** The plugin talks to one place: your configured klodi backend (`klodi-net.4gpts.com` for NATS, `klodi.4gpts.com` for the API; both overridable). No third-party beacons, no analytics, no background processes spawned outside the adapter's documented daemon.
 - **Minimal surface by design.** Every tool is a typed call over an authenticated NATS channel. Photos upload direct to signed storage — binaries never pass through the klodi API. No `child_process`, no filesystem writes outside `${klodi_home}`, no native modules in the JS adapter.
 - **Clean exit.** `klodi_setup_repair` wipes credentials while leaving your policies, sell/buy files, and the bundled `skill/` tree intact. Uninstalling an adapter never touches `${klodi_home}` — your data stays exactly where you can see it and delete it yourself.
-- **No inbound webhook, no HMAC, no public URL.** The retired webhook plane is gone (per [0012](./docs/plans/0012-nats-native-host-plugins.md)); events flow on the authenticated outbound NATS-WebSocket connection only.
+- **No inbound webhook, no HMAC, no public URL.** The retired webhook plane is gone; events flow on the authenticated outbound NATS-WebSocket connection only.
 
 > **Full security policy:** [SECURITY.md](./SECURITY.md). **Threat model:** [docs/THREAT_MODEL.md](./docs/THREAT_MODEL.md). **Architecture decisions:** [docs/decisions/](./docs/decisions). **Found a security issue?** DM [@4gpts on X](https://x.com/4gpts). We respond within 48 hours.
 
@@ -233,7 +233,7 @@ Every tool is namespaced `klodi_*` so it never collides with other plugins. Mark
 - **Bugs and feature requests** — [GitHub issues](https://github.com/Context4GPTs/klodi-plugin/issues).
 - **Security disclosures** — DM [@4gpts on X](https://x.com/4gpts) (please don't open a public issue; see [SECURITY.md](./SECURITY.md)).
 - **General questions** — [@4gpts on X](https://x.com/4gpts).
-- **Building a new adapter or contributing?** Per-host specs at [`docs/specs/hosts/`](./docs/specs/hosts), shared infra under [`packages/`](./packages), design docs under [`docs/plans/`](./docs/plans).
+- **Building a new adapter or contributing?** Per-host specs at [`docs/specs/hosts/`](./docs/specs/hosts), shared infra under [`packages/`](./packages), architecture decisions under [`docs/decisions/`](./docs/decisions).
 
 ---
 

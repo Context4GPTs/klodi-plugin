@@ -5,10 +5,6 @@
  * notifications consumer (`subscribe_notifications`) or the channels
  * consumer (`subscribe_channels`) carries a payload of one of these
  * shapes. The Python and Rust adapters mirror these via codegen.
- *
- * See `docs/plans/2026-04-25-0012-shared-contracts.md` for the
- * authoritative list and `klodi-plugin/docs/plans/0012-nats-native-host-plugins.md`
- * § Wake payload contract for the rationale.
  */
 
 /** UUID v4. Used by the consumer-side dedup against `max_deliver: 5`. */

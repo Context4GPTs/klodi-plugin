@@ -128,4 +128,3 @@ Editable installs keep `from klodi_nats_client import …` resolving to workspac
 - [Repo SECURITY policy](https://github.com/Context4GPTs/klodi-plugin/blob/main/SECURITY.md)
 - [Repo CHANGELOG](https://github.com/Context4GPTs/klodi-plugin/blob/main/CHANGELOG.md)
 - [Per-host spec](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/specs/hosts/hermes.md)
-- [0012 design doc](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/plans/0012-nats-native-host-plugins.md) — NATS-native lifecycle

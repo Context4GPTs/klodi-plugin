@@ -7,10 +7,9 @@
 //! stop / health) and singletonises per `user_id` so the same persona
 //! never accidentally runs two competing pumps inside the same process.
 //!
-//! Per `docs/plans/2026-04-28-host-agnostic-wake-pump.md`: subscribe
-//! ownership lives in the shared library so adapters (Moltis, IronClaw,
-//! ZeroClaw) shrink to handler wiring (~20 lines) and never depend on
-//! a host SDK lifecycle event for wake delivery.
+//! Subscribe ownership lives in this shared library so adapters
+//! (Moltis, IronClaw, ZeroClaw) shrink to handler wiring (~20 lines)
+//! and never depend on a host SDK lifecycle event for wake delivery.
 
 use crate::error::KlodiError;
 use crate::events::{ChannelMessageEvent, NotificationEvent};

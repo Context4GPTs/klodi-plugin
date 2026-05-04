@@ -71,5 +71,3 @@ isolation.
   scrape target.
 - **D § D8** — locked option (b): separate crate for cleaner separation
   between the wire client and the host-orchestration glue.
-- `docs/plans/0012-nats-native-host-plugins.md` — the architecture this
-  crate fits into.

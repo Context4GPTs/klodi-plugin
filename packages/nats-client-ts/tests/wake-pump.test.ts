@@ -1,6 +1,5 @@
 /**
- * Unit tests for the host-agnostic `WakePump`
- * (per `docs/plans/2026-04-28-host-agnostic-wake-pump.md`).
+ * Unit tests for the host-agnostic `WakePump`.
  *
  * The pump owns subscribe ownership for both notification and channel
  * consumers and exposes a uniform start/stop/health surface that every

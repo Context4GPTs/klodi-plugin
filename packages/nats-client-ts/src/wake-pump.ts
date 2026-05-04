@@ -1,9 +1,8 @@
 /**
  * Host-agnostic wake pump.
  *
- * Per `docs/plans/2026-04-28-host-agnostic-wake-pump.md`: subscribe
- * ownership moves out of each adapter's lifecycle wiring into this
- * shared library. The pump composes the two underlying subscribe calls
+ * Subscribe ownership lives here rather than in each adapter's lifecycle
+ * wiring. The pump composes the two underlying subscribe calls
  * (notifications + channels) on a `WakePumpClient`-shaped client into
  * one cohesive lifecycle (start / stop / health) and singletonises per
  * `user_id` so the same persona never accidentally runs two competing

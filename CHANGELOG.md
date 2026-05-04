@@ -30,6 +30,18 @@ If you are running OpenClaw with `@4gpts/klodi@0.1.x`, the 0.2.0 jump retires se
 - **Hermes adapter:** `install.sh` now uses `pip install -r requirements.txt --require-hashes` when hash pins are present (regenerate via `pip-compile --generate-hashes` per `klodi-plugin/adapters/hermes/REQUIREMENTS.md`). Pre-launch the closure ships without hashes (klodi-nats-client is vendored, not on PyPI); `install.sh` falls back to a regular install in that mode and logs the downgrade. Per **R § P2-22**.
 - **Pin audit policy** (per **R § P3-20**): run `pip-audit -r requirements.txt` before tagging any release. `nats-py==2.14.0` and `websockets==15.0` are the load-bearing pins; check them against current advisories. If `pip-audit` flags a CVE on either, the next release MUST bump the pin and re-audit.
 
+## [0.2.2] — 2026-05-04
+
+**Python adapters only.** OpenClaw and the Rust adapters (`klodi-moltis`, `klodi-ironclaw`, `klodi-zeroclaw`) are unaffected and not republished at this version.
+
+### Fixed
+
+- **klodi-hermes / klodi-nanobot:** the vendored `_klodi_*_natsclient/schemas.json` shipped in the 0.2.0 and 0.2.1 wheels was generated from a pre-`fulfillment` snapshot of `packages/tool-catalog/src/index.ts` — `klodi_list_create`, `klodi_list_update`, `klodi_search`, and `klodi_searches_create` advertised the retired flat triple (`delivery_method` / `location_area` / `ships_to`) instead of the discriminated-union `fulfillment` (listings) and `delivery` (searches). The marketplace had moved to the union shape, so every Python-adapter listing creation hit `INVALID_FULFILLMENT` from the server, while OpenClaw kept working because it imports the live TypeBox catalog (`@klodi/tool-catalog`) instead of a frozen JSON mirror. Root cause: `pnpm --filter @klodi/tool-catalog codegen` is not idempotent against TS source edits and was never re-run after the union migration. Wheels rebuilt with the fresh schema.
+
+### Changed
+
+- **Build hook (klodi-hermes, klodi-nanobot):** the adapter `Makefile`'s `vendor` target now depends on a new `codegen` target that invokes `pnpm --filter @klodi/tool-catalog codegen` from the repo root before `vendor.py` stages the vendored client. Codegen is idempotent and cheap; running it on every wheel build means a TS catalog edit can never silently ship a stale Python schema again. The check-codegen-fresh script under `packages/tool-catalog/scripts/` remains available as a separate guard for committed-mirror drift.
+
 ## [0.2.1] — 2026-05-04
 
 **Python adapters only.** OpenClaw and the Rust adapters (`klodi-moltis`, `klodi-ironclaw`, `klodi-zeroclaw`) are unaffected and not republished at this version.
@@ -41,7 +53,7 @@ If you are running OpenClaw with `@4gpts/klodi@0.1.x`, the 0.2.0 jump retires se
 
 ## [0.2.0] — 2026-04-25
 
-**0012 — NATS-native host plugins.** All adapters now hold a single persistent NATS-WebSocket connection per session for both tool calls and wakes. The webhook plane, the `klodi-mcp` Node binary, and host cron paths are retired. References: `docs/plans/0012-nats-native-host-plugins.md`, `../docs/reviews/2026-04-25-0012-first-pass-review.md`.
+**NATS-native host plugins.** All adapters now hold a single persistent NATS-WebSocket connection per session for both tool calls and wakes. The webhook plane, the `klodi-mcp` Node binary, and host cron paths are retired.
 
 ### Removed
 

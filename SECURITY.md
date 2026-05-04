@@ -135,8 +135,7 @@ This policy covers the plugin code in this repository and the official `klodi-ne
 
 - [docs/decisions/](docs/decisions/) — Architecture Decision Records.
 - [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) — Assets, trust boundaries, and per-threat mitigations.
-- [docs/plans/0012-nats-native-host-plugins.md](docs/plans/0012-nats-native-host-plugins.md) — current architecture spec.
-- [docs/reviews/2026-04-25-0012-first-pass-review.md](../docs/reviews/2026-04-25-0012-first-pass-review.md) — first-pass review and resolved decisions.
+- [docs/specs/hosts/](docs/specs/hosts/) — per-host adapter specs covering wake delivery, tool-call wiring, and integration contracts.
 - `skill/policies/security.md` — the hard-rule file copied into `${klodi_home}/policies/security.md` on first run.
 
 ---

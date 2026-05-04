@@ -89,10 +89,9 @@ def register(ctx: Any) -> None:
     # and `SystemExit` propagate — those signal operator intent and
     # critical config errors that should not be swallowed during boot.
     #
-    # Per `docs/plans/2026-04-28-host-agnostic-wake-pump.md`: subscribe
-    # ownership lives in the shared `WakePump`. The pump composes the
-    # two underlying subscribe calls + reconnect-safe retry into one
-    # eager start — no host SDK lifecycle dependency.
+    # Subscribe ownership lives in the shared `WakePump`. The pump
+    # composes the two underlying subscribe calls + reconnect-safe
+    # retry into one eager start — no host SDK lifecycle dependency.
     try:
         start_wake_pump()
         wakes_wired = True

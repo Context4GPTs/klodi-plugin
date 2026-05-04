@@ -7,11 +7,6 @@ Public surface mirrors the TS client at
 `klodi-plugin/packages/nats-client-ts/`. Adapters (Moltis, IronClaw,
 ZeroClaw) depend on this crate; they don't touch `async-nats` directly.
 
-See the design doc:
-
-- `klodi-plugin/docs/plans/0012-nats-native-host-plugins.md`
-- `docs/plans/2026-04-25-0012-shared-contracts.md`
-
 ## Quick start
 
 ```rust

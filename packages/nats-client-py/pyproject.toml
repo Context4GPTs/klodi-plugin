@@ -1,9 +1,7 @@
 # klodi-nats-client — Python port of @klodi/nats-client (TS).
 #
-# Strict mirror of the TypeScript surface. See
-# klodi-plugin/docs/plans/0012-nats-native-host-plugins.md and
-# docs/plans/2026-04-25-0012-shared-contracts.md for the canonical
-# behavior these adapters speak.
+# Strict mirror of the TypeScript surface; the TS client at
+# klodi-plugin/packages/nats-client-ts/ is the canonical wire contract.
 
 [build-system]
 requires = ["setuptools==75.8.0", "wheel==0.45.1"]

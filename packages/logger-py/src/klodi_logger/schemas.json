@@ -301,7 +301,7 @@
     },
     "klodi_list_create": {
       "subject": "p2p.v1.listings.create",
-      "description": "Create a new marketplace listing. Prices in integer cents. Condition required for pickup/ship, rejected for digital. ships_to required for ship only (ISO 3166 codes).",
+      "description": "Create a new marketplace listing. Prices in integer cents. `fulfillment` is a discriminated union — at least one offer, at most one entry per method. Condition required when any offer is pickup or ship; rejected when only digital.",
       "params": {
         "type": "object",
         "properties": {
@@ -367,22 +367,108 @@
             "minimum": 0,
             "type": "integer"
           },
-          "delivery_method": {
-            "description": "Delivery method",
-            "anyOf": [
-              {
-                "const": "pickup",
-                "type": "string"
-              },
-              {
-                "const": "ship",
-                "type": "string"
-              },
-              {
-                "const": "digital",
-                "type": "string"
-              }
-            ]
+          "fulfillment": {
+            "minItems": 1,
+            "maxItems": 3,
+            "description": "Delivery options the seller advertises. At most one entry per method. Buyers match if the listing's fulfillment intersects their delivery filter.",
+            "type": "array",
+            "items": {
+              "description": "One delivery option a seller offers on a listing. The 'ship' variant carries shipsTo and the source country; 'pickup' carries the meeting-point coordinates and area; 'digital' has no extra fields.",
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "pickup",
+                      "type": "string"
+                    },
+                    "location": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "minimum": -90,
+                          "maximum": 90,
+                          "type": "number"
+                        },
+                        "lng": {
+                          "minimum": -180,
+                          "maximum": 180,
+                          "type": "number"
+                        },
+                        "area": {
+                          "minLength": 1,
+                          "maxLength": 200,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lng",
+                        "area"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "location"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "ship",
+                      "type": "string"
+                    },
+                    "from": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "country": {
+                          "pattern": "^[A-Z]{2}$",
+                          "description": "ISO 3166-1 alpha-2 country code (e.g. GR, US)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "country"
+                      ]
+                    },
+                    "shipsTo": {
+                      "minItems": 1,
+                      "maxItems": 250,
+                      "type": "array",
+                      "items": {
+                        "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                        "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "from",
+                    "shipsTo"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "digital",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method"
+                  ]
+                }
+              ]
+            }
           },
           "condition": {
             "description": "Item condition",
@@ -408,17 +494,6 @@
                 "type": "string"
               }
             ]
-          },
-          "location_area": {
-            "description": "Override pickup/ship location",
-            "type": "string"
-          },
-          "ships_to": {
-            "description": "ISO 3166 codes for ship delivery",
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
           },
           "photos": {
             "description": "Photo asset URLs",
@@ -449,7 +524,7 @@
           "description",
           "category",
           "asking_price",
-          "delivery_method"
+          "fulfillment"
         ]
       },
       "result": {
@@ -537,22 +612,108 @@
             "default": "USD",
             "type": "string"
           },
-          "delivery_method": {
-            "description": "Delivery method",
-            "anyOf": [
-              {
-                "const": "pickup",
-                "type": "string"
-              },
-              {
-                "const": "ship",
-                "type": "string"
-              },
-              {
-                "const": "digital",
-                "type": "string"
-              }
-            ]
+          "fulfillment": {
+            "minItems": 1,
+            "maxItems": 3,
+            "description": "Delivery options the seller advertises. At most one entry per method. Buyers match if the listing's fulfillment intersects their delivery filter.",
+            "type": "array",
+            "items": {
+              "description": "One delivery option a seller offers on a listing. The 'ship' variant carries shipsTo and the source country; 'pickup' carries the meeting-point coordinates and area; 'digital' has no extra fields.",
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "pickup",
+                      "type": "string"
+                    },
+                    "location": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "minimum": -90,
+                          "maximum": 90,
+                          "type": "number"
+                        },
+                        "lng": {
+                          "minimum": -180,
+                          "maximum": 180,
+                          "type": "number"
+                        },
+                        "area": {
+                          "minLength": 1,
+                          "maxLength": 200,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lng",
+                        "area"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "location"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "ship",
+                      "type": "string"
+                    },
+                    "from": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "country": {
+                          "pattern": "^[A-Z]{2}$",
+                          "description": "ISO 3166-1 alpha-2 country code (e.g. GR, US)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "country"
+                      ]
+                    },
+                    "shipsTo": {
+                      "minItems": 1,
+                      "maxItems": 250,
+                      "type": "array",
+                      "items": {
+                        "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                        "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "from",
+                    "shipsTo"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "digital",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method"
+                  ]
+                }
+              ]
+            }
           },
           "condition": {
             "anyOf": [
@@ -593,22 +754,6 @@
             }
           },
           "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "location_area": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "ships_to": {
             "type": "array",
             "items": {
               "type": "string"
@@ -658,12 +803,10 @@
           "category",
           "asking_price",
           "currency",
-          "delivery_method",
+          "fulfillment",
           "condition",
           "photos",
           "tags",
-          "location_area",
-          "ships_to",
           "status",
           "created_at",
           "updated_at",
@@ -673,7 +816,7 @@
     },
     "klodi_list_update": {
       "subject": "p2p.v1.listings.update",
-      "description": "Update an existing listing. Cannot change delivery_method or category (withdraw and relist instead).",
+      "description": "Update an existing listing. Cannot change `category` (withdraw and relist instead). Updating `fulfillment` replaces the entire array atomically.",
       "params": {
         "type": "object",
         "properties": {
@@ -718,13 +861,107 @@
               }
             ]
           },
-          "location_area": {
-            "type": "string"
-          },
-          "ships_to": {
+          "fulfillment": {
+            "minItems": 1,
+            "maxItems": 3,
+            "description": "Delivery options the seller advertises. At most one entry per method. Buyers match if the listing's fulfillment intersects their delivery filter.",
             "type": "array",
             "items": {
-              "type": "string"
+              "description": "One delivery option a seller offers on a listing. The 'ship' variant carries shipsTo and the source country; 'pickup' carries the meeting-point coordinates and area; 'digital' has no extra fields.",
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "pickup",
+                      "type": "string"
+                    },
+                    "location": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "minimum": -90,
+                          "maximum": 90,
+                          "type": "number"
+                        },
+                        "lng": {
+                          "minimum": -180,
+                          "maximum": 180,
+                          "type": "number"
+                        },
+                        "area": {
+                          "minLength": 1,
+                          "maxLength": 200,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lng",
+                        "area"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "location"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "ship",
+                      "type": "string"
+                    },
+                    "from": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "country": {
+                          "pattern": "^[A-Z]{2}$",
+                          "description": "ISO 3166-1 alpha-2 country code (e.g. GR, US)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "country"
+                      ]
+                    },
+                    "shipsTo": {
+                      "minItems": 1,
+                      "maxItems": 250,
+                      "type": "array",
+                      "items": {
+                        "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                        "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "from",
+                    "shipsTo"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "digital",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method"
+                  ]
+                }
+              ]
             }
           },
           "photos": {
@@ -855,22 +1092,108 @@
             "default": "USD",
             "type": "string"
           },
-          "delivery_method": {
-            "description": "Delivery method",
-            "anyOf": [
-              {
-                "const": "pickup",
-                "type": "string"
-              },
-              {
-                "const": "ship",
-                "type": "string"
-              },
-              {
-                "const": "digital",
-                "type": "string"
-              }
-            ]
+          "fulfillment": {
+            "minItems": 1,
+            "maxItems": 3,
+            "description": "Delivery options the seller advertises. At most one entry per method. Buyers match if the listing's fulfillment intersects their delivery filter.",
+            "type": "array",
+            "items": {
+              "description": "One delivery option a seller offers on a listing. The 'ship' variant carries shipsTo and the source country; 'pickup' carries the meeting-point coordinates and area; 'digital' has no extra fields.",
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "pickup",
+                      "type": "string"
+                    },
+                    "location": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "minimum": -90,
+                          "maximum": 90,
+                          "type": "number"
+                        },
+                        "lng": {
+                          "minimum": -180,
+                          "maximum": 180,
+                          "type": "number"
+                        },
+                        "area": {
+                          "minLength": 1,
+                          "maxLength": 200,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lng",
+                        "area"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "location"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "ship",
+                      "type": "string"
+                    },
+                    "from": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "country": {
+                          "pattern": "^[A-Z]{2}$",
+                          "description": "ISO 3166-1 alpha-2 country code (e.g. GR, US)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "country"
+                      ]
+                    },
+                    "shipsTo": {
+                      "minItems": 1,
+                      "maxItems": 250,
+                      "type": "array",
+                      "items": {
+                        "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                        "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "from",
+                    "shipsTo"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "digital",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method"
+                  ]
+                }
+              ]
+            }
           },
           "condition": {
             "anyOf": [
@@ -911,22 +1234,6 @@
             }
           },
           "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "location_area": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "ships_to": {
             "type": "array",
             "items": {
               "type": "string"
@@ -976,12 +1283,10 @@
           "category",
           "asking_price",
           "currency",
-          "delivery_method",
+          "fulfillment",
           "condition",
           "photos",
           "tags",
-          "location_area",
-          "ships_to",
           "status",
           "created_at",
           "updated_at",
@@ -1090,22 +1395,108 @@
             "default": "USD",
             "type": "string"
           },
-          "delivery_method": {
-            "description": "Delivery method",
-            "anyOf": [
-              {
-                "const": "pickup",
-                "type": "string"
-              },
-              {
-                "const": "ship",
-                "type": "string"
-              },
-              {
-                "const": "digital",
-                "type": "string"
-              }
-            ]
+          "fulfillment": {
+            "minItems": 1,
+            "maxItems": 3,
+            "description": "Delivery options the seller advertises. At most one entry per method. Buyers match if the listing's fulfillment intersects their delivery filter.",
+            "type": "array",
+            "items": {
+              "description": "One delivery option a seller offers on a listing. The 'ship' variant carries shipsTo and the source country; 'pickup' carries the meeting-point coordinates and area; 'digital' has no extra fields.",
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "pickup",
+                      "type": "string"
+                    },
+                    "location": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "minimum": -90,
+                          "maximum": 90,
+                          "type": "number"
+                        },
+                        "lng": {
+                          "minimum": -180,
+                          "maximum": 180,
+                          "type": "number"
+                        },
+                        "area": {
+                          "minLength": 1,
+                          "maxLength": 200,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lng",
+                        "area"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "location"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "ship",
+                      "type": "string"
+                    },
+                    "from": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "country": {
+                          "pattern": "^[A-Z]{2}$",
+                          "description": "ISO 3166-1 alpha-2 country code (e.g. GR, US)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "country"
+                      ]
+                    },
+                    "shipsTo": {
+                      "minItems": 1,
+                      "maxItems": 250,
+                      "type": "array",
+                      "items": {
+                        "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                        "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "from",
+                    "shipsTo"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "digital",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method"
+                  ]
+                }
+              ]
+            }
           },
           "condition": {
             "anyOf": [
@@ -1146,22 +1537,6 @@
             }
           },
           "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "location_area": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "ships_to": {
             "type": "array",
             "items": {
               "type": "string"
@@ -1211,12 +1586,10 @@
           "category",
           "asking_price",
           "currency",
-          "delivery_method",
+          "fulfillment",
           "condition",
           "photos",
           "tags",
-          "location_area",
-          "ships_to",
           "status",
           "created_at",
           "updated_at",
@@ -1343,22 +1716,108 @@
                   "default": "USD",
                   "type": "string"
                 },
-                "delivery_method": {
-                  "description": "Delivery method",
-                  "anyOf": [
-                    {
-                      "const": "pickup",
-                      "type": "string"
-                    },
-                    {
-                      "const": "ship",
-                      "type": "string"
-                    },
-                    {
-                      "const": "digital",
-                      "type": "string"
-                    }
-                  ]
+                "fulfillment": {
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "description": "Delivery options the seller advertises. At most one entry per method. Buyers match if the listing's fulfillment intersects their delivery filter.",
+                  "type": "array",
+                  "items": {
+                    "description": "One delivery option a seller offers on a listing. The 'ship' variant carries shipsTo and the source country; 'pickup' carries the meeting-point coordinates and area; 'digital' has no extra fields.",
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "const": "pickup",
+                            "type": "string"
+                          },
+                          "location": {
+                            "additionalProperties": false,
+                            "type": "object",
+                            "properties": {
+                              "lat": {
+                                "minimum": -90,
+                                "maximum": 90,
+                                "type": "number"
+                              },
+                              "lng": {
+                                "minimum": -180,
+                                "maximum": 180,
+                                "type": "number"
+                              },
+                              "area": {
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "lat",
+                              "lng",
+                              "area"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "method",
+                          "location"
+                        ]
+                      },
+                      {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "const": "ship",
+                            "type": "string"
+                          },
+                          "from": {
+                            "additionalProperties": false,
+                            "type": "object",
+                            "properties": {
+                              "country": {
+                                "pattern": "^[A-Z]{2}$",
+                                "description": "ISO 3166-1 alpha-2 country code (e.g. GR, US)",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "country"
+                            ]
+                          },
+                          "shipsTo": {
+                            "minItems": 1,
+                            "maxItems": 250,
+                            "type": "array",
+                            "items": {
+                              "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                              "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "method",
+                          "from",
+                          "shipsTo"
+                        ]
+                      },
+                      {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "const": "digital",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "method"
+                        ]
+                      }
+                    ]
+                  }
                 },
                 "condition": {
                   "anyOf": [
@@ -1399,22 +1858,6 @@
                   }
                 },
                 "tags": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "location_area": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "ships_to": {
                   "type": "array",
                   "items": {
                     "type": "string"
@@ -1464,12 +1907,10 @@
                 "category",
                 "asking_price",
                 "currency",
-                "delivery_method",
+                "fulfillment",
                 "condition",
                 "photos",
                 "tags",
-                "location_area",
-                "ships_to",
                 "status",
                 "created_at",
                 "updated_at",
@@ -1584,22 +2025,108 @@
             "default": "USD",
             "type": "string"
           },
-          "delivery_method": {
-            "description": "Delivery method",
-            "anyOf": [
-              {
-                "const": "pickup",
-                "type": "string"
-              },
-              {
-                "const": "ship",
-                "type": "string"
-              },
-              {
-                "const": "digital",
-                "type": "string"
-              }
-            ]
+          "fulfillment": {
+            "minItems": 1,
+            "maxItems": 3,
+            "description": "Delivery options the seller advertises. At most one entry per method. Buyers match if the listing's fulfillment intersects their delivery filter.",
+            "type": "array",
+            "items": {
+              "description": "One delivery option a seller offers on a listing. The 'ship' variant carries shipsTo and the source country; 'pickup' carries the meeting-point coordinates and area; 'digital' has no extra fields.",
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "pickup",
+                      "type": "string"
+                    },
+                    "location": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "minimum": -90,
+                          "maximum": 90,
+                          "type": "number"
+                        },
+                        "lng": {
+                          "minimum": -180,
+                          "maximum": 180,
+                          "type": "number"
+                        },
+                        "area": {
+                          "minLength": 1,
+                          "maxLength": 200,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lng",
+                        "area"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "location"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "ship",
+                      "type": "string"
+                    },
+                    "from": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "country": {
+                          "pattern": "^[A-Z]{2}$",
+                          "description": "ISO 3166-1 alpha-2 country code (e.g. GR, US)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "country"
+                      ]
+                    },
+                    "shipsTo": {
+                      "minItems": 1,
+                      "maxItems": 250,
+                      "type": "array",
+                      "items": {
+                        "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                        "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "from",
+                    "shipsTo"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "digital",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method"
+                  ]
+                }
+              ]
+            }
           },
           "condition": {
             "anyOf": [
@@ -1640,22 +2167,6 @@
             }
           },
           "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "location_area": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "ships_to": {
             "type": "array",
             "items": {
               "type": "string"
@@ -1705,12 +2216,10 @@
           "category",
           "asking_price",
           "currency",
-          "delivery_method",
+          "fulfillment",
           "condition",
           "photos",
           "tags",
-          "location_area",
-          "ships_to",
           "status",
           "created_at",
           "updated_at",
@@ -1824,22 +2333,108 @@
             "default": "USD",
             "type": "string"
           },
-          "delivery_method": {
-            "description": "Delivery method",
-            "anyOf": [
-              {
-                "const": "pickup",
-                "type": "string"
-              },
-              {
-                "const": "ship",
-                "type": "string"
-              },
-              {
-                "const": "digital",
-                "type": "string"
-              }
-            ]
+          "fulfillment": {
+            "minItems": 1,
+            "maxItems": 3,
+            "description": "Delivery options the seller advertises. At most one entry per method. Buyers match if the listing's fulfillment intersects their delivery filter.",
+            "type": "array",
+            "items": {
+              "description": "One delivery option a seller offers on a listing. The 'ship' variant carries shipsTo and the source country; 'pickup' carries the meeting-point coordinates and area; 'digital' has no extra fields.",
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "pickup",
+                      "type": "string"
+                    },
+                    "location": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "minimum": -90,
+                          "maximum": 90,
+                          "type": "number"
+                        },
+                        "lng": {
+                          "minimum": -180,
+                          "maximum": 180,
+                          "type": "number"
+                        },
+                        "area": {
+                          "minLength": 1,
+                          "maxLength": 200,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lng",
+                        "area"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "location"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "ship",
+                      "type": "string"
+                    },
+                    "from": {
+                      "additionalProperties": false,
+                      "type": "object",
+                      "properties": {
+                        "country": {
+                          "pattern": "^[A-Z]{2}$",
+                          "description": "ISO 3166-1 alpha-2 country code (e.g. GR, US)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "country"
+                      ]
+                    },
+                    "shipsTo": {
+                      "minItems": 1,
+                      "maxItems": 250,
+                      "type": "array",
+                      "items": {
+                        "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                        "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "from",
+                    "shipsTo"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "const": "digital",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "method"
+                  ]
+                }
+              ]
+            }
           },
           "condition": {
             "anyOf": [
@@ -1880,22 +2475,6 @@
             }
           },
           "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "location_area": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "ships_to": {
             "type": "array",
             "items": {
               "type": "string"
@@ -1945,12 +2524,10 @@
           "category",
           "asking_price",
           "currency",
-          "delivery_method",
+          "fulfillment",
           "condition",
           "photos",
           "tags",
-          "location_area",
-          "ships_to",
           "status",
           "created_at",
           "updated_at",
@@ -2040,7 +2617,7 @@
     },
     "klodi_search": {
       "subject": "p2p.v1.listings.search",
-      "description": "One-shot search of active listings by query, category, price range, delivery, location, condition.",
+      "description": "One-shot search of active listings. `delivery` is a discriminated union — pickup, ship, digital, or any. Each variant exposes only the fields that are meaningful for it (pickup → radiusKm; ship → to; digital/any → none).",
       "params": {
         "type": "object",
         "properties": {
@@ -2106,31 +2683,73 @@
             "minimum": 0,
             "type": "integer"
           },
-          "delivery_method": {
-            "description": "Delivery method",
+          "delivery": {
+            "description": "Buyer's delivery preference. Pick the variant matching the buyer's intent — fields from one variant cannot appear on another (the type system rejects it).",
             "anyOf": [
               {
-                "const": "pickup",
-                "type": "string"
+                "additionalProperties": false,
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "const": "pickup",
+                    "type": "string"
+                  },
+                  "radiusKm": {
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "Km radius around buyer's profile location. Omit for any-distance pickup match.",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "method"
+                ]
               },
               {
-                "const": "ship",
-                "type": "string"
+                "additionalProperties": false,
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "const": "ship",
+                    "type": "string"
+                  },
+                  "to": {
+                    "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                    "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "method"
+                ]
               },
               {
-                "const": "digital",
-                "type": "string"
+                "additionalProperties": false,
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "const": "digital",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "method"
+                ]
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "const": "any",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "method"
+                ]
               }
             ]
-          },
-          "location_area": {
-            "type": "string"
-          },
-          "ships_to": {
-            "type": "string"
-          },
-          "pickup_radius_km": {
-            "type": "number"
           },
           "condition": {
             "description": "Item condition",
@@ -2244,22 +2863,108 @@
                     }
                   ]
                 },
-                "delivery_method": {
-                  "description": "Delivery method",
-                  "anyOf": [
-                    {
-                      "const": "pickup",
-                      "type": "string"
-                    },
-                    {
-                      "const": "ship",
-                      "type": "string"
-                    },
-                    {
-                      "const": "digital",
-                      "type": "string"
-                    }
-                  ]
+                "fulfillment": {
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "description": "Delivery options the seller advertises. At most one entry per method. Buyers match if the listing's fulfillment intersects their delivery filter.",
+                  "type": "array",
+                  "items": {
+                    "description": "One delivery option a seller offers on a listing. The 'ship' variant carries shipsTo and the source country; 'pickup' carries the meeting-point coordinates and area; 'digital' has no extra fields.",
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "const": "pickup",
+                            "type": "string"
+                          },
+                          "location": {
+                            "additionalProperties": false,
+                            "type": "object",
+                            "properties": {
+                              "lat": {
+                                "minimum": -90,
+                                "maximum": 90,
+                                "type": "number"
+                              },
+                              "lng": {
+                                "minimum": -180,
+                                "maximum": 180,
+                                "type": "number"
+                              },
+                              "area": {
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "lat",
+                              "lng",
+                              "area"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "method",
+                          "location"
+                        ]
+                      },
+                      {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "const": "ship",
+                            "type": "string"
+                          },
+                          "from": {
+                            "additionalProperties": false,
+                            "type": "object",
+                            "properties": {
+                              "country": {
+                                "pattern": "^[A-Z]{2}$",
+                                "description": "ISO 3166-1 alpha-2 country code (e.g. GR, US)",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "country"
+                            ]
+                          },
+                          "shipsTo": {
+                            "minItems": 1,
+                            "maxItems": 250,
+                            "type": "array",
+                            "items": {
+                              "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                              "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "method",
+                          "from",
+                          "shipsTo"
+                        ]
+                      },
+                      {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "const": "digital",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "method"
+                        ]
+                      }
+                    ]
+                  }
                 },
                 "condition": {
                   "anyOf": [
@@ -2287,16 +2992,6 @@
                           "type": "string"
                         }
                       ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "location_area": {
-                  "anyOf": [
-                    {
-                      "type": "string"
                     },
                     {
                       "type": "null"
@@ -2342,9 +3037,8 @@
                 "asking_price",
                 "currency",
                 "category",
-                "delivery_method",
+                "fulfillment",
                 "condition",
-                "location_area",
                 "seller_handle",
                 "seller_rating",
                 "seller_trades",
@@ -2367,7 +3061,7 @@
     },
     "klodi_searches_create": {
       "subject": "p2p.v1.searches.create",
-      "description": "Register a persistent (standing) search. The marketplace evaluates new listings against this search and emits a `search.match` notification on every match. min_price and max_price are optional integer cents; min_price ≤ max_price.",
+      "description": "Register a persistent (standing) search. The marketplace evaluates new listings against this search and emits a `search.match` notification on every match. `delivery` defaults to { method: 'any' } when omitted.",
       "params": {
         "type": "object",
         "properties": {
@@ -2437,28 +3131,73 @@
             "minimum": 0,
             "type": "integer"
           },
-          "delivery_method": {
-            "description": "Delivery method",
+          "delivery": {
+            "description": "Buyer's delivery preference. Pick the variant matching the buyer's intent — fields from one variant cannot appear on another (the type system rejects it).",
             "anyOf": [
               {
-                "const": "pickup",
-                "type": "string"
+                "additionalProperties": false,
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "const": "pickup",
+                    "type": "string"
+                  },
+                  "radiusKm": {
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "description": "Km radius around buyer's profile location. Omit for any-distance pickup match.",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "method"
+                ]
               },
               {
-                "const": "ship",
-                "type": "string"
+                "additionalProperties": false,
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "const": "ship",
+                    "type": "string"
+                  },
+                  "to": {
+                    "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                    "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "method"
+                ]
               },
               {
-                "const": "digital",
-                "type": "string"
+                "additionalProperties": false,
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "const": "digital",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "method"
+                ]
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "const": "any",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "method"
+                ]
               }
             ]
-          },
-          "pickup_radius_km": {
-            "type": "number"
-          },
-          "ships_to": {
-            "type": "string"
           }
         },
         "required": [
@@ -2550,27 +3289,71 @@
                   }
                 ]
               },
-              "delivery_method": {
+              "delivery": {
+                "description": "Buyer's delivery preference. Pick the variant matching the buyer's intent — fields from one variant cannot appear on another (the type system rejects it).",
                 "anyOf": [
                   {
-                    "description": "Delivery method",
-                    "anyOf": [
-                      {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "properties": {
+                      "method": {
                         "const": "pickup",
                         "type": "string"
                       },
-                      {
-                        "const": "ship",
-                        "type": "string"
-                      },
-                      {
-                        "const": "digital",
-                        "type": "string"
+                      "radiusKm": {
+                        "minimum": 1,
+                        "maximum": 1000,
+                        "description": "Km radius around buyer's profile location. Omit for any-distance pickup match.",
+                        "type": "integer"
                       }
+                    },
+                    "required": [
+                      "method"
                     ]
                   },
                   {
-                    "type": "null"
+                    "additionalProperties": false,
+                    "type": "object",
+                    "properties": {
+                      "method": {
+                        "const": "ship",
+                        "type": "string"
+                      },
+                      "to": {
+                        "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                        "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "method"
+                    ]
+                  },
+                  {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "properties": {
+                      "method": {
+                        "const": "digital",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "method"
+                    ]
+                  },
+                  {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "properties": {
+                      "method": {
+                        "const": "any",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "method"
+                    ]
                   }
                 ]
               },
@@ -2597,36 +3380,14 @@
                     "type": "null"
                   }
                 ]
-              },
-              "pickup_radius_km": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "ships_to": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               }
             },
             "required": [
               "query",
               "category",
-              "delivery_method",
+              "delivery",
               "min_price",
-              "max_price",
-              "pickup_radius_km",
-              "ships_to"
+              "max_price"
             ]
           }
         },
@@ -2768,27 +3529,71 @@
                         }
                       ]
                     },
-                    "delivery_method": {
+                    "delivery": {
+                      "description": "Buyer's delivery preference. Pick the variant matching the buyer's intent — fields from one variant cannot appear on another (the type system rejects it).",
                       "anyOf": [
                         {
-                          "description": "Delivery method",
-                          "anyOf": [
-                            {
+                          "additionalProperties": false,
+                          "type": "object",
+                          "properties": {
+                            "method": {
                               "const": "pickup",
                               "type": "string"
                             },
-                            {
-                              "const": "ship",
-                              "type": "string"
-                            },
-                            {
-                              "const": "digital",
-                              "type": "string"
+                            "radiusKm": {
+                              "minimum": 1,
+                              "maximum": 1000,
+                              "description": "Km radius around buyer's profile location. Omit for any-distance pickup match.",
+                              "type": "integer"
                             }
+                          },
+                          "required": [
+                            "method"
                           ]
                         },
                         {
-                          "type": "null"
+                          "additionalProperties": false,
+                          "type": "object",
+                          "properties": {
+                            "method": {
+                              "const": "ship",
+                              "type": "string"
+                            },
+                            "to": {
+                              "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$",
+                              "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "method"
+                          ]
+                        },
+                        {
+                          "additionalProperties": false,
+                          "type": "object",
+                          "properties": {
+                            "method": {
+                              "const": "digital",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "method"
+                          ]
+                        },
+                        {
+                          "additionalProperties": false,
+                          "type": "object",
+                          "properties": {
+                            "method": {
+                              "const": "any",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "method"
+                          ]
                         }
                       ]
                     },
@@ -2815,36 +3620,14 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "pickup_radius_km": {
-                      "anyOf": [
-                        {
-                          "type": "number"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "ships_to": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
                     }
                   },
                   "required": [
                     "query",
                     "category",
-                    "delivery_method",
+                    "delivery",
                     "min_price",
-                    "max_price",
-                    "pickup_radius_km",
-                    "ships_to"
+                    "max_price"
                   ]
                 },
                 "created_at": {

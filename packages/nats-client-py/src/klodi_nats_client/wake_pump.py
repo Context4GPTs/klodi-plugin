@@ -7,9 +7,8 @@ channels) on a ``KlodiClient``-shaped client into one cohesive lifecycle
 persona never accidentally runs two competing pumps inside the same
 process.
 
-Per ``docs/plans/2026-04-28-host-agnostic-wake-pump.md``: this module
-moves subscribe ownership out of each adapter's lifecycle wiring into the
-shared library so adapters shrink to handler wiring (~20 lines).
+Subscribe ownership lives in this shared library so adapters shrink
+to handler wiring (~20 lines).
 """
 
 from __future__ import annotations

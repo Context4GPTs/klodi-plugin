@@ -1,16 +1,16 @@
 /**
  * OpenClaw adapter wiring for the shared `WakePump`.
  *
- * Per `docs/plans/2026-04-28-host-agnostic-wake-pump.md`: the previous
- * lifecycle-hook gate (`gateway:startup` → subscribe) is unreliable
- * across host SDK versions. The pump replaces it with eager subscription
- * the moment credentials are present — at `register()` time when the
- * adapter loads against an already-registered persona, the `klodi_register`
- * success path on first-run, or a backoff retry from this module when
- * the register-time start fails (e.g., flaky NATS-WS handshake at boot —
- * without the retry an already-registered persona would stay inbound-deaf
- * until process restart, since `klodi_register` short-circuits with
- * `already_registered` and never re-runs the start path).
+ * The previous lifecycle-hook gate (`gateway:startup` → subscribe) was
+ * unreliable across host SDK versions. The pump replaces it with eager
+ * subscription the moment credentials are present — at `register()`
+ * time when the adapter loads against an already-registered persona,
+ * the `klodi_register` success path on first-run, or a backoff retry
+ * from this module when the register-time start fails (e.g., flaky
+ * NATS-WS handshake at boot — without the retry an already-registered
+ * persona would stay inbound-deaf until process restart, since
+ * `klodi_register` short-circuits with `already_registered` and never
+ * re-runs the start path).
  */
 
 import {

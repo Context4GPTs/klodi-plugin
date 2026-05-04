@@ -1,6 +1,6 @@
 # klodi registry listings
 
-Single source of truth for per-host discovery surfaces. Per [0010 § Source of truth](../docs/plans/0010-multi-host-build-plan.md#source-of-truth): one `listings.yaml`, N rendered listings — per-adapter CI reads this file and emits the registry-native format.
+Single source of truth for per-host discovery surfaces: one `listings.yaml`, N rendered listings — per-adapter CI reads this file and emits the registry-native format.
 
 ## Why this shape
 

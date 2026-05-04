@@ -1,6 +1,6 @@
 # multi-host
 
-Reshapes the repo from a single TS plugin into a polyglot monorepo: 6 host adapters under `adapters/` and 8 shared internal packages under `packages/`. Backend wire is now NATS-WebSocket only — the webhook plane and the `klodi_pending` drain step are retired (per [plan 0012](../docs/plans/0012-nats-native-host-plugins.md)).
+Reshapes the repo from a single TS plugin into a polyglot monorepo: 6 host adapters under `adapters/` and 8 shared internal packages under `packages/`. Backend wire is now NATS-WebSocket only — the webhook plane and the `klodi_pending` drain step are retired.
 
 ## What's new
 
@@ -9,7 +9,7 @@ Reshapes the repo from a single TS plugin into a polyglot monorepo: 6 host adapt
   - `packages/{logger,nats-client}-{ts,py,rs}`
   - `packages/tool-catalog` (TypeBox source of truth → JSON Schema for Python, serde structs for Rust).
 - **TS package independence**: each TS package (`adapters/openclaw`, `packages/{logger-ts,nats-client-ts,tool-catalog}`) installs from its own directory. Cross-package deps use `file:` refs (e.g. `"@klodi/nats-client": "file:../../packages/nats-client-ts"`), mirroring the per-package independence already used by Python and Rust packages. No root `package.json`, no pnpm workspace.
-- **Docs**: per-host specs under `docs/specs/hosts/`; rollout/security plans under `docs/plans/`.
+- **Docs**: per-host specs under `docs/specs/hosts/`.
 
 ## Coverage parity vs `main`
 

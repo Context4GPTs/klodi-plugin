@@ -6,7 +6,7 @@
  * a single persistent NATS-WS connection that carries tool calls and
  * wakes, and a bundled skill.
  *
- * Wake delivery (per `docs/plans/2026-04-28-host-agnostic-wake-pump.md`):
+ * Wake delivery:
  *
  *   - Tool calls       → NATS request/reply (KlodiClient.request)
  *   - Notifications    → JetStream durable consumer
