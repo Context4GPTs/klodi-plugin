@@ -24,9 +24,14 @@
  * Subscription lifecycle is owned by the shared `WakePump` in
  * `@klodi/nats-client`. The pump is eagerly started here at register()
  * time when credentials are present, and from `klodi_register`'s success
- * path on first-run. There is no host-SDK lifecycle dependency — the
- * `gateway:startup` hook on OpenClaw v2026.4.15 fires inconsistently
- * and silently took wake delivery offline before this refactor.
+ * path on first-run. If the register-time start throws (flaky NATS-WS
+ * handshake at boot), a backoff retry in `service/wake-pump.ts` revives
+ * the pump without waiting for `klodi_register` — already-registered
+ * personas never re-enter that path and would otherwise stay
+ * inbound-deaf until process restart. There is no host-SDK lifecycle
+ * dependency — the `gateway:startup` hook on OpenClaw v2026.4.15 fires
+ * inconsistently and silently took wake delivery offline before this
+ * refactor.
  *
  * Disk posture:
  *   - All state under `$klodi_home` (default
@@ -49,6 +54,7 @@ import {
 import type { PluginAPILike } from "./lib/plugin-api-types.js";
 import { closeClient } from "./lib/client.js";
 import {
+  scheduleWakePumpRetry,
   startWakePumpIfPossible,
   stopWakePump,
 } from "./service/wake-pump.js";
@@ -89,8 +95,9 @@ export default definePluginEntry({
         error: err instanceof Error ? err.message : String(err),
         message:
           "Wake pump did not start at register() — outbound tools still"
-          + " work; klodi_register's success path will retry the start.",
+          + " work; retrying in the background.",
       });
+      scheduleWakePumpRetry(api);
     });
 
     bindShutdown(api);

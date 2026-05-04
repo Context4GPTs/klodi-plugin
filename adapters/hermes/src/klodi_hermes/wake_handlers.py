@@ -13,11 +13,19 @@ agents see the same shape regardless of host.
 
 Hermes's daemon is long-running; the connection lives for the
 daemon's lifetime, and consumer pull loops live on a dedicated
-asyncio thread (see ``client.py``).
+asyncio thread (see ``client.py``). The bridge ctx's
+``inject_message`` blocks on a ``hermes chat --continue`` subprocess
+for the agent turn's duration, so the inject is dispatched off the
+loop via ``asyncio.to_thread``. Otherwise the running subprocess
+freezes the second consumer's pull-fetch and the nats-py WS
+heartbeat, and the WS reconnect can't run until after the chat
+exits — at which point the consumer is dead and silently stops
+delivering wakes.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -170,7 +178,7 @@ async def handle_notification(event: dict[str, Any]) -> None:
     event_id = str(event.get("event_id", ""))
     log.info("wake_received kind=%s event_id=%s", kind, event_id)
     text = format_notification_wake(event)
-    _inject(text, kind=kind)
+    await _inject(text, kind=kind)
 
 
 async def handle_channel_message(event: dict[str, Any]) -> None:
@@ -180,10 +188,10 @@ async def handle_channel_message(event: dict[str, Any]) -> None:
         "wake_received kind=channel.message event_id=%s", event_id,
     )
     text = format_channel_wake(event)
-    _inject(text, kind="channel.message")
+    await _inject(text, kind="channel.message")
 
 
-def _inject(text: str, *, kind: str) -> None:
+async def _inject(text: str, *, kind: str) -> None:
     ctx = _CTX
     if ctx is None:
         log.info("wake_no_ctx kind=%s", kind)
@@ -193,7 +201,14 @@ def _inject(text: str, *, kind: str) -> None:
         log.info("wake_no_inject_method kind=%s", kind)
         return
     try:
-        inject(text, role="system")
+        # ``inject`` is sync and, in the bridge ctx, blocks on a
+        # ``hermes chat --continue`` subprocess for the agent turn's
+        # duration. Run it on a worker thread so the asyncio loop —
+        # shared by both consumer pull-fetches and the nats-py WS
+        # heartbeat — keeps ticking. Cross-inject serialization stays
+        # in ``BridgeCtx._inject_lock`` (threading.Lock), which is
+        # already correct for cross-thread callers.
+        await asyncio.to_thread(inject, text, role="system")
     except BaseException as err:  # noqa: BLE001 — wake is best-effort
         log.warning("wake_inject_failed kind=%s error=%s", kind, err)
 

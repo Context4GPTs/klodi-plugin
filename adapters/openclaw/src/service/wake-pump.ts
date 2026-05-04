@@ -5,8 +5,12 @@
  * lifecycle-hook gate (`gateway:startup` → subscribe) is unreliable
  * across host SDK versions. The pump replaces it with eager subscription
  * the moment credentials are present — at `register()` time when the
- * adapter loads against an already-registered persona, or via the
- * `klodi_register` success path on first-run.
+ * adapter loads against an already-registered persona, the `klodi_register`
+ * success path on first-run, or a backoff retry from this module when
+ * the register-time start fails (e.g., flaky NATS-WS handshake at boot —
+ * without the retry an already-registered persona would stay inbound-deaf
+ * until process restart, since `klodi_register` short-circuits with
+ * `already_registered` and never re-runs the start path).
  */
 
 import {
@@ -133,8 +137,13 @@ export async function startWakePump(api: PluginAPILike): Promise<WakePump> {
  * Stop the wake pump and clear the local reference. Idempotent — safe
  * to call when no pump is running. Used by `klodi_setup_repair` (creds
  * cleared → pump must drain) and on process-exit signals.
+ *
+ * Cancels any pending start-retry timer. Without this, a long-backoff
+ * retry could fire after the process has begun draining and resurrect
+ * the pump mid-shutdown.
  */
 export async function stopWakePump(api: PluginAPILike): Promise<void> {
+  cancelRetry();
   if (pump === null) return;
   const current = pump;
   pump = null;
@@ -146,6 +155,91 @@ export async function stopWakePump(api: PluginAPILike): Promise<void> {
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+/**
+ * Outer backoff schedule for `scheduleWakePumpRetry`. Slower than
+ * `attachWithRetry`'s inner ~75s loop so a wedged subscribe doesn't
+ * burn the full outer schedule in the first minute. 30s → 60s → 120s
+ * → 240s → 300s → 300s ...; no attempt cap (a permanently-down NATS
+ * will log one warning per ~5min, which is the signal operators want).
+ */
+const RETRY_BACKOFF_MS = (attempt: number): number => {
+  const exp = Math.min(attempt - 1, 4);
+  return Math.min(30_000 * 2 ** exp, 300_000);
+};
+
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryAttempt = 0;
+let retryDelayOverride: ((attempt: number) => number) | null = null;
+
+/**
+ * Schedule a background start retry after `wake_pump_register_start_failed`.
+ *
+ * Independent of `klodi_register`'s success path so already-registered
+ * personas (which never re-enter `klodi_register`) recover without a
+ * process restart. Idempotent — re-arming while a timer is queued or
+ * the pump is already running is a no-op.
+ *
+ * The timer is `unref`'d so it never pins the event loop on its own;
+ * shutdown paths still cancel it explicitly via `stopWakePump`.
+ */
+export function scheduleWakePumpRetry(api: PluginAPILike): void {
+  if (retryTimer !== null) return;
+  if (pump !== null) return;
+  retryAttempt += 1;
+  const schedule = retryDelayOverride ?? RETRY_BACKOFF_MS;
+  const delay = schedule(retryAttempt);
+  api.logger.info("wake_pump_retry_scheduled", {
+    attempt: retryAttempt,
+    delay_ms: delay,
+  });
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    void runRetryAttempt(api);
+  }, delay);
+  retryTimer.unref?.();
+}
+
+async function runRetryAttempt(api: PluginAPILike): Promise<void> {
+  try {
+    const result = await startWakePumpIfPossible(api);
+    if (result === null) {
+      // Skipped (non-gateway runtime or creds removed). Stop retrying —
+      // re-entry happens via klodi_register on first-run or the next
+      // process boot.
+      retryAttempt = 0;
+      return;
+    }
+    api.logger.info("wake_pump_retry_succeeded", { attempt: retryAttempt });
+    retryAttempt = 0;
+  } catch (err) {
+    api.logger.warn("wake_pump_retry_failed", {
+      attempt: retryAttempt,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    scheduleWakePumpRetry(api);
+  }
+}
+
+function cancelRetry(): void {
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  retryAttempt = 0;
+}
+
+/** Test escape hatches. Not exported from the package barrel. */
+export function __resetWakePumpRetryForTests(): void {
+  cancelRetry();
+  retryDelayOverride = null;
+}
+
+export function __setWakePumpRetryDelayForTests(
+  fn: ((attempt: number) => number) | null,
+): void {
+  retryDelayOverride = fn;
 }
 
 /**

@@ -34,8 +34,20 @@
  *      inspected. We pass `hook:klodi:<reason>` so kind=`hook`,
  *      `shouldBypassFileGates` and `shouldInspectPendingEvents` both
  *      become true, and the queued event feeds into the turn's prompt.
+ *   6. Diagnostic snapshot: `wake_enqueued` carries a session-store
+ *      readout (`store_*`, `entry_exists`, `most_recent_*`). Purely
+ *      diagnostic — does not change which session we target. Lets us
+ *      confirm in production whether a failing wake landed on a key
+ *      with no entry (e.g., the canonical `agent:<id>:main` while the
+ *      user's only session is `agent:<id>:explicit:<sid>` from a TUI
+ *      run). All fields are best-effort: any read failure falls
+ *      through to `store_read: "missing" | "error"` and the wake
+ *      proceeds unchanged.
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { PluginAPILike } from "../lib/plugin-api-types.js";
 
 export async function wakeAgent(
@@ -55,7 +67,11 @@ export async function wakeAgent(
     });
     return;
   }
-  api.logger.info("wake_enqueued", { reason, sessionKey });
+  api.logger.info("wake_enqueued", {
+    reason,
+    sessionKey,
+    ...inspectSessionStore(api, sessionKey),
+  });
   const heartbeatReason = `hook:klodi:${reason}`;
   try {
     api.runtime.system.requestHeartbeatNow({
@@ -119,6 +135,176 @@ function asTrimmed(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Best-effort snapshot of OpenClaw's `sessions.json` at wake-enqueue
+ * time. Pure diagnostic: never throws, never mutates, never affects
+ * which session we target.
+ *
+ * Purpose: surface the smoking-gun symptom where a wake lands on a
+ * sessionKey that has no entry — typically the canonical
+ * `agent:<id>:main` while the user's only live session is
+ * `agent:<id>:explicit:<sessionId>` from a TUI / `command run`
+ * invocation. The heartbeat-runner accepts the forced key but creates
+ * a fresh empty transcript with no skill context, and the user (still
+ * in their explicit session) sees nothing happen.
+ *
+ * Path resolution mirrors openclaw's
+ * `resolveStorePath(cfg.session?.store, { agentId })` and
+ * `resolveStateDir`/`resolveDefaultSessionStorePath`. Replicated rather
+ * than imported because the plugin-sdk runtime isn't reachable from an
+ * external plugin's node_modules. If openclaw rewires either, this
+ * snapshot degrades to `store_read: "missing" | "error"` and stops
+ * being useful — that's the failure mode we accept for a diagnostic.
+ *
+ * `most_recent_key` excludes `:subagent:` and trailing `:heartbeat`
+ * keys: the heartbeat runner refuses to route forced wakes onto those
+ * (subagents redirect back to main; `:heartbeat` is the runner's own
+ * isolated lane), so they're never useful targets.
+ */
+type SessionStoreEntry = { updatedAt?: unknown };
+type SessionStore = Record<string, SessionStoreEntry | null | undefined>;
+
+interface SessionStoreDiagnostic {
+  store_path: string;
+  store_read: "ok" | "missing" | "error";
+  store_entries: number;
+  entry_exists: boolean;
+  most_recent_key: string | null;
+  most_recent_age_ms: number | null;
+  most_recent_matches_resolved: boolean | null;
+}
+
+function inspectSessionStore(
+  api: PluginAPILike,
+  sessionKey: string,
+): SessionStoreDiagnostic {
+  try {
+    const agentId = resolveAgentIdForStore(api);
+    const storePath = resolveSessionStorePath(api, agentId);
+    return readStoreSnapshot(storePath, sessionKey);
+  } catch {
+    return {
+      store_path: "",
+      store_read: "error",
+      store_entries: 0,
+      entry_exists: false,
+      most_recent_key: null,
+      most_recent_age_ms: null,
+      most_recent_matches_resolved: null,
+    };
+  }
+}
+
+function resolveAgentIdForStore(api: PluginAPILike): string {
+  const cfg = api.config as RuntimeConfigShape | undefined;
+  const agents = cfg?.agents?.list ?? [];
+  return asTrimmed(agents.find(isDefaultAgent)?.id)
+    ?? asTrimmed(agents.find(hasAgentId)?.id)
+    ?? "main";
+}
+
+function resolveSessionStorePath(
+  api: PluginAPILike,
+  agentId: string,
+): string {
+  const cfg = api.config as { session?: { store?: unknown } } | undefined;
+  const tpl = asTrimmed(cfg?.session?.store);
+  if (tpl !== undefined) {
+    const expanded = tpl.replaceAll("{agentId}", agentId);
+    return expandHomePrefix(expanded);
+  }
+  // Default OpenClaw layout. OPENCLAW_STATE_DIR overrides the home-relative
+  // root; otherwise we land at ~/.openclaw. The legacy `.clawdbot` fallback
+  // openclaw still recognizes is intentionally NOT mirrored here — if a
+  // user is on that path, the diagnostic reports `store_read: "missing"`
+  // and the operator knows to inspect the real location.
+  const stateOverride = asTrimmed(process.env["OPENCLAW_STATE_DIR"]);
+  const stateDir = stateOverride !== undefined
+    ? expandHomePrefix(stateOverride)
+    : join(homedir(), ".openclaw");
+  return join(stateDir, "agents", agentId, "sessions", "sessions.json");
+}
+
+function expandHomePrefix(p: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/") || p.startsWith("~\\")) {
+    return join(homedir(), p.slice(2));
+  }
+  return p;
+}
+
+function readStoreSnapshot(
+  storePath: string,
+  sessionKey: string,
+): SessionStoreDiagnostic {
+  if (!existsSync(storePath)) {
+    return {
+      store_path: storePath,
+      store_read: "missing",
+      store_entries: 0,
+      entry_exists: false,
+      most_recent_key: null,
+      most_recent_age_ms: null,
+      most_recent_matches_resolved: null,
+    };
+  }
+  let store: SessionStore;
+  try {
+    const parsed = JSON.parse(readFileSync(storePath, "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {
+        store_path: storePath,
+        store_read: "error",
+        store_entries: 0,
+        entry_exists: false,
+        most_recent_key: null,
+        most_recent_age_ms: null,
+        most_recent_matches_resolved: null,
+      };
+    }
+    store = parsed as SessionStore;
+  } catch {
+    return {
+      store_path: storePath,
+      store_read: "error",
+      store_entries: 0,
+      entry_exists: false,
+      most_recent_key: null,
+      most_recent_age_ms: null,
+      most_recent_matches_resolved: null,
+    };
+  }
+
+  const entries = Object.entries(store);
+  const targetEntry = store[sessionKey];
+  const entryExists = targetEntry !== undefined && targetEntry !== null;
+
+  let mostRecentKey: string | null = null;
+  let mostRecentUpdatedAt = -1;
+  for (const [key, entry] of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    if (key.includes(":subagent:")) continue;
+    if (key.endsWith(":heartbeat")) continue;
+    const updatedAt = (entry as SessionStoreEntry).updatedAt;
+    if (typeof updatedAt === "number" && updatedAt > mostRecentUpdatedAt) {
+      mostRecentUpdatedAt = updatedAt;
+      mostRecentKey = key;
+    }
+  }
+
+  return {
+    store_path: storePath,
+    store_read: "ok",
+    store_entries: entries.length,
+    entry_exists: entryExists,
+    most_recent_key: mostRecentKey,
+    most_recent_age_ms:
+      mostRecentKey !== null ? Date.now() - mostRecentUpdatedAt : null,
+    most_recent_matches_resolved:
+      mostRecentKey !== null ? mostRecentKey === sessionKey : null,
+  };
 }
 
 /**

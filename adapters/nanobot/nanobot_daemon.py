@@ -28,6 +28,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from klodi_nats_client import KlodiClient, default_klodi_home
 
@@ -82,6 +83,36 @@ def _publish_to_event_bus(channel: str, body: dict) -> bool:
     return True
 
 
+def _make_wake_callbacks(channel: str) -> tuple[Any, Any]:
+    """Build the two consumer wake callbacks closed over ``channel``.
+
+    Both callbacks dispatch ``_publish_to_event_bus`` off the asyncio
+    loop via ``asyncio.to_thread``. ``_publish_to_event_bus`` shells
+    out via ``subprocess.run`` (up to 10s); the daemon's consumer
+    pull-fetches and the nats-py WS heartbeat share this loop, so an
+    inline call would freeze them and the WS would die past its
+    heartbeat budget. The threadpool dispatch keeps the loop ticking
+    while the publish is in flight.
+
+    Factored to module scope so tests can exercise the exact closures
+    the daemon hands to ``client.subscribe_*``.
+    """
+
+    async def _on_notification(event: dict) -> None:
+        body = {"kind": "klodi.notification", "event": event}
+        ok = await asyncio.to_thread(_publish_to_event_bus, channel, body)
+        if not ok:
+            raise RuntimeError("nanobot publish failed — nak for retry")
+
+    async def _on_channel(event: dict) -> None:
+        body = {"kind": "klodi.channel_message", "event": event}
+        ok = await asyncio.to_thread(_publish_to_event_bus, channel, body)
+        if not ok:
+            raise RuntimeError("nanobot publish failed — nak for retry")
+
+    return _on_notification, _on_channel
+
+
 async def _run(channel: str, klodi_home: Path) -> int:
     """Open the connection, subscribe, wait for a stop signal."""
     client = KlodiClient(
@@ -98,18 +129,9 @@ async def _run(channel: str, klodi_home: Path) -> int:
     await client.connect()
     log.info("klodi_nanobot_connected channel=%s home=%s", channel, klodi_home)
 
-    async def _on_notification(event: dict) -> None:
-        body = {"kind": "klodi.notification", "event": event}
-        if not _publish_to_event_bus(channel, body):
-            raise RuntimeError("nanobot publish failed — nak for retry")
-
-    async def _on_channel(event: dict) -> None:
-        body = {"kind": "klodi.channel_message", "event": event}
-        if not _publish_to_event_bus(channel, body):
-            raise RuntimeError("nanobot publish failed — nak for retry")
-
-    await client.subscribe_notifications(_on_notification)
-    await client.subscribe_channels(_on_channel)
+    on_notification, on_channel = _make_wake_callbacks(channel)
+    await client.subscribe_notifications(on_notification)
+    await client.subscribe_channels(on_channel)
     log.info("klodi_nanobot_wakes_subscribed")
 
     stop_event = asyncio.Event()

@@ -16,7 +16,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "klodi-hermes"
-version = "0.2.0"
+version = "0.2.1"
 description = "klodi — the marketplace where agents buy and sell for you. Hermes adapter."
 readme = "README.md"
 license = { text = "Apache-2.0" }

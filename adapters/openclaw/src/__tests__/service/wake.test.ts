@@ -13,7 +13,10 @@
  *     invariant — heartbeat flushes the queue and a flush before enqueue is
  *     the bug this helper exists to prevent).
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { wakeAgent } from "../../service/wake.js";
 import type { PluginAPI } from "openclaw/plugin-sdk";
 
@@ -206,6 +209,198 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
 
       const failed = warnEvents.find((e) => e.event === "wake_failed");
       expect(failed?.ctx["raw"]).toBe(JSON.stringify(rawThrow));
+    });
+  });
+
+  describe("session-store diagnostic on wake_enqueued", () => {
+    // The plugin reads sessions.json on every wake to surface the void-session
+    // symptom: a wake that lands on `agent:<id>:main` while the user's only
+    // live session is `agent:<id>:explicit:<sid>` from a TUI run. The
+    // heartbeat-runner accepts the forced key, runs in an empty fresh
+    // transcript with no skill context, and the user (still in their explicit
+    // session) sees nothing happen. The diagnostic doesn't change behavior —
+    // it just makes that symptom visible in production logs.
+    let tempDir: string;
+    let storePath: string;
+    let originalStateDir: string | undefined;
+
+    beforeEach(() => {
+      tempDir = mkdtempSync(join(tmpdir(), "klodi-wake-store-"));
+      storePath = join(tempDir, "sessions.json");
+      // Isolate from any real ~/.openclaw on the dev machine when the test
+      // exercises the env-default code path (no cfg.session.store).
+      originalStateDir = process.env["OPENCLAW_STATE_DIR"];
+      process.env["OPENCLAW_STATE_DIR"] = tempDir;
+    });
+
+    afterEach(() => {
+      if (originalStateDir === undefined) {
+        delete process.env["OPENCLAW_STATE_DIR"];
+      } else {
+        process.env["OPENCLAW_STATE_DIR"] = originalStateDir;
+      }
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    function findEnqueued(
+      events: Array<{ event: string; ctx: Record<string, unknown> }>,
+    ): Record<string, unknown> {
+      const e = events.find((ev) => ev.event === "wake_enqueued");
+      expect(e, "expected a wake_enqueued event").toBeTruthy();
+      return e!.ctx;
+    }
+
+    it("entry_exists=true and most_recent_matches_resolved=true when canonical key is populated", async () => {
+      writeFileSync(
+        storePath,
+        JSON.stringify({
+          "agent:main:main": { sessionId: "uuid-main", updatedAt: Date.now() },
+        }),
+      );
+      const { api, infoEvents } = createFakeApi({
+        config: { session: { store: storePath } },
+      });
+
+      await wakeAgent(api, "x", "y");
+
+      const ctx = findEnqueued(infoEvents);
+      expect(ctx["store_read"]).toBe("ok");
+      expect(ctx["store_entries"]).toBe(1);
+      expect(ctx["entry_exists"]).toBe(true);
+      expect(ctx["most_recent_key"]).toBe("agent:main:main");
+      expect(ctx["most_recent_matches_resolved"]).toBe(true);
+    });
+
+    it("flags the smoking-gun: entry_exists=false while most_recent_key points to an explicit session", async () => {
+      // The exact scenario the diagnostic exists to catch: the canonical
+      // wake target has no entry, and the user's only session is explicit
+      // (TUI / `openclaw command run`). Operators reading this log should
+      // immediately see entry_exists=false, most_recent_matches_resolved=false,
+      // most_recent_key=agent:main:explicit:* and know the wake landed in a
+      // void.
+      writeFileSync(
+        storePath,
+        JSON.stringify({
+          "agent:main:explicit:tui-1": {
+            sessionId: "uuid-tui",
+            updatedAt: Date.now(),
+          },
+        }),
+      );
+      const { api, infoEvents } = createFakeApi({
+        config: { session: { store: storePath } },
+      });
+
+      await wakeAgent(api, "x", "y");
+
+      const ctx = findEnqueued(infoEvents);
+      expect(ctx["store_read"]).toBe("ok");
+      expect(ctx["entry_exists"]).toBe(false);
+      expect(ctx["most_recent_key"]).toBe("agent:main:explicit:tui-1");
+      expect(ctx["most_recent_matches_resolved"]).toBe(false);
+    });
+
+    it("excludes :subagent: and :heartbeat keys from most_recent_key even when they have higher updatedAt", async () => {
+      // Heartbeat-runner refuses forced wakes onto subagent (redirects to main)
+      // and :heartbeat (its own isolated lane) keys, so reporting either as the
+      // most-recent legitimate target would be misleading. Both must be skipped
+      // even if their updatedAt is the highest in the store.
+      const now = Date.now();
+      writeFileSync(
+        storePath,
+        JSON.stringify({
+          "agent:main:main": { sessionId: "u-main", updatedAt: now - 1_000 },
+          "agent:main:explicit:abc:subagent:child": {
+            sessionId: "u-sub",
+            updatedAt: now - 500,
+          },
+          "agent:main:explicit:def:heartbeat": {
+            sessionId: "u-hb",
+            updatedAt: now - 100,
+          },
+        }),
+      );
+      const { api, infoEvents } = createFakeApi({
+        config: { session: { store: storePath } },
+      });
+
+      await wakeAgent(api, "x", "y");
+
+      const ctx = findEnqueued(infoEvents);
+      expect(ctx["store_entries"]).toBe(3);
+      expect(ctx["most_recent_key"]).toBe("agent:main:main");
+    });
+
+    it("reports store_read='missing' when sessions.json doesn't exist", async () => {
+      // No file written. The cfg points at a path that doesn't exist; the
+      // diagnostic must degrade gracefully — wake still proceeds.
+      const { api, infoEvents, calls } = createFakeApi({
+        config: { session: { store: storePath } },
+      });
+
+      await wakeAgent(api, "x", "y");
+
+      const ctx = findEnqueued(infoEvents);
+      expect(ctx["store_read"]).toBe("missing");
+      expect(ctx["store_entries"]).toBe(0);
+      expect(ctx["entry_exists"]).toBe(false);
+      expect(ctx["most_recent_key"]).toBeNull();
+      // Behavior unaffected — enqueue + heartbeat still fired.
+      expect(calls.map((c) => c.fn)).toEqual(["enqueue", "heartbeat"]);
+    });
+
+    it("reports store_read='error' when sessions.json contains malformed JSON", async () => {
+      writeFileSync(storePath, "{not-json");
+      const { api, infoEvents } = createFakeApi({
+        config: { session: { store: storePath } },
+      });
+
+      await wakeAgent(api, "x", "y");
+
+      const ctx = findEnqueued(infoEvents);
+      expect(ctx["store_read"]).toBe("error");
+      expect(ctx["store_entries"]).toBe(0);
+      expect(ctx["entry_exists"]).toBe(false);
+    });
+
+    it("interpolates {agentId} in cfg.session.store template", async () => {
+      // Mirrors openclaw's resolveStorePath behavior: when the configured
+      // store template embeds {agentId}, expand it before reading. Lets the
+      // diagnostic find the right file when a user runs a non-default agent.
+      writeFileSync(
+        storePath,
+        JSON.stringify({
+          "agent:custom:main": {
+            sessionId: "u-custom",
+            updatedAt: Date.now(),
+          },
+        }),
+      );
+      const templated = join(tempDir, "{agentId}-sessions.json");
+      // Move file to match the template expansion target.
+      const expanded = join(tempDir, "custom-sessions.json");
+      writeFileSync(
+        expanded,
+        JSON.stringify({
+          "agent:custom:main": {
+            sessionId: "u-custom",
+            updatedAt: Date.now(),
+          },
+        }),
+      );
+      const { api, infoEvents } = createFakeApi({
+        config: {
+          session: { store: templated },
+          agents: { list: [{ id: "custom", default: true }] },
+        },
+      });
+
+      await wakeAgent(api, "x", "y");
+
+      const ctx = findEnqueued(infoEvents);
+      expect(ctx["store_path"]).toBe(expanded);
+      expect(ctx["store_read"]).toBe("ok");
+      expect(ctx["entry_exists"]).toBe(true);
     });
   });
 

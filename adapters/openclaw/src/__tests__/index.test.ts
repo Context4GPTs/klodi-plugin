@@ -35,6 +35,7 @@ vi.mock("../tools/setup.js", () => ({ registerSetupTools: vi.fn() }));
 vi.mock("../service/wake-pump.js", () => ({
   startWakePumpIfPossible: vi.fn().mockResolvedValue(null),
   stopWakePump: vi.fn().mockResolvedValue(undefined),
+  scheduleWakePumpRetry: vi.fn(),
 }));
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -46,7 +47,10 @@ import { registerOfferTools } from "../tools/offers.js";
 import { registerTransactionTools } from "../tools/transactions.js";
 import { registerMediaTools } from "../tools/media.js";
 import { registerSetupTools } from "../tools/setup.js";
-import { startWakePumpIfPossible } from "../service/wake-pump.js";
+import {
+  scheduleWakePumpRetry,
+  startWakePumpIfPossible,
+} from "../service/wake-pump.js";
 import { setKlodiHome, setApiUrl, getKlodiHome, getApiUrl } from "../lib/paths.js";
 import { createMockPluginApi } from "./helpers/mock-plugin-api.js";
 
@@ -85,6 +89,34 @@ describe("plugin entry", () => {
     const api = createMockPluginApi();
     capturedRegisterFn!(api);
     expect(startWakePumpIfPossible).toHaveBeenCalledWith(api);
+  });
+
+  it("schedules a background retry when register-time start throws", async () => {
+    // Already-registered personas never re-enter klodi_register, so a
+    // boot-time NATS-WS handshake failure must arm a retry from here —
+    // otherwise the persona stays inbound-deaf until process restart.
+    vi.mocked(startWakePumpIfPossible).mockRejectedValueOnce(
+      new Error("ws timeout"),
+    );
+    const api = createMockPluginApi();
+    capturedRegisterFn!(api);
+    // The catch handler runs on the rejection microtask — flush it.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(scheduleWakePumpRetry).toHaveBeenCalledWith(api);
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      "wake_pump_register_start_failed",
+      expect.objectContaining({ error: "ws timeout" }),
+    );
+  });
+
+  it("does not schedule a retry on the success path", async () => {
+    vi.mocked(startWakePumpIfPossible).mockResolvedValueOnce(null);
+    const api = createMockPluginApi();
+    capturedRegisterFn!(api);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(scheduleWakePumpRetry).not.toHaveBeenCalled();
   });
 
   it("applies klodi_home override from pluginConfig", () => {
