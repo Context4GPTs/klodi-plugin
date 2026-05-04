@@ -30,6 +30,15 @@ If you are running OpenClaw with `@4gpts/klodi@0.1.x`, the 0.2.0 jump retires se
 - **Hermes adapter:** `install.sh` now uses `pip install -r requirements.txt --require-hashes` when hash pins are present (regenerate via `pip-compile --generate-hashes` per `klodi-plugin/adapters/hermes/REQUIREMENTS.md`). Pre-launch the closure ships without hashes (klodi-nats-client is vendored, not on PyPI); `install.sh` falls back to a regular install in that mode and logs the downgrade. Per **R § P2-22**.
 - **Pin audit policy** (per **R § P3-20**): run `pip-audit -r requirements.txt` before tagging any release. `nats-py==2.14.0` and `websockets==15.0` are the load-bearing pins; check them against current advisories. If `pip-audit` flags a CVE on either, the next release MUST bump the pin and re-audit.
 
+## [0.2.1] — 2026-05-04
+
+**Python adapters only.** OpenClaw and the Rust adapters (`klodi-moltis`, `klodi-ironclaw`, `klodi-zeroclaw`) are unaffected and not republished at this version.
+
+### Fixed
+
+- **klodi-hermes:** wake handlers (`handle_notification` / `handle_channel_message`) ran the bridge ctx's synchronous `inject_message` — which shells out to `hermes chat --continue -Q` for up to 120s — directly on the asyncio loop. The blocking subprocess froze the second consumer's pull-fetch and the nats-py WebSocket heartbeat for the chat's duration, so the WS connection died past its heartbeat budget and the consumer silently stopped delivering subsequent wakes (offers, search matches, channel messages observed missing in production after the first wake landed). Inject is now dispatched off the loop via `asyncio.to_thread`; cross-thread serialization stays in `BridgeCtx._inject_lock`. `adapters/hermes/src/klodi_hermes/wake_handlers.py`.
+- **klodi-nanobot:** same shape — `_on_notification` / `_on_channel` ran `_publish_to_event_bus` (which `subprocess.run`s `nanobot events publish`, 10s timeout) inline on the daemon's asyncio loop, blocking the same consumer pull-fetches and WS heartbeat. Lower observed blast radius than hermes (10s vs 120s, fast CLI), but the failure mode is identical when the CLI cold-starts or hangs. Now dispatched off-loop via `asyncio.to_thread`; the wake closures were extracted from `_run` into `_make_wake_callbacks(channel)` for direct testability. `adapters/nanobot/nanobot_daemon.py`.
+
 ## [0.2.0] — 2026-04-25
 
 **0012 — NATS-native host plugins.** All adapters now hold a single persistent NATS-WebSocket connection per session for both tool calls and wakes. The webhook plane, the `klodi-mcp` Node binary, and host cron paths are retired. References: `docs/plans/0012-nats-native-host-plugins.md`, `../docs/reviews/2026-04-25-0012-first-pass-review.md`.
