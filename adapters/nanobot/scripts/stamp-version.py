@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Stamp pyproject.toml#version into nanobot-side versioned URLs.
+"""Stamp pyproject.toml#version into nanobot-side mirrors.
 
-Nanobot has no plugin manifest analogue to Hermes' plugin.yaml, so the
-only mirrors we sync are GitHub URLs of shape
+Nanobot has no plugin manifest analogue to Hermes' plugin.yaml, but
+the flat-layout package exposes ``__version__`` from ``__init__.py``
+— `nanobot.__version__` — and that string drifts unless we sync it
+explicitly here. Versioned GitHub URLs of shape
 ``github.com/Context4GPTs/klodi-plugin/(blob|tree)/v<X.Y.Z>/`` in
-README.md (and any other doc files added later).
+README.md (and any other doc files added later) are also rewritten.
 
 Mirrors klodi-plugin/adapters/openclaw/scripts/stamp-version.mjs.
 Idempotent: re-running with the same version is a no-op. Refuses to
@@ -19,6 +21,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
 PYPROJECT = HERE / "pyproject.toml"
+# Flat-layout package — `__init__.py` lives next to the modules at
+# the adapter root, not under a `src/<pkg>/` tree.
+INIT_PY = HERE / "__init__.py"
 
 URL_TARGETS = [
     HERE / "README.md",
@@ -71,9 +76,30 @@ def stamp_urls(version: str) -> int:
     return changed
 
 
+def stamp_init_py(version: str) -> bool:
+    """Sync `__version__` in __init__.py. Returns True if file changed."""
+    if not INIT_PY.exists():
+        return False
+    text = INIT_PY.read_text(encoding="utf-8")
+    new = re.sub(
+        r'^(__version__\s*=\s*")\d+\.\d+\.\d+(")',
+        rf'\g<1>{version}\g<2>',
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if new == text:
+        return False
+    INIT_PY.write_text(new, encoding="utf-8")
+    print(f"[stamp-version] __init__.py __version__ → {version}")
+    return True
+
+
 def main() -> int:
     version = read_version()
-    if stamp_urls(version) == 0:
+    init_changed = stamp_init_py(version)
+    url_files = stamp_urls(version)
+    if not init_changed and url_files == 0:
         print(f"[stamp-version] already at {version}; no changes.")
     return 0
 

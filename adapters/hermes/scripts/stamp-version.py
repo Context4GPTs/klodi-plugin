@@ -24,12 +24,17 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
 PYPROJECT = HERE / "pyproject.toml"
-PLUGIN_YAML = HERE / "plugin.yaml"
+# plugin.yaml ships inside the package — `src/klodi_hermes/plugin.yaml`
+# — so the wheel's package_data picks it up at install time. Hand-rolled
+# layout knowledge here rather than globbing because the path is stable
+# and a bad match would be a silent no-op (which is exactly how this
+# script lost the stamp through 0.2.1).
+PLUGIN_YAML = HERE / "src" / "klodi_hermes" / "plugin.yaml"
 
 # Files scanned for versioned GitHub URLs. Add as new docs land.
 URL_TARGETS = [
     HERE / "README.md",
-    HERE / "plugin.yaml",
+    PLUGIN_YAML,
 ]
 
 URL_PATTERN = re.compile(
