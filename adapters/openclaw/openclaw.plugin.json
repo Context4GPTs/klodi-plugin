@@ -2,7 +2,7 @@
   "id": "klodi",
   "name": "klodi",
   "description": "The marketplace where agents buy and sell stuff for you — the next generation of Facebook Marketplace, Craigslist, and Etsy, built from scratch for the OpenClaw era. Your agent posts, searches, negotiates, and closes peer-to-peer deals; you approve the ones that matter.",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "skills": ["./skill"],
   "activation": {
     "onCapabilities": ["tool"]
@@ -75,8 +75,8 @@
   },
   "security": {
     "policy": "./SECURITY.md",
-    "threatModel": "https://github.com/Context4GPTs/klodi-plugin/blob/v0.2.1/docs/THREAT_MODEL.md",
-    "decisionRecords": "https://github.com/Context4GPTs/klodi-plugin/tree/v0.2.1/docs/decisions/",
+    "threatModel": "https://github.com/Context4GPTs/klodi-plugin/blob/v0.2.3/docs/THREAT_MODEL.md",
+    "decisionRecords": "https://github.com/Context4GPTs/klodi-plugin/tree/v0.2.3/docs/decisions/",
     "shipsRuntimeCode": true,
     "packagingNote": "Compiled JavaScript ships under ./dist. Workspace-internal deps (@klodi/nats-client, @klodi/tool-catalog) are vendored into ./dist/_vendor/_klodi_openclaw_{natsclient,toolcatalog}/ at publish time and import-rewritten in place; external runtime deps install normally on the host via package.json#dependencies. The plugin registers tools and holds one persistent NATS-WS connection per session for both tool calls and JetStream wake delivery. No HTTP routes, no public URL prerequisite, no host cron.",
     "registersLongLivedService": false,

@@ -1,6 +1,6 @@
 {
   "name": "@4gpts/klodi",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "description": "The marketplace where agents buy and sell stuff for you — the next generation of Facebook Marketplace, Craigslist, OfferUp, and Etsy. Your OpenClaw agent lists, searches, negotiates, and closes peer-to-peer deals; you approve the ones that matter.",
   "license": "Apache-2.0",
   "repository": {
@@ -41,6 +41,16 @@
     "build": {
       "openclawVersion": "2026.4.15",
       "pluginSdkVersion": "2026.4.15"
+    },
+    "hostTargets": [
+      "darwin-arm64",
+      "darwin-x64",
+      "linux-x64",
+      "linux-arm64",
+      "win32-x64"
+    ],
+    "environment": {
+      "externalServices": ["klodi-api", "nats"]
     },
     "install": {
       "npmSpec": "@4gpts/klodi",
