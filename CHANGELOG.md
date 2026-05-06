@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-05-06
+
+**Rust adapters (klodi-zeroclaw, klodi-moltis, klodi-ironclaw).** OpenClaw and the Python adapters (klodi-hermes, klodi-nanobot) are unaffected and not republished at this version.
+
+### Added
+
+- **klodi-{zeroclaw,moltis,ironclaw}:** new `klodi-<host>-mcp` binary per Rust adapter — a stdio Model Context Protocol server that exposes the full klodi tool catalog (every `klodi_*` request/reply tool from `packages/tool-catalog/dist/schemas.json` plus the local `klodi_setup_status`, `klodi_health`, `klodi_channel_message`) and the canonical skill bundle (`klodi-plugin/skill/`) to the host's agent. The host spawns the binary on demand per agent session per its `[[mcp.servers]]` config; the agent reads each skill file via MCP `resources/read` under `klodi://skill/<rel-path>`. This closes the in-agent tool-surface gap from the 0.2.0 multi-host build plan, where the Rust adapters shipped only the wake forwarder and the agent had no way to call `klodi_list_create`, respond to offers, or send channel messages without operator intervention. Implementation lives in shared `klodi_rust_host::mcp` so all three adapters reuse one body — only the bin wrapper and the host config path differ per host.
+- **klodi-<host>-register** (zeroclaw / moltis / ironclaw) now writes the `[[mcp.servers]]` block into the host's `config.toml` at the end of registration:
+  - `klodi-zeroclaw-register` → `~/.zeroclaw/config.toml` (or `$ZEROCLAW_CONFIG`)
+  - `klodi-moltis-register` → `~/.moltis/config.toml` (or `$MOLTIS_CONFIG`)
+  - `klodi-ironclaw-register` → `~/.ironclaw/config.toml` (or `$IRONCLAW_CONFIG`)
+
+  Each is idempotent — re-running after an upgrade replaces the `klodi` entry only and preserves any unrelated server blocks. The new behavior is on by default; pass `--skip-<host>-config` for hosts that only forward wakes and don't run the agent locally.
+- **Skill bundle delivery via MCP resources.** Each published Rust adapter crate now embeds `klodi-plugin/skill/` at compile time via `include_dir!` and serves each file under `klodi://skill/<rel-path>`. Single source of truth — no on-disk seeding step, no operator-edited drift, no `klodi_setup_reseed_skill` analogue needed on these hosts.
+
+### Changed
+
+- **klodi-rust-host:** new `mcp` Cargo feature gates the MCP server module (`klodi_rust_host::mcp`) and the host config writer (`klodi_rust_host::host_mcp_config` — the latter formerly `zeroclaw_config`, generalised to take the host-name string). Daemon-only adapters (any future host that doesn't expose an MCP client) keep their lean dependency tree by leaving the feature off. Pulled-in deps under the gate: `rmcp = "1.6"` (server + transport-io + macros), `include_dir = "0.7"`, `toml_edit = "0.22"`. `chrono` workspace pin nudged from `=0.4.38` to `=0.4.39` to satisfy `schemars 1.x`'s `chrono04` integration (no behavioural change).
+- **adapters/{zeroclaw,moltis,ironclaw}/scripts/vendor.py:**
+  - Recursively copies vendored crate sources (`rglob("*.rs")` instead of top-level `glob`) so `klodi_rust_host::mcp::*` files reach the staged tree.
+  - Copies `tool-catalog/dist/schemas.json` to `<staged>/src/schemas.json` and the workspace `skill/` bundle to `<staged>/skill/` so the embedded-resource macros (`include_str!`, `include_dir!`) expand inside the published crate.
+  - Strips `#[cfg(feature = "mcp")]` gates from vendored sources and drops `optional = true` from injected MCP deps — each published Rust adapter crate has no opt-out, so the gates and the parallel `[features]` table they would otherwise require are unnecessary.
+  - Rewrites `crate::` references to `crate::_<mod>::` so vendored sub-modules at any depth (e.g. `_rust_host/mcp/tools.rs`) resolve siblings via the adapter library root.
+
 ### Migrating from 0.1.x to 0.2.0
 
 If you are running OpenClaw with `@4gpts/klodi@0.1.x`, the 0.2.0 jump retires several runtime concepts. **You do not need to do anything special** — the upgrade is install-and-go — but the following will look different:

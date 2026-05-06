@@ -11,7 +11,7 @@
 
 [package]
 name = "klodi-moltis"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -38,9 +38,14 @@ path = "src/bin/channel_message.rs"
 name = "klodi-moltis-setup-status"
 path = "src/bin/setup_status.rs"
 
+[[bin]]
+name = "klodi-moltis-mcp"
+path = "src/bin/mcp.rs"
+
 [dependencies]
 klodi-nats-client = { path = "../../packages/nats-client-rs" }
-klodi-rust-host = { path = "../../packages/klodi-rust-host" }
+# `mcp` enables the stdio MCP server module + the host config writer.
+klodi-rust-host = { path = "../../packages/klodi-rust-host", features = ["mcp"] }
 
 # Async runtime — match the workspace pin.
 tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync"] }

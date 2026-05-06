@@ -6,26 +6,29 @@
 
 ## 1. Identity
 
-IronClaw runs the agent inside a long-running daemon that owns one persistent NATS-WS connection. The adapter is a Rust binary crate; the daemon forwards each wake event to IronClaw's HTTP `/event-trigger` endpoint. Imports `async-nats` via the workspace `nats-client-rs` package.
+IronClaw runs the agent inside a long-running daemon that owns one persistent NATS-WS connection. The adapter ships two control planes: a wake-forwarder daemon (NATS → HTTP `/event-trigger`) and a stdio MCP server (`klodi-ironclaw-mcp`) that exposes the tool catalog and skill bundle to the agent. Imports `async-nats` via the workspace `nats-client-rs` package.
 
 host_shape: daemon
 
 ## 2. Tool registration
 
-- **Registration API:** IronClaw plugin entry registers tools via its plugin lifecycle; in this round the adapter is supervised externally and exposes tool surface via the binary crate's CLI.
-- **Schema source:** `klodi-plugin/packages/tool-catalog/dist/rust-types.rs`.
-- **Tool families:**
-  - **NATS request/reply passthrough:** dispatched through `KlodiClient::request(...)`.
-  - **Local-state tools:** `klodi-ironclaw-register` (HTTP-only).
-  - **Direct JetStream publish:** `klodi-ironclaw-channel-message` binary.
-- **Catalog file:** `klodi-plugin/packages/tool-catalog/dist/rust-types.rs`.
+- **Registration API:** stdio MCP server (`klodi-ironclaw-mcp`) wired into IronClaw's `[[mcp.servers]]` config.toml table by `klodi-ironclaw-register`. IronClaw's MCP client wraps each advertised tool as a native agent tool under the `klodi__<tool_name>` prefix.
+- **Schema source:**
+  - Tool names + NATS subjects: `klodi-plugin/packages/tool-catalog/dist/rust-types.rs` (codegen target consumed by the Rust client + the MCP dispatcher).
+  - JSON Schemas served on `tools/list`: `klodi-plugin/packages/tool-catalog/dist/schemas.json` (embedded via `include_str!` into the published crate).
+- **Tool families exposed via MCP:**
+  - **NATS request/reply passthrough:** every entry in `schemas.json` — dispatched through `KlodiClient::request(<subject>, params)`.
+  - **Local diagnostics:** `klodi_setup_status`, `klodi_health` — answered in-process without a NATS round-trip (`klodi_health` does one round-trip through `users.whoami`).
+  - **Direct JetStream publish:** `klodi_channel_message` — calls `KlodiClient::publish_channel_message`.
+- **Operator-only tooling (CLI binaries, not MCP tools):** `klodi-ironclaw-register` (one-shot HTTP registration + IronClaw config wiring), `klodi-ironclaw-daemon` (wake forwarder), `klodi-ironclaw-channel-message` (script-driven publish), `klodi-ironclaw-setup-status` (diagnostic).
 
 ## 3. Lifecycle
 
-- **Hook points:** `klodi-ironclaw-daemon` runs under operator supervision (systemd or IronClaw's plugin lifecycle, when available).
-- **`client.connect()`:** at daemon start.
-- **`client.close()`:** at daemon stop (signal handler).
-- **Restart / reload / sleep:** restart the daemon; idle WS recovers via server-side ping.
+- **Wake forwarder:** `klodi-ironclaw-daemon` runs under operator supervision (systemd or IronClaw's plugin lifecycle, when available).
+- **MCP server:** IronClaw spawns `klodi-ironclaw-mcp` per agent session per its `[[mcp.servers]]` config. Each subprocess opens a separate persistent NATS-WS connection lazily on first `tools/call` and reuses it for the session's duration.
+- **`client.connect()`:** lazy in the MCP path (deferred until first call); eager at daemon start.
+- **`client.close()`:** at process exit on both planes.
+- **Restart / reload / sleep:** restart the daemon and/or let IronClaw re-spawn the MCP subprocess on the next session.
 
 ## 4. Wake primitive
 
@@ -36,14 +39,14 @@ host_shape: daemon
 
 ## 5. Setup particulars
 
-- **Phases:** no in-agent `klodi_setup_status` today.
-- **Issue codes:** none (deferred to Phase 7).
-- **Fix kinds:** n/a in-agent.
-- **`${klodi_home}` resolution:** `KLODI_HOME` env → platform default via `src/default_paths.rs`.
+- **In-agent setup tool:** `klodi_setup_status` is exposed via the MCP plane. The CLI binary `klodi-ironclaw-setup-status` exposes the same shape for operators.
+- **Issue codes:** `creds_perms` (creds file is group/world-readable), `config_unreadable` (config.json failed to parse).
+- **Fix kinds:** operator re-runs `klodi-ironclaw-register` (idempotent — preserves other `[[mcp.servers]]` entries; replaces the `klodi` block).
+- **`${klodi_home}` resolution:** `KLODI_HOME` env → platform default via `klodi_rust_host::paths::klodi_home()`.
 
 ## 6. Skill delivery path
 
-**Deferred to Phase 7.** Same open question as Moltis — out-of-process agent, daemon never sees skill content. See § 10.
+The skill bundle (`klodi-plugin/skill/SKILL.md` + `references/*.md`, `policies/*.md`, `templates/*.md`) ships **embedded** in the published `klodi-ironclaw` crate via `include_dir!`. The MCP server advertises every file under `klodi://skill/<rel-path>` on `resources/list`; the agent reads them on demand via `resources/read`. Single source of truth — no on-disk seeding, no operator-edited drift.
 
 ## 7. Local-state files
 
@@ -51,14 +54,17 @@ host_shape: daemon
 ${klodi_home}/                       # mode 0700
 ├── config.json                      # 0600
 └── nats.creds                       # 0600
+
+~/.ironclaw/config.toml              # mutated by klodi-ironclaw-register
+                                     # — adds the `[[mcp.servers]] name = "klodi"` entry
 ```
 
-- **File ownership:** `klodi-ironclaw-register` writes both files; daemon reads only.
-- **Idempotency:** registration overwrites on success.
+- **File ownership:** `klodi-ironclaw-register` writes klodi's `config.json` + `nats.creds` and inserts the `[[mcp.servers]]` entry into IronClaw's `config.toml`. The wake daemon and MCP server are read-only on klodi-side files.
+- **Idempotency:** re-running `klodi-ironclaw-register` after upgrade replaces only the `klodi` `[[mcp.servers]]` entry; unrelated server blocks (e.g. `weather`, `git`) are preserved verbatim.
 
 ## 8. Test entry points
 
-- **Unit:** `klodi-plugin/adapters/ironclaw/src/` cargo tests; wire encoding tested in `nats-client-rs/`.
+- **Unit:** `klodi-plugin/packages/klodi-rust-host/src/{mcp,host_mcp_config}.rs` cargo tests (catalog round-trip, embedded skill bundle integrity, `config.toml` upsert idempotency, secure-mode setup-status).
 - **Integration / acceptance:** **deferred to Phase 7**.
 
 ## 9. Distribution and install
@@ -67,16 +73,17 @@ ${klodi_home}/                       # mode 0700
 - **Install command:**
   ```bash
   cargo install klodi-ironclaw
-  klodi-ironclaw-register
+  klodi-ironclaw-register   # OAuth + writes nats.creds, config.json,
+                            # and the [[mcp.servers]] entry in ~/.ironclaw/config.toml
   IRONCLAW_EVENT_URL=http://127.0.0.1:7171/event-trigger \
   IRONCLAW_AGENT_TOKEN=<bearer> \
       klodi-ironclaw-daemon
+  # IronClaw spawns klodi-ironclaw-mcp on demand per agent session.
   ```
 - **Required runtime version:** IronClaw core ≥ current (specific minimum TBD when Phase 7 ratifies).
 - **Required env / pre-existing files:** `IRONCLAW_EVENT_URL` and `IRONCLAW_AGENT_TOKEN`; `KLODI_NATS_URL`. See `docs/ENVIRONMENT.md` for the full env contract.
 
 ## 10. Open questions
 
-- Skill delivery (§ 6): same as Moltis — needs a documented IronClaw mechanism for plugin-supplied agent instructions.
-- In-agent setup tool surface.
-- Lifecycle integration with IronClaw's plugin manager when available.
+- Hard-fail policy when `~/.ironclaw/config.toml` exists with malformed TOML — currently `klodi-ironclaw-register` exits with a wrapped TOML parse error.
+- Lifecycle integration with IronClaw's plugin manager when available (auto-restart on klodi adapter upgrade).

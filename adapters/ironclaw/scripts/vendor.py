@@ -169,12 +169,21 @@ def stage_vendored_module(mod: VendoredModule) -> None:
 
     target = STAGED / "src" / mod.mod_name
     target.mkdir(parents=True, exist_ok=True)
-    for rs in mod.src_root.glob("*.rs"):
-        if rs.name == "lib.rs":
-            shutil.copy2(rs, target / "mod.rs")
+
+    files_copied = 0
+    for rs in mod.src_root.rglob("*.rs"):
+        rel = rs.relative_to(mod.src_root)
+        if rel.name == "lib.rs":
+            # Crate root → mod.rs in the staged tree.
+            dest = target / "mod.rs"
         else:
-            shutil.copy2(rs, target / rs.name)
-    print(f"[vendor] copied {mod.crate_name} → src/{mod.mod_name}/")
+            dest = target / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(rs, dest)
+        files_copied += 1
+    print(
+        f"[vendor] copied {mod.crate_name} → src/{mod.mod_name}/ ({files_copied} file(s))"
+    )
 
 
 def stage_generated_catalog() -> None:
@@ -219,6 +228,87 @@ def stage_generated_catalog() -> None:
     print("[vendor] inlined tool-catalog/dist/rust-types.rs → _natsclient/generated.rs")
 
 
+def stage_mcp_assets() -> None:
+    """Mirror the MCP server's runtime assets into the staged tree.
+
+    `klodi_rust_host::mcp` embeds two non-Rust resources at compile time:
+
+    - `schemas.json` (read by `mcp/schemas.rs` via `include_str!("../../schemas.json")`)
+    - `skill/` (read by `mcp/skill_data.rs` via `include_dir!("$CARGO_MANIFEST_DIR/skill")`)
+
+    Both paths resolve against `klodi-rust-host/{schemas.json,skill}`
+    in the workspace (where they're symlinks to the canonical sources).
+    Inside the staged crate the same relative shape must exist so the
+    macros expand the same way:
+
+      | Macro path              | Staged location                         |
+      |-------------------------|-----------------------------------------|
+      | `../../schemas.json`    | `<staged>/src/schemas.json`             |
+      | `$CARGO_MANIFEST_DIR/skill` | `<staged>/skill/`                    |
+
+    Without this step, `cargo build` of the staged crate fails with
+    "file not found" the moment a vendored `mcp` source compiles.
+    """
+    schemas_src = REPO_ROOT / "packages" / "tool-catalog" / "dist" / "schemas.json"
+    if not schemas_src.exists():
+        sys.stderr.write(
+            f"[vendor] schemas.json missing at {schemas_src} — "
+            "run `pnpm --filter @klodi/tool-catalog codegen` first.\n"
+        )
+        raise SystemExit(1)
+    schemas_dst = STAGED / "src" / "schemas.json"
+    shutil.copy2(schemas_src, schemas_dst)
+
+    skill_src = REPO_ROOT / "skill"
+    if not skill_src.is_dir():
+        sys.stderr.write(
+            f"[vendor] skill bundle missing at {skill_src} — refusing to stage.\n"
+        )
+        raise SystemExit(1)
+    skill_dst = STAGED / "skill"
+    if skill_dst.exists():
+        shutil.rmtree(skill_dst)
+    shutil.copytree(
+        skill_src,
+        skill_dst,
+        ignore=shutil.ignore_patterns(*COPY_EXCLUDES),
+    )
+    print(
+        "[vendor] mirrored MCP assets: "
+        f"src/schemas.json + skill/ ({len(list(skill_dst.rglob('*')))} entries)"
+    )
+
+
+def strip_mcp_cfg_gates() -> int:
+    """Remove `#[cfg(feature = "mcp")]` lines from the vendored sources.
+
+    In the workspace tree `klodi-rust-host` exposes the MCP server behind
+    the `mcp` Cargo feature; daemon-only adapters (Moltis, IronClaw) skip
+    it and avoid pulling in `rmcp`. IronClaw's published crate, by
+    contrast, always ships the MCP plane — there is no opt-out and no
+    second feature surface for users to flip. Stripping the gates here
+    keeps the published crate self-contained: every rmcp-touching module
+    compiles unconditionally, the optional deps below get pulled in
+    unconditionally, and we don't need a synthesised `[features]` table
+    in the staged Cargo.toml just to flip a flag back on.
+
+    The strip only runs in this adapter's `vendor.py`. Moltis and
+    IronClaw keep the gates intact and the cfg evaluates to false in
+    their staged crates, leaving the MCP modules out.
+    """
+    pattern = re.compile(r'^\s*#\[cfg\(feature\s*=\s*"mcp"\)\]\s*\n', re.MULTILINE)
+    rust_host_dir = STAGED / "src" / "_rust_host"
+    rewritten = 0
+    for rs in rust_host_dir.rglob("*.rs"):
+        text = rs.read_text(encoding="utf-8")
+        new = pattern.sub("", text)
+        if new != text:
+            rs.write_text(new, encoding="utf-8")
+            rewritten += 1
+    print(f"[vendor] stripped #[cfg(feature = \"mcp\")] gates in {rewritten} file(s)")
+    return rewritten
+
+
 def write_staged_lib_rs() -> None:
     """The Rust adapters are bin-only (no src/lib.rs in the source tree).
     Publish-time we need a library so the bins can `use klodi_ironclaw::_natsclient::*`
@@ -260,37 +350,33 @@ def cross_module_target(crate_ident: str, prefix: str) -> str:
 
 
 def rewrite_vendored() -> int:
-    """Rewrite imports inside each `src/_<mod>/*.rs`:
+    """Rewrite imports inside each vendored `src/_<mod>/**/*.rs`:
 
-    - `crate::` → `super::` so a vendored sub-module file's references
-      to its siblings (other files in the same mod) resolve correctly.
-      This is wrong for `mod.rs` if it ever has `crate::` references
-      (would point above its own module instead of into it), but in
-      practice none of the vendored `lib.rs` files use `crate::` —
-      they only declare `pub mod`s and re-exports.
-    - `klodi_<other>::` → `crate::_<other>::` so cross-vendored references
-      hop through the adapter library root via an absolute path. Using
-      `crate::` instead of `super::super::` works uniformly at any
-      depth, including inside `mod.rs` (the module root) where
-      `super::super::` would walk above the lib root and fail.
+    - `crate::` → `crate::_<mod>::` so a vendored sub-module file's
+      reference to its OWN crate's items resolves to the vendored copy
+      under the adapter lib root. Using a fully-qualified absolute path
+      works at any nesting depth (e.g. `_rust_host/mcp/tools.rs`), where
+      `super::` would only reach the immediate parent.
+    - `klodi_<other>::` → `crate::_<other>::` so cross-vendored
+      references hop through the adapter library root the same way.
     """
-    crate_re = re.compile(r"\bcrate::")
     cross_patterns = [
         (re.compile(rf"\b{mod.crate_ident}::"), mod) for mod in VENDORED_MODULES
     ]
 
     rewritten_files = 0
     for mod in VENDORED_MODULES:
+        crate_re = re.compile(r"\bcrate::")
+        self_replacement = f"crate::{mod.mod_name}::"
         mod_dir = STAGED / "src" / mod.mod_name
-        for rs in mod_dir.glob("*.rs"):
+        for rs in mod_dir.rglob("*.rs"):
             text = rs.read_text(encoding="utf-8")
-            new = crate_re.sub("super::", text)
+            new = crate_re.sub(self_replacement, text)
             for pattern, other in cross_patterns:
                 if other is mod:
-                    # `klodi_<self>::` inside its own vendored copy already
-                    # resolves via `crate::` in source, which the rule above
-                    # rewrote to `super::` — skip the cross-mod rewrite to
-                    # avoid double-handling.
+                    # `klodi_<self>::` inside its own vendored copy is
+                    # already routed via `crate::` in source, which the
+                    # rule above rewrote — skip the cross-mod pattern.
                     continue
                 new = pattern.sub(f"crate::{other.mod_name}::", new)
             if new != text:
@@ -364,6 +450,15 @@ def shared_dep_lines_to_inject(staged_cargo_text: str) -> list[str]:
     present — adapter-level Cargo.toml is responsible for declaring a
     sufficient feature superset (see the tokio features block in
     adapters/ironclaw/Cargo.toml).
+
+    Strips `optional = true` on the way in. klodi-rust-host marks
+    `rmcp`, `include_dir`, and `toml_edit` optional so daemon-only
+    adapters can opt out. The published klodi-ironclaw crate has no such
+    opt-out — `strip_mcp_cfg_gates` removed every cfg gate, so every
+    transitive dep is unconditionally needed. Leaving `optional = true`
+    here would force the staged Cargo.toml to also synthesise a
+    [features] table that flips them on; dropping it is simpler and
+    avoids the parallel feature surface.
     """
     staged_data = tomllib.loads(staged_cargo_text)
     staged_deps = staged_data.get("dependencies", {}) or {}
@@ -384,6 +479,8 @@ def shared_dep_lines_to_inject(staged_cargo_text: str) -> list[str]:
             if isinstance(spec, str):
                 extra_lines.append(f'{name} = "{spec}"\n')
             elif isinstance(spec, dict):
+                # Drop the `optional` flag — see docstring.
+                spec = {k: v for k, v in spec.items() if k != "optional"}
                 inline = ", ".join(
                     f'{k} = {_toml_value(v)}' for k, v in spec.items()
                 )
@@ -506,9 +603,11 @@ def main() -> int:
     for mod in VENDORED_MODULES:
         stage_vendored_module(mod)
     stage_generated_catalog()
+    stage_mcp_assets()
     write_staged_lib_rs()
     rewrite_vendored()
     rewrite_adapter_sources()
+    strip_mcp_cfg_gates()
     patch_cargo()
     regenerate_lockfile()
     print(f"[vendor] done — staged tree ready at {STAGED}")

@@ -37,6 +37,14 @@ publish = false
 name = "klodi_rust_host"
 path = "src/lib.rs"
 
+[features]
+default = []
+# Enables the stdio MCP server (`mcp` module) plus the helpers that wire
+# klodi into a host's MCP config (`zeroclaw_config` module). Adapters
+# whose host acts as an MCP client (ZeroClaw, future Moltis/IronClaw)
+# pull this in; daemon-only adapters keep the lean dependency tree.
+mcp = ["dep:rmcp", "dep:include_dir", "dep:toml_edit"]
+
 [dependencies]
 klodi-nats-client = { path = "../nats-client-rs" }
 klodi-logger = { path = "../logger-rs" }
@@ -61,6 +69,11 @@ tracing = "=0.1.41"
 
 # Used by the forwarder + register subscribe / await semantics.
 futures-util = "=0.3.31"
+
+# `mcp` feature only — see [features].
+rmcp = { version = "=1.6.0", features = ["server", "transport-io", "macros"], optional = true }
+include_dir = { version = "=0.7.4", optional = true }
+toml_edit = { version = "=0.22.22", optional = true }
 
 [dev-dependencies]
 tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "test-util"] }

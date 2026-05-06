@@ -6,7 +6,7 @@
 
 [package]
 name = "klodi-zeroclaw"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -33,9 +33,14 @@ path = "src/bin/channel_message.rs"
 name = "klodi-zeroclaw-setup-status"
 path = "src/bin/setup_status.rs"
 
+[[bin]]
+name = "klodi-zeroclaw-mcp"
+path = "src/bin/mcp.rs"
+
 [dependencies]
 klodi-nats-client = { path = "../../packages/nats-client-rs" }
-klodi-rust-host = { path = "../../packages/klodi-rust-host" }
+# `mcp` enables the stdio MCP server module + the ZeroClaw config writer.
+klodi-rust-host = { path = "../../packages/klodi-rust-host", features = ["mcp"] }
 
 tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync"] }
 clap = { version = "=4.5.20", features = ["derive", "env"] }

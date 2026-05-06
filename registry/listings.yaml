@@ -73,12 +73,20 @@ hosts:
       ecosystem: "cargo"
       name: "klodi-moltis"
       path: "klodi-plugin/adapters/moltis"
-    install_command: "cargo install klodi-moltis && klodi-moltis-setup --webhook-url ..."
+    install_command: "cargo install klodi-moltis && klodi-moltis-register"
     maturity: "beta"
     submission: |
       Confirm submission shape during Moltis rollout; canonical pattern
       is cargo install from crates.io plus upstream PR to Moltis's
       plugin list.
+    notes: |
+      Two control planes from one cargo install:
+        - `klodi-moltis-daemon` forwards NATS wakes to Moltis's
+          `/agents/<agent>/wake` HTTP endpoint.
+        - `klodi-moltis-mcp` exposes the klodi tool catalog and skill
+          bundle to the agent over stdio MCP. `klodi-moltis-register`
+          wires it into `~/.moltis/config.toml` automatically on first
+          run; Moltis spawns it per agent session.
 
   zeroclaw:
     registry: "ZeroClaw docs"
@@ -87,12 +95,16 @@ hosts:
       ecosystem: "cargo"
       name: "klodi-zeroclaw"
       path: "klodi-plugin/adapters/zeroclaw"
-    install_command: "cargo install klodi-zeroclaw  # OR: docs recipe only"
+    install_command: "cargo install klodi-zeroclaw && klodi-zeroclaw-register"
     maturity: "beta"
     notes: |
-      Canonical deployment uses ZeroClaw's native /hooks/wake endpoint
-      directly — the cargo binary is an optional defense-in-depth
-      passthrough.
+      Two control planes from one cargo install:
+        - `klodi-zeroclaw-daemon` forwards NATS wakes to ZeroClaw's
+          `/hooks/wake` HTTP endpoint.
+        - `klodi-zeroclaw-mcp` exposes the klodi tool catalog and skill
+          bundle to the agent over stdio MCP. `klodi-zeroclaw-register`
+          wires it into `~/.zeroclaw/config.toml` automatically on
+          first run; ZeroClaw spawns it per agent session.
 
   ironclaw:
     registry: "IronClaw docs"
@@ -101,8 +113,16 @@ hosts:
       ecosystem: "cargo"
       name: "klodi-ironclaw"
       path: "klodi-plugin/adapters/ironclaw"
-    install_command: "cargo install klodi-ironclaw"
+    install_command: "cargo install klodi-ironclaw && klodi-ironclaw-register"
     maturity: "beta"
+    notes: |
+      Two control planes from one cargo install:
+        - `klodi-ironclaw-daemon` forwards NATS wakes to IronClaw's
+          `/event-trigger` HTTP endpoint.
+        - `klodi-ironclaw-mcp` exposes the klodi tool catalog and skill
+          bundle to the agent over stdio MCP. `klodi-ironclaw-register`
+          wires it into `~/.ironclaw/config.toml` automatically on
+          first run; IronClaw spawns it per agent session.
 
   nanobot:
     registry: "nanobot wiki"
