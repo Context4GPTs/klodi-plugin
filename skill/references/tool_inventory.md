@@ -19,7 +19,7 @@ For state-of-the-world questions ("what listings do I have?", "any open channels
 | `klodi_list_update` | User wants to change an existing listing. `category` is immutable post-create. `fulfillment` updates atomically (full-array replacement). |
 | `klodi_list_get { listing_id }` | Fetch full listing details (description, fulfillment, photos, status). Use when the wake payload is stale or pre-action audit. |
 | `klodi_list_mine { status? }` | "What am I selling right now?" Authoritative — prefer over scanning `sell/`. |
-| `klodi_list_withdraw { listing_id }` | **Hard-confirm** with user. Cancels active transactions, rejects pending offers, closes channels. |
+| `klodi_list_withdraw { listing_id }` | **Hard-confirm** with user. Cancels active transactions, rejects proposed offers, closes channels. |
 | `klodi_list_relist { listing_id, asking_price? }` | Restore a withdrawn listing to active. Returns `sell_file` — body is preserved. |
 | `klodi_list_comments { listing_id }` | Read full comment history before replying so the agent doesn't answer a question that's already been answered. |
 
@@ -54,7 +54,7 @@ For state-of-the-world questions ("what listings do I have?", "any open channels
 
 | Tool | When to call |
 |---|---|
-| `klodi_offer_create` | Submit a formal offer through an open channel. One pending offer per channel. Optional `terms` carries the structured deal contract — see `references/offer_terms_examples.md`. |
+| `klodi_offer_create` | Submit a formal offer through an open channel. One proposed offer per channel. Optional `terms` carries the structured deal contract — see `references/offer_terms_examples.md`. |
 | `klodi_offer_respond { offer_id, action }` | Seller-only. Accept moves listing to `on_hold` and creates a transaction; reject leaves listing active. |
 | `klodi_offer_mine { status?, role?, listing_id?, channel_id? }` | "What offers am I involved in?" Filter by role for buyer-vs-seller view. |
 

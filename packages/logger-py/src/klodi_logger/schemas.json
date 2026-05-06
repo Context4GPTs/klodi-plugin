@@ -1926,7 +1926,7 @@
     },
     "klodi_list_withdraw": {
       "subject": "p2p.v1.listings.update",
-      "description": "Withdraw a listing (sets status=withdrawn). Cancels active transactions, rejects pending offers, closes channels.",
+      "description": "Withdraw a listing (sets status=withdrawn). Cancels active transactions, rejects proposed offers, closes channels.",
       "params": {
         "type": "object",
         "properties": {
@@ -3964,7 +3964,7 @@
     },
     "klodi_offer_create": {
       "subject": "p2p.v1.offers.create",
-      "description": "Submit a formal offer on a listing through an open channel. Amount in integer cents. One pending offer per channel. Optional `terms` captures structured deal contract (max 4KB).",
+      "description": "Submit a formal offer on a listing through an open channel. Amount in integer cents. One proposed offer per channel. Optional `terms` captures structured deal contract (max 4KB).",
       "params": {
         "type": "object",
         "properties": {

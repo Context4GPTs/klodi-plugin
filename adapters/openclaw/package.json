@@ -77,9 +77,10 @@
     "build:deps": "(cd ../../packages/tool-catalog && pnpm install && pnpm build) && (cd ../../packages/nats-client-ts && pnpm install && pnpm build)",
     "build:vendored": "pnpm build:deps && pnpm build && node scripts/vendor.mjs",
     "prepublish": "pnpm render-readme && pnpm stamp-version && bash scripts/smoke-plugin-load.sh && pnpm tag",
-    "pack:inspect": "pnpm build:vendored && (cd .publish-stage && npm pack --pack-destination /tmp/klodi-pack) && tar -tzf /tmp/klodi-pack/*.tgz | sort",
-    "publish:clawhub:dry": "pnpm prepublish && pnpm build:vendored && clawhub package publish .publish-stage --dry-run --source-repo Context4GPTs/klodi-plugin --source-commit \"$(git rev-parse HEAD)\"",
-    "publish:clawhub": "pnpm prepublish && pnpm build:vendored && clawhub package publish .publish-stage --tags latest --source-repo Context4GPTs/klodi-plugin --source-commit \"$(git rev-parse HEAD)\""
+    "pack:stage": "rm -rf /tmp/klodi-pack && mkdir -p /tmp/klodi-pack && (cd .publish-stage && npm pack --pack-destination /tmp/klodi-pack)",
+    "pack:inspect": "pnpm build:vendored && pnpm pack:stage && tar -tzf /tmp/klodi-pack/*.tgz | sort",
+    "publish:clawhub:dry": "pnpm prepublish && pnpm build:vendored && pnpm pack:stage && clawhub package publish /tmp/klodi-pack/*.tgz --family code-plugin --owner blackbak --dry-run --source-repo Context4GPTs/klodi-plugin --source-commit \"$(git rev-parse HEAD)\"",
+    "publish:clawhub": "pnpm prepublish && pnpm build:vendored && pnpm pack:stage && clawhub package publish /tmp/klodi-pack/*.tgz --family code-plugin --owner blackbak --tags latest --source-repo Context4GPTs/klodi-plugin --source-commit \"$(git rev-parse HEAD)\""
   },
   "dependencies": {
     "@klodi/nats-client": "file:../../packages/nats-client-ts",

@@ -282,7 +282,7 @@ export const klodiTools = {
     subject: "p2p.v1.listings.update",
     description:
       "Withdraw a listing (sets status=withdrawn). Cancels active"
-      + " transactions, rejects pending offers, closes channels.",
+      + " transactions, rejects proposed offers, closes channels.",
     params: Type.Object({ listing_id: Uuid }),
     result: ListingResult,
   },
@@ -538,7 +538,7 @@ export const klodiTools = {
     subject: "p2p.v1.offers.create",
     description:
       "Submit a formal offer on a listing through an open channel."
-      + " Amount in integer cents. One pending offer per channel."
+      + " Amount in integer cents. One proposed offer per channel."
       + " Optional `terms` captures structured deal contract (max 4KB).",
     params: Type.Object({
       listing_id: Uuid,

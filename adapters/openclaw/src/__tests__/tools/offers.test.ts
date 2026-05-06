@@ -54,7 +54,7 @@ afterEach(() => temp.cleanup());
 describe("klodi_offer_create", () => {
   it("forwards required fields plus optional currency/message/terms", async () => {
     mockNatsResponse("p2p.v1.offers.create", {
-      offer_id: OFFER_ID, status: "pending",
+      offer_id: OFFER_ID, status: "proposed",
     });
     const tool = getTool(api, "klodi_offer_create");
     const result = await tool.execute("call-1", {
@@ -144,7 +144,7 @@ describe("klodi_offer_mine", () => {
     mockNatsResponse("p2p.v1.offers.mine", { offers: [] });
     const tool = getTool(api, "klodi_offer_mine");
     const result = await tool.execute("call-1", {
-      status: "pending", role: "buyer", listing_id: LISTING_ID,
+      status: "proposed", role: "buyer", listing_id: LISTING_ID,
     });
     expect(result.isError).toBeFalsy();
   });

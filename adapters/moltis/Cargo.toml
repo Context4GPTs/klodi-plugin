@@ -43,7 +43,7 @@ klodi-nats-client = { path = "../../packages/nats-client-rs" }
 klodi-rust-host = { path = "../../packages/klodi-rust-host" }
 
 # Async runtime — match the workspace pin.
-tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
+tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync"] }
 
 # CLI parsing.
 clap = { version = "=4.5.20", features = ["derive", "env"] }
