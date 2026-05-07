@@ -17,7 +17,6 @@
 mod handler;
 mod resources;
 mod schemas;
-mod skill_data;
 mod tools;
 
 pub use handler::McpConfig;

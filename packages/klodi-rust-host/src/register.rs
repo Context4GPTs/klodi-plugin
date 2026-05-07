@@ -117,6 +117,7 @@ pub async fn run_register(args: RegisterArgs) -> Result<()> {
             }
             PollOutcome::Completed(env) => {
                 persist_session(&args.klodi_home, &env).await?;
+                seed_policies_after_register(&args.klodi_home);
                 println!(
                     "Registration complete — welcome, @{}.",
                     env.handle.as_deref().unwrap_or("?"),
@@ -158,6 +159,36 @@ async fn poll_once(http: &HttpClient, url: &str) -> Result<PollOutcome> {
         "completed" => Ok(PollOutcome::Completed(env)),
         "expired" => Ok(PollOutcome::Expired),
         _ => Ok(PollOutcome::Pending),
+    }
+}
+
+/// Best-effort policy seeding. Failures are logged + reported on stdout
+/// but never block registration — the user's creds are already on disk
+/// at this point and we'd rather have a registered host with missing
+/// policies than fail the whole flow because a template is unreadable.
+/// Surfaced issues are reported by `klodi_setup_status` on the next
+/// run via the `negotiation_style_missing` / `security_policy_missing`
+/// issue codes.
+fn seed_policies_after_register(klodi_home: &Path) {
+    match crate::policy_seed::seed_policies_if_absent(klodi_home) {
+        Ok(report) => {
+            let parts: Vec<&str> = [
+                report.negotiation_style_seeded.then_some("negotiation_style.md"),
+                report.security_policy_seeded.then_some("security.md"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if !parts.is_empty() {
+                println!("Seeded {}.", parts.join(" + "));
+            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "policy seeding failed during register");
+            eprintln!(
+                "warning: policy seeding failed ({err}); run klodi_setup_reseed_policies later.",
+            );
+        }
     }
 }
 

@@ -6,7 +6,7 @@
 //! them on demand via MCP `resources/read`; no seeding step copies the
 //! bundle to disk.
 
-use super::skill_data;
+use crate::skill_bundle;
 use rmcp::ErrorData as McpError;
 use rmcp::model::{
     AnnotateAble, ListResourcesResult, ReadResourceResult, RawResource, ResourceContents,
@@ -17,7 +17,7 @@ const URI_PREFIX: &str = "klodi://skill/";
 
 /// Build the `resources/list` reply from the embedded skill bundle.
 pub(super) fn list_skill_resources() -> ListResourcesResult {
-    let resources = skill_data::iter_files()
+    let resources = skill_bundle::iter_files()
         .map(|(rel_path, _)| {
             let uri = format!("{URI_PREFIX}{rel_path}");
             let mime = mime_type_for(rel_path);
@@ -44,7 +44,7 @@ pub(super) fn read_skill_resource(uri: &str) -> Result<ReadResourceResult, McpEr
         )
     })?;
 
-    let file = skill_data::SKILL.get_file(rel_path).ok_or_else(|| {
+    let file = skill_bundle::SKILL.get_file(rel_path).ok_or_else(|| {
         McpError::resource_not_found(
             "skill_file_not_found",
             Some(json!({ "uri": uri, "rel_path": rel_path })),

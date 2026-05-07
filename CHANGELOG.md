@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-05-07
+
+**Rust adapters (klodi-zeroclaw, klodi-moltis, klodi-ironclaw).** OpenClaw and the Python adapters (klodi-hermes, klodi-nanobot) are unaffected and not republished at this version.
+
+This release brings the Rust MCP surface to feature parity with openclaw / hermes for the user-editable policy and standing-search workflows. Prior to this version, Rust hosts could not customize negotiation policies or persist per-search strategy across sessions — the embedded skill bundle covered the canonical (read-only) skill but skipped the operator-edited surfaces. The whole "your agent, your rules" durable-boundary contract now works the same on Claude Code (openclaw) and on the Rust hosts.
+
+### Added
+
+- **klodi-{zeroclaw,moltis,ironclaw}: three new MCP tools** that close the parity gap with openclaw / hermes:
+  - `klodi_setup_reseed_policies` — non-destructive seed of `${KLODI_HOME}/policies/{negotiation_style,security}.md` from the embedded skill bundle. Existing files are preserved verbatim; the agent calls this to restore a deleted policy file without touching the user's edits to the others.
+  - `klodi_watch` — composite tool. `persist=true` registers a server-side standing search via `p2p.v1.searches.create` AND writes `${KLODI_HOME}/buy/<slug>.md` with frontmatter (query, max_price, target_price, delivery, action_on_match) so the agent reads the user's strategy when `search.match` wakes arrive. `persist=false` is a one-shot equivalent of `klodi_search`.
+  - `klodi_unwatch` — composite tool. Calls `p2p.v1.searches.delete` and removes the buy file. Idempotent on missing files.
+- **`klodi_setup_status` is now actually actionable.** New phase `needs_policy` between `registering` and `ready`, driven by file presence + `negotiation_style.md` placeholder detection. New issue codes: `not_registered`, `partial_credentials`, `negotiation_style_missing`, `negotiation_style_unfilled`, `security_policy_missing`. New structured `next_action: { kind, message, … }` field where `kind` is `cli` (run a host-specific binary), `tool` (call another klodi MCP tool), `shell` (chmod-style command surfaced for the user to run), or `dialog` (prompt the user to fill a template). Per-host CLI name (`klodi-ironclaw-register` / `klodi-moltis-register` / `klodi-zeroclaw-register`) substitutes into the messages so the agent surfaces the right command for the current host.
+- **klodi-{zeroclaw,moltis,ironclaw}-register: policy seeding on first registration.** After persisting `nats.creds` + `config.json`, the register binary now calls `klodi_rust_host::policy_seed::seed_policies_if_absent` to write `policies/{negotiation_style,security}.md` from the embedded skill bundle. Non-destructive — re-runs preserve every operator edit. Failures here are logged but don't block registration (creds are already on disk; the next `klodi_setup_status` surfaces the missing policy via `negotiation_style_missing` / `security_policy_missing`).
+- **`${KLODI_HOME}` layout symmetry with TS / Py hosts.** New on-disk subtrees: `policies/` (user-editable), `buy/<slug>.md` (written by `klodi_watch`), `sell/<slug>.md` (written by listing-lifecycle hooks). Path helpers added to `klodi_rust_host::paths` (`policies_dir`, `buy_dir`, `sell_dir`, `negotiation_style_path`, `security_policy_path`, `buy_file_path`, `sell_file_path`).
+
+### Changed
+
+- **klodi-rust-host:** `mcp::skill_data` promoted to top-level `skill_bundle` module so the `include_dir!`-embedded canonical skill bundle is reachable from the registration flow (which is not gated behind the `mcp` feature). `include_dir` becomes a non-optional dep; `mcp` feature now gates only `rmcp` + `toml_edit`.
+- **klodi-rust-host:** `SetupStatus` shape extended with `negotiation_style_seeded`, `negotiation_style_filled`, `security_policy_seeded`, `issues[]` (typed structs replacing the prior flat `issue_codes` strings — the legacy `issue_codes` field is preserved for back-compat), and `next_action: Option<NextAction>`. Phase enum gains a new `needs_policy` variant. `klodi_setup_status_with_register_cli(klodi_home, cli_name)` exposed for adapter binaries to substitute their host-specific register CLI name into the generated messages; the existing `klodi_setup_status(klodi_home)` defaults the name to `klodi-register`.
+- **klodi-{zeroclaw,moltis,ironclaw}-mcp:** `McpConfig` gains a `register_cli: String` field so the host-specific binary name flows into `dispatch_setup_status`. Adapter `mcp.rs` binaries set it explicitly (`klodi-ironclaw-register`, `klodi-moltis-register`, `klodi-zeroclaw-register`).
+- **`klodi_setup_status` description** in `tools/list` no longer references `klodi_register` (which is not on the Rust MCP surface). Replaced with a description that points at the structured `next_action` field for recovery directives.
+- **Spec § 6 (Skill delivery path)** for ironclaw / moltis / zeroclaw: clarifies the split between the embedded canonical skill (`klodi://skill/<rel-path>`, read-only, no drift) and the on-disk user-editable policy files (`${KLODI_HOME}/policies/`, seeded once non-destructively from the same bundle). Spec § 7 (Local-state files) adds the new `policies/`, `buy/<slug>.md`, `sell/<slug>.md` entries with file-mode + ownership notes.
+- **Rust adapter READMEs** (ironclaw / moltis / zeroclaw): new "Files in `${KLODI_HOME}`" and "Repair / bad credentials" sections. Documents the re-run-the-register-binary recovery flow that was previously buried in spec § 5.
+
 ## [0.2.1] — 2026-05-06
 
 **Rust adapters (klodi-zeroclaw, klodi-moltis, klodi-ironclaw).** OpenClaw and the Python adapters (klodi-hermes, klodi-nanobot) are unaffected and not republished at this version.

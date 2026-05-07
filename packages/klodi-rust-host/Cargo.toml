@@ -43,7 +43,7 @@ default = []
 # klodi into a host's MCP config (`zeroclaw_config` module). Adapters
 # whose host acts as an MCP client (ZeroClaw, future Moltis/IronClaw)
 # pull this in; daemon-only adapters keep the lean dependency tree.
-mcp = ["dep:rmcp", "dep:include_dir", "dep:toml_edit"]
+mcp = ["dep:rmcp", "dep:toml_edit"]
 
 [dependencies]
 klodi-nats-client = { path = "../nats-client-rs" }
@@ -71,8 +71,15 @@ tracing = "=0.1.41"
 futures-util = "=0.3.31"
 
 # `mcp` feature only — see [features].
+# `include_dir` ships the canonical klodi skill bundle inside the
+# published crate. It powers two consumers: the MCP server's
+# `resources/list` + `resources/read` surface (read-only canonical bytes),
+# and the registration flow's policy-seeding step (non-destructively
+# copies templates/negotiation_style.template.md + policies/security.md
+# into ${KLODI_HOME}/policies/ on first registration).
+include_dir = "=0.7.4"
+
 rmcp = { version = "=1.6.0", features = ["server", "transport-io", "macros"], optional = true }
-include_dir = { version = "=0.7.4", optional = true }
 toml_edit = { version = "=0.22.22", optional = true }
 
 [dev-dependencies]

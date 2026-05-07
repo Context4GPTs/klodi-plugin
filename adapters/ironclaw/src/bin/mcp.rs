@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
         klodi_home,
         server_name: "klodi-ironclaw-mcp".to_owned(),
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
+        register_cli: "klodi-ironclaw-register".to_owned(),
     })
     .await
     .context("running klodi-ironclaw-mcp")

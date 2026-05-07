@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
         klodi_home,
         server_name: "klodi-moltis-mcp".to_owned(),
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
+        register_cli: "klodi-moltis-register".to_owned(),
     })
     .await
     .context("running klodi-moltis-mcp")

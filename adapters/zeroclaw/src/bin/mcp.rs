@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
         klodi_home,
         server_name: "klodi-zeroclaw-mcp".to_owned(),
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
+        register_cli: "klodi-zeroclaw-register".to_owned(),
     })
     .await
     .context("running klodi-zeroclaw-mcp")

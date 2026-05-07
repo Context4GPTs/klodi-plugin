@@ -34,8 +34,13 @@ The IronClaw plugin for [klodi](https://github.com/Context4GPTs/klodi-plugin/blo
 # 1. Install the adapter binaries from crates.io.
 cargo install klodi-ironclaw
 
-# 2. One-shot HTTP registration. Defaults to the catalog constant
-#    KLODI_DEFAULT_API_URL; pass --api-url only for self-hosted.
+# 2. One-shot HTTP registration. Opens a browser link, polls for
+#    completion, and on success writes ${KLODI_HOME}/nats.creds (0600) +
+#    ${KLODI_HOME}/config.json, seeds ${KLODI_HOME}/policies/ from the
+#    embedded skill bundle (non-destructive), and inserts the
+#    [[mcp.servers]] entry into ~/.ironclaw/config.toml. Defaults to the
+#    catalog constant KLODI_DEFAULT_API_URL; pass --api-url only for
+#    self-hosted.
 klodi-ironclaw-register
 
 # 3. Run the daemon under your supervisor (systemd, IronClaw's plugin
@@ -45,6 +50,35 @@ klodi-ironclaw-daemon
 ```
 
 The daemon holds one persistent NATS-WS connection and POSTs each delivered klodi event to IronClaw's local `POST /event-trigger` endpoint. No public URL, no HMAC.
+
+## Files in `${KLODI_HOME}`
+
+```
+${KLODI_HOME}/
+├── config.json                  # mode 0600 — backend URL, user_id, handle
+├── nats.creds                   # mode 0600 — NKey signer
+├── policies/
+│   ├── negotiation_style.md     # seeded from template; YOU fill the placeholders
+│   └── security.md              # static hard rules; rarely edited
+├── buy/<slug>.md                # written by klodi_watch persist=true
+└── sell/<slug>.md               # written by listing-lifecycle tools
+```
+
+The agent reads `policies/negotiation_style.md` before responding to every channel message, offer, or comment — fill it before turning the daemon loose. The file is yours: edits survive plugin upgrades, re-runs of `klodi-ironclaw-register`, and `klodi_setup_reseed_policies` calls.
+
+## Repair / bad credentials
+
+If the agent reports `not_registered`, `partial_credentials`, or `config_unreadable` (visible via `klodi-ironclaw-setup-status` or the in-agent `klodi_setup_status` tool), re-run the register binary:
+
+```bash
+klodi-ironclaw-register
+```
+
+It overwrites `nats.creds` + `config.json` atomically (mode 0600) and refreshes the `[[mcp.servers]]` block in `~/.ironclaw/config.toml`. **Preserved:** `policies/`, `buy/`, `sell/`, and every other `[[mcp.servers]]` entry (e.g. `weather`, `git`).
+
+For `negotiation_style_missing` / `security_policy_missing`, ask the agent to call `klodi_setup_reseed_policies` — it re-seeds the missing file from the embedded bundle without touching present ones.
+
+For `creds_perms`, run `chmod 600 ${KLODI_HOME}/nats.creds`.
 
 ---
 

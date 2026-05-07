@@ -19,8 +19,10 @@ host_shape: daemon
 - **Tool families exposed via MCP:**
   - **NATS request/reply passthrough:** every entry in `schemas.json` — dispatched through `KlodiClient::request(<subject>, params)`.
   - **Local diagnostics:** `klodi_setup_status`, `klodi_health` — answered in-process without a NATS round-trip (`klodi_health` does one round-trip through `users.whoami`).
+  - **Local filesystem side-effects:** `klodi_setup_reseed_policies` (non-destructive seed of `${klodi_home}/policies/{negotiation_style,security}.md` from the embedded skill bundle), `klodi_watch` (composite: `searches.create` + write `${klodi_home}/buy/<slug>.md`), `klodi_unwatch` (composite: `searches.delete` + delete the buy file).
   - **Direct JetStream publish:** `klodi_channel_message` — calls `KlodiClient::publish_channel_message`.
-- **Operator-only tooling (CLI binaries, not MCP tools):** `klodi-moltis-register` (one-shot HTTP registration + Moltis config wiring), `klodi-moltis-daemon` (wake forwarder), `klodi-moltis-channel-message` (script-driven publish), `klodi-moltis-setup-status` (diagnostic).
+- **Tools intentionally NOT exposed via MCP:** `klodi_register`, `klodi_register_poll`, `klodi_setup_repair`, `klodi_setup_reseed_skill`. Registration + repair are owned by the `klodi-moltis-register` CLI binary (atomic overwrite via `klodi_secret_write` — re-running it cleanly replaces stale creds while preserving `policies/`, `buy/`, `sell/`). The skill bundle is embedded read-only via `include_dir!` so reseed-skill is unnecessary. `klodi_setup_status`'s `next_action` field surfaces the appropriate CLI command to the agent when registration repair is required.
+- **Operator-only tooling (CLI binaries, not MCP tools):** `klodi-moltis-register` (one-shot HTTP registration + policy seeding + Moltis config wiring), `klodi-moltis-daemon` (wake forwarder), `klodi-moltis-channel-message` (script-driven publish), `klodi-moltis-setup-status` (diagnostic).
 
 ## 3. Lifecycle
 
@@ -39,28 +41,41 @@ host_shape: daemon
 
 ## 5. Setup particulars
 
+- **Phases:** `unconfigured` → `registering` → `needs_policy` → `ready`. Driven by file presence + `negotiation_style.md` placeholder detection.
 - **In-agent setup tool:** `klodi_setup_status` is exposed via the MCP plane. The CLI binary `klodi-moltis-setup-status` exposes the same shape for operators.
-- **Issue codes:** `creds_perms` (creds file is group/world-readable), `config_unreadable` (config.json failed to parse).
-- **Fix kinds:** operator re-runs `klodi-moltis-register` (idempotent — preserves other `[[mcp.servers]]` entries; replaces the `klodi` block).
+- **Issue codes:** `not_registered`, `partial_credentials`, `config_unreadable`, `creds_perms` (creds file is group/world-readable), `negotiation_style_missing`, `negotiation_style_unfilled` (template placeholders unresolved), `security_policy_missing`.
+- **`next_action` shape:** structured `{ kind, message, … }`. `kind` is one of:
+  - `cli` — `{ command: "klodi-moltis-register", message }`. Agent surfaces the command; user runs it from a shell. Used for registration / re-registration / config rewrite.
+  - `tool` — `{ tool: "klodi_setup_reseed_policies", message }`. Agent invokes it directly.
+  - `shell` — `{ shell: "chmod 600 …", message }`. Agent surfaces the command (perms tightening; never auto-executed).
+  - `dialog` — `{ path: "policies/negotiation_style.md", message }`. Agent walks the user through filling placeholders.
+- **Fix policy:** registration repair = re-run `klodi-moltis-register` (idempotent — atomic overwrite of `nats.creds` + `config.json`; preserves `policies/`, `buy/`, `sell/`, and unrelated `[[mcp.servers]]` blocks). Policy reseed = `klodi_setup_reseed_policies` (non-destructive). Unfilled `negotiation_style.md` = dialog action.
 - **`${klodi_home}` resolution:** `KLODI_HOME` env → platform default via `klodi_rust_host::paths::klodi_home()`.
 
 ## 6. Skill delivery path
 
-The skill bundle (`klodi-plugin/skill/SKILL.md` + `references/*.md`, `policies/*.md`, `templates/*.md`) ships **embedded** in the published `klodi-moltis` crate via `include_dir!`. The MCP server advertises every file under `klodi://skill/<rel-path>` on `resources/list`; the agent reads them on demand via `resources/read`. Single source of truth — no on-disk seeding, no operator-edited drift.
+The canonical klodi skill (`SKILL.md`, `references/*.md`, `templates/*.md`, `policies/security.md`) ships **embedded** in the published `klodi-moltis` crate via `include_dir!`. The MCP server advertises every file under `klodi://skill/<rel-path>` on `resources/list`; the agent reads them on demand via `resources/read`. The embedded copy is read-only — single source of truth, no version skew across upgrades.
+
+User-editable policy files live separately on disk under `${klodi_home}/policies/`. `klodi-moltis-register` seeds them **non-destructively** at install time from the embedded bundle (`templates/negotiation_style.template.md` → `policies/negotiation_style.md`; `policies/security.md` → `policies/security.md`). Subsequent re-runs preserve every operator edit; `klodi_setup_reseed_policies` provides the same non-destructive seed at runtime. Per-search and per-listing strategy files (`buy/<slug>.md`, `sell/<slug>.md`) are written by `klodi_watch` and the listing-lifecycle hooks.
 
 ## 7. Local-state files
 
 ```
 ${klodi_home}/                       # mode 0700
-├── config.json                      # backend URL, user_id, handle (0600)
-└── nats.creds                       # NKey signer (0600)
+├── config.json                      # 0600 — seeded by klodi-moltis-register
+├── nats.creds                       # 0600 — seeded by klodi-moltis-register
+├── policies/
+│   ├── negotiation_style.md         # 0644 — seeded once from skill template; user-edited
+│   └── security.md                  # 0644 — seeded as-is from bundle
+├── buy/<slug>.md                    # 0644 — written by klodi_watch persist=true
+└── sell/<slug>.md                   # 0644 — written by listing-lifecycle hooks
 
 ~/.moltis/config.toml                # mutated by klodi-moltis-register
                                      # — adds the `[[mcp.servers]] name = "klodi"` entry
 ```
 
-- **File ownership:** `klodi-moltis-register` writes klodi's `config.json` + `nats.creds` and inserts the `[[mcp.servers]]` entry into Moltis's `config.toml`. The wake daemon and MCP server are read-only on klodi-side files.
-- **Idempotency:** re-running `klodi-moltis-register` after upgrade replaces only the `klodi` `[[mcp.servers]]` entry; unrelated server blocks (e.g. `weather`, `git`) are preserved verbatim.
+- **File ownership:** `klodi-moltis-register` writes klodi's `config.json` + `nats.creds`, seeds `policies/` non-destructively, and inserts the `[[mcp.servers]]` entry into Moltis's `config.toml`. The wake daemon and MCP server are read-only on `nats.creds` + `config.json`. The MCP server writes `buy/<slug>.md` (in `klodi_watch`) and removes them (in `klodi_unwatch`).
+- **Idempotency:** re-running `klodi-moltis-register` after upgrade overwrites `nats.creds` + `config.json` atomically and replaces only the `klodi` `[[mcp.servers]]` entry; `policies/`, `buy/`, `sell/`, and unrelated server blocks are preserved verbatim. `klodi_setup_reseed_policies` is non-destructive — present files are never overwritten.
 
 ## 8. Test entry points
 

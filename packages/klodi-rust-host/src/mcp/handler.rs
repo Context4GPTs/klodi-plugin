@@ -25,6 +25,11 @@ pub struct McpConfig {
     /// Server identity advertised in `initialize` responses.
     pub server_name: String,
     pub server_version: String,
+    /// Name of the host-specific register CLI binary (e.g.
+    /// `klodi-ironclaw-register`). Substituted into `klodi_setup_status`
+    /// `next_action` messages so the agent surfaces the correct command
+    /// for the current host. Default: `"klodi-register"`.
+    pub register_cli: String,
 }
 
 #[derive(Clone)]
@@ -49,6 +54,10 @@ impl KlodiMcpHandler {
 
     pub(super) fn klodi_home(&self) -> &Path {
         &self.inner.cfg.klodi_home
+    }
+
+    pub(super) fn register_cli(&self) -> &str {
+        &self.inner.cfg.register_cli
     }
 
     /// Lazily open the persistent NATS-WS connection. Subsequent calls

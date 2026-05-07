@@ -12,10 +12,22 @@
 //!   bearer-token aware, optional `--health-port` probe.
 //! - [`register`] — HTTP-only registration loop. Mints a session UUID,
 //!   polls `${api_url}/api/sessions/<id>`, persists creds + config via
-//!   `klodi_secret_write`.
-//! - [`paths`] — cross-platform default `${KLODI_HOME}` resolution.
-//! - [`setup_status`] — phase + missing-files + JWT-decoded user-id
-//!   reporter for the daemon CLI's `setup-status` subcommand.
+//!   `klodi_secret_write`, and seeds `${KLODI_HOME}/policies/` from the
+//!   embedded skill bundle.
+//! - [`paths`] — cross-platform default `${KLODI_HOME}` resolution and
+//!   sub-path helpers (`policies/`, `buy/`, `sell/`).
+//! - [`policy_seed`] — non-destructive seeding of
+//!   `${KLODI_HOME}/policies/{negotiation_style,security}.md` from the
+//!   embedded skill bundle. Driven by registration + the
+//!   `klodi_setup_reseed_policies` MCP tool.
+//! - [`buy_sell_files`] — frontmatter parse/write for
+//!   `${KLODI_HOME}/{buy,sell}/<slug>.md` operator-edited strategy files.
+//!   Powers `klodi_watch` / `klodi_unwatch` and listing-lifecycle hooks.
+//! - [`setup_status`] — phase + missing-files + policy awareness +
+//!   structured `next_action` reporter for the daemon CLI's
+//!   `setup-status` subcommand and the in-agent `klodi_setup_status` tool.
+//! - [`skill_bundle`] — `include_dir`-embedded canonical skill bundle.
+//!   Powers both the MCP `resources/list` surface and policy seeding.
 //! - [`health`] — minimal `/healthz` HTTP probe served by the forwarder
 //!   when `--health-port` is set.
 //!
@@ -24,11 +36,14 @@
 //! types from `klodi_nats_client` per their existing Cargo deps —
 //! re-exporting here would just duplicate the public surface.
 
+pub mod buy_sell_files;
 pub mod forwarder;
 pub mod health;
 pub mod paths;
+pub mod policy_seed;
 pub mod register;
 pub mod setup_status;
+pub mod skill_bundle;
 
 #[cfg(feature = "mcp")]
 pub mod host_mcp_config;
@@ -37,7 +52,10 @@ pub mod mcp;
 
 pub use forwarder::{ForwarderConfig, run_forwarder};
 pub use register::{RegisterArgs, run_register};
-pub use setup_status::{SetupPhase, SetupStatus, klodi_setup_status};
+pub use setup_status::{
+    IssueSeverity, NextAction, SetupIssue, SetupPhase, SetupStatus, klodi_setup_status,
+    klodi_setup_status_with_register_cli,
+};
 
 #[cfg(feature = "mcp")]
 pub use host_mcp_config::{HostMcpEntry, apply_host_mcp_entry, default_host_config_path};

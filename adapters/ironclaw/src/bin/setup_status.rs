@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use klodi_rust_host::{klodi_setup_status, paths};
+use klodi_rust_host::{klodi_setup_status_with_register_cli, paths};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -19,7 +19,7 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let klodi_home = cli.klodi_home.unwrap_or_else(paths::klodi_home);
-    let status = klodi_setup_status(&klodi_home);
+    let status = klodi_setup_status_with_register_cli(&klodi_home, "klodi-ironclaw-register");
     let json = serde_json::to_string_pretty(&status)?;
     println!("{json}");
     Ok(())
