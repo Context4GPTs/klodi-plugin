@@ -13,6 +13,13 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use klodi_rust_host::{BodyShape, ForwarderConfig, paths, run_forwarder};
 use std::path::PathBuf;
+use std::time::Duration;
+
+/// Per-attempt timeout for the wake POST. IronClaw's `/event-trigger`
+/// acks on receipt and runs the agent in the background, so 10s is the
+/// right upper bound — long enough for a healthy ack, short enough that a
+/// stalled host surfaces fast and JetStream redelivers.
+const WAKE_POST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Parser, Debug)]
 #[command(
@@ -86,6 +93,7 @@ async fn main() -> Result<()> {
         log_event_prefix: "klodi_ironclaw".into(),
         health_port: cli.health_port,
         body_shape: BodyShape::Structured,
+        wake_post_timeout: WAKE_POST_TIMEOUT,
     })
     .await
     .context("running klodi-ironclaw-daemon")

@@ -21,6 +21,22 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use klodi_rust_host::{BodyShape, ForwarderConfig, paths, run_forwarder};
 use std::path::PathBuf;
+use std::time::Duration;
+
+/// Per-attempt timeout for the wake POST. ZeroClaw 0.7.4 `/webhook` runs
+/// the agent loop synchronously and only returns the response body once
+/// the agent has finished — empirically a trivial `{"message":"ping"}`
+/// already takes ~6s, and real `channel.message` wakes (agent reasons +
+/// calls `klodi_channel_message` to reply) routinely take 15–60s but a
+/// long-tool-using turn can run far longer. 240s buys generous headroom
+/// for that long tail while still bounding pathological hangs. Each
+/// in-flight POST holds only its own task — the forwarder serves
+/// notifications and channel messages on independent subscriber tasks,
+/// so a slow wake here does not block other deliveries. Anything shorter
+/// than the agent's typical turn pins the daemon in a NAK / redeliver
+/// loop, and the redeliveries stack parallel agent loops on the gateway
+/// since each retry kicks off a fresh agent init.
+const WAKE_POST_TIMEOUT: Duration = Duration::from_secs(240);
 
 #[derive(Parser, Debug)]
 #[command(
@@ -108,6 +124,7 @@ async fn main() -> Result<()> {
         log_event_prefix: "klodi_zeroclaw".into(),
         health_port: cli.health_port,
         body_shape: BodyShape::MessageWrapped,
+        wake_post_timeout: WAKE_POST_TIMEOUT,
     })
     .await
     .context("running klodi-zeroclaw-daemon")

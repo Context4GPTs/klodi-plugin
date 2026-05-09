@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-05-09
+
+**klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.
+
+### Fixed
+
+- **klodi-zeroclaw wake delivery (P0):** every marketplace wake delivered to `klodi-zeroclaw-daemon` 0.2.4 hit `klodi_wake_forward_transport_error` and JetStream redelivered on a 10s cadence; the agent never produced a turn. Root cause: `ForwarderConfig`'s reqwest client used a hardcoded 10s timeout, but ZeroClaw 0.7.4's `POST /webhook` is **synchronous** — the gateway spawns the agent loop, runs it to completion, and returns the agent's reply (`{"model","response"}`) in the response body. Empirically a trivial `{"message":"ping"}` round-trip already takes ~6s with the daemon's cached bearer; real `channel.message` wakes (agent reasons + calls `klodi_channel_message` to reply) routinely take 15–60s, with a long tool-using turn running considerably longer — well past any 10s budget. Each redelivery also stacked a fresh agent init on the gateway since the previous loop was still running. Fix: `ForwarderConfig` gains a per-adapter `wake_post_timeout: Duration` field; `klodi-zeroclaw-daemon` sets it to 240s, which buys generous headroom for the long-turn tail without blocking other deliveries (the forwarder serves notifications and channel messages on independent subscriber tasks, so a slow wake here does not stall others). Moltis + IronClaw stay on 10s since their wake endpoints ack on receipt and run the agent in the background.
+
+### Migrating from 0.2.4 to 0.2.5 (klodi-zeroclaw operators only)
+
+Drop-in replacement — no config or env changes. Rebuild the daemon (`cargo build -p klodi-zeroclaw --release` or pull the new container image) and restart. After the bump, a single `channel.message` wake produces one `Initializing MCP client` line on the gateway, the daemon's logs show `klodi_wake_forwarded`, and the agent's reply lands in the marketplace channel within ~30s.
+
 ## [0.2.4] — 2026-05-09
 
 **klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.

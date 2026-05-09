@@ -36,8 +36,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Body shape the host's wake endpoint accepts. Picked per-adapter at
 /// daemon startup; the forwarder dispatches on it in [`forward`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +76,17 @@ pub struct ForwarderConfig {
     pub health_port: Option<u16>,
     /// Body shape the host accepts. See [`BodyShape`].
     pub body_shape: BodyShape,
+    /// Per-attempt reqwest timeout for the wake POST. Picked per-adapter:
+    /// asynchronous hosts that ack on receipt and run the agent in the
+    /// background (Moltis, IronClaw) want a small bound — seconds — so a
+    /// stalled host surfaces fast and JetStream redelivers. Synchronous
+    /// hosts that block the response on the agent's full turn (ZeroClaw
+    /// 0.7.4 `/webhook` runs the agent loop inline and returns
+    /// `{"model","response"}` only after the agent finishes) need minutes,
+    /// since real wakes routinely take 15–60s. A timeout shorter than the
+    /// agent's typical turn pins the daemon in a NAK / redeliver loop and
+    /// no wake ever resolves.
+    pub wake_post_timeout: Duration,
 }
 
 #[derive(Serialize)]
@@ -121,7 +130,7 @@ pub async fn run_forwarder(config: ForwarderConfig) -> Result<()> {
     );
 
     let http = HttpClient::builder()
-        .timeout(HTTP_TIMEOUT)
+        .timeout(config.wake_post_timeout)
         .user_agent(config.user_agent.as_str())
         .build()
         .context("building reqwest client")?;
