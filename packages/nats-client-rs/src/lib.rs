@@ -37,7 +37,10 @@ pub use client::{KlodiClient, RequestOptions};
 pub use config::{KlodiConfig, load_config, load_creds};
 pub use consumers::{ActiveSubscription, ChannelHandler, NotificationHandler};
 pub use error::KlodiError;
-pub use events::{ChannelMessageEvent, NotificationEvent};
+pub use events::{
+    ChannelMessageEvent, DeliveryOffer, NotificationEvent, PickupLocation,
+    SearchMatchListingSummary, ShipOrigin,
+};
 pub use metrics::{ClientMetrics, MetricsRecorder};
 pub use publish::PublishAck;
 pub use secret_write::{DEFAULT_MODE as SECRET_WRITE_DEFAULT_MODE, klodi_secret_write};

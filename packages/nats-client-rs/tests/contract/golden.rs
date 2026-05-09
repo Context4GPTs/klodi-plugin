@@ -18,7 +18,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use klodi_nats_client::events::{ChannelMessageEvent, NotificationEvent};
+use klodi_nats_client::events::{ChannelMessageEvent, DeliveryOffer, NotificationEvent};
 
 fn golden_dir() -> PathBuf {
     // CARGO_MANIFEST_DIR is the package root (nats-client-rs).
@@ -330,8 +330,26 @@ fn search_match() {
             assert!(!listing_summary.title.is_empty());
             assert!(listing_summary.asking_price >= 0);
             assert!(!listing_summary.currency.is_empty());
-            assert!(!listing_summary.delivery_method.is_empty());
-            // location_area is Option<String>, fine either way.
+            // Post-redesign: fulfillment is a DeliveryOffer[] with at
+            // least one entry. The legacy flat (delivery_method,
+            // location_area) pair was removed in lockstep with the TS
+            // schema redesign in tool-catalog/src/delivery.ts.
+            assert!(
+                !listing_summary.fulfillment.is_empty(),
+                "fulfillment must carry at least one DeliveryOffer",
+            );
+            for offer in &listing_summary.fulfillment {
+                match offer {
+                    DeliveryOffer::Pickup { location } => {
+                        assert!(!location.area.is_empty());
+                    }
+                    DeliveryOffer::Ship { from, ships_to } => {
+                        assert!(!from.country.is_empty());
+                        assert!(!ships_to.is_empty());
+                    }
+                    DeliveryOffer::Digital => {}
+                }
+            }
             assert!(!listing_summary.seller_handle.is_empty());
             for p in &listing_summary.photos {
                 assert!(!p.is_empty());
@@ -391,7 +409,13 @@ fn channel_message() {
     assert_event_id_nonempty(&evt.event_id);
     assert!(!evt.channel_id.is_empty());
     assert!(!evt.message_id.is_empty());
-    assert!(evt.sequence > 0);
+    // The publisher does NOT embed sequence in the body — JetStream
+    // assigns it server-side and the consumer populates the field from
+    // msg.info().stream_sequence post-parse. The fixture mirrors the
+    // publisher's body, so sequence parses to its serde default (0).
+    // The assertion lives in the consumer integration tests, where a
+    // real JetStream message is available.
+    assert_eq!(evt.sequence, 0);
     assert!(!evt.sender_user_id.is_empty());
     assert!(!evt.sender_handle.is_empty());
     assert!(!evt.content.is_empty());

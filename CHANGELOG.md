@@ -6,8 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-05-09
+
+**Rust adapters (klodi-zeroclaw, klodi-moltis, klodi-ironclaw).** OpenClaw and the Python adapters (klodi-hermes, klodi-nanobot) are unaffected and not republished at this version.
+
 ### Fixed
 
+- **klodi-{zeroclaw,moltis,ironclaw} wake pump (P0):** the Rust NATS consumer dropped every `search.match` and `channel.message` wake with `klodi_consumer_parse_failed` because `packages/nats-client-rs/src/events.rs` had drifted from the canonical TS wire schema in `packages/tool-catalog/src/events.ts`. Two distinct shapes were affected:
+  - `SearchMatchListingSummary` still required the legacy flat `delivery_method` (string) and `location_area` (Option<String>) fields. The publisher (`services/marketplace/src/handlers/listings-search-evaluator.ts`) emits the new `fulfillment: DeliveryOffer[]` shape — a TypeBox-validated discriminated union over `pickup` / `ship` / `digital`. The Rust struct now mirrors the TS source of truth: a new `DeliveryOffer` enum (with `PickupLocation` and `ShipOrigin` value types) replaces the flat triple. Pickup coordinates + area now live INSIDE the offer record, ship offers carry `from.country` + `shipsTo`, and `digital` has no extra fields.
+  - `ChannelMessageEvent.sequence` was a required `u64`. The publisher (`packages/nats-client-ts/src/publish.ts`) intentionally does NOT embed sequence in the body — JetStream assigns the stream sequence server-side and it cannot be known at mint time. The field is now `#[serde(default)]` so the parse path succeeds; `consumers.rs::process_channel` populates `event.sequence = msg.info()?.stream_sequence` post-parse, so handlers (and the wake-forward POST body) see the real JetStream sequence rather than a missing field.
+  - Cross-language contract test (`tests/contract/golden.rs`) and the shared golden corpus at `packages/tool-catalog/tests/golden/{search.match,channel.message}.json` updated in lockstep. Both fixtures still spoke the dead schema — that gap is why the contract suite previously passed against drifted Rust types. The TS host adapters (OpenClaw, Hermes, Nanobot) consume via `nats-client-ts`, which IS the source of truth, so they were never affected.
 - **klodi-{zeroclaw,moltis,ironclaw}-register:** the host `config.toml` merge step now accepts both `[[mcp.servers]]` (headered) and `servers = [{ … }]` (inline) representations of `mcp.servers`. Previously the inline form failed with `[[mcp.servers]] exists but isn't an array-of-tables — refusing to overwrite`, blocking re-runs of register on any `config.toml` rewritten by another writer — e.g. ZeroClaw's daemon persisting `config.toml` after a pairing event, which materializes the headered block as an inline table with the Server struct's default fields (`args`, `headers`). The two TOML forms are semantically identical (both deserialize to the same `Vec<Server>`); the merge step now mutates either form in place, updating only the `klodi` entry while preserving every other entry and the writer's chosen syntax. Rejection is reserved for `mcp.servers` being a non-array or an array containing non-tables.
 
 ## [0.2.2] — 2026-05-07

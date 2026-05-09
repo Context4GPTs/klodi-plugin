@@ -449,7 +449,7 @@ async fn process_channel(
     if let Some(p) = pending_of(&msg) {
         metrics.set_pending(p);
     }
-    let event: ChannelMessageEvent = match serde_json::from_slice(&msg.payload) {
+    let mut event: ChannelMessageEvent = match serde_json::from_slice(&msg.payload) {
         Ok(evt) => evt,
         Err(err) => {
             tracing::error!(
@@ -462,6 +462,15 @@ async fn process_channel(
             return;
         }
     };
+    // Publisher (`nats-client-ts/src/publish.ts`) cannot embed sequence
+    // in the body — JetStream assigns it server-side. Inject it from
+    // the per-message info so handlers see the real stream sequence
+    // rather than the serde default of 0. `info()` only fails if the
+    // reply subject is malformed (server bug); fall back to the default
+    // rather than dropping the wake.
+    if let Ok(info) = msg.info() {
+        event.sequence = info.stream_sequence;
+    }
     let event_id = event.event_id.clone();
     {
         let mut cache = lru.lock().await;

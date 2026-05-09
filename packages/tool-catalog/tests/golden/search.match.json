@@ -7,8 +7,16 @@
     "title": "Pentax K1000 with 50mm lens",
     "asking_price": 12500,
     "currency": "USD",
-    "delivery_method": "pickup",
-    "location_area": "Brooklyn, NY",
+    "fulfillment": [
+      {
+        "method": "pickup",
+        "location": {
+          "lat": 40.6782,
+          "lng": -73.9442,
+          "area": "Brooklyn, NY"
+        }
+      }
+    ],
     "seller_handle": "alice",
     "photos": [
       "https://assets.klodi.example/listings/11111111/photo-1.jpg",

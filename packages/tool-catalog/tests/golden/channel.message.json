@@ -3,7 +3,6 @@
   "event_id": "a1b2c3d4-0010-4000-8000-000000000010",
   "channel_id": "55555555-5555-4555-8555-555555555555",
   "message_id": "66666666-6666-4666-8666-666666666666",
-  "sequence": 7,
   "sender_user_id": "77777777-7777-4777-8777-777777777777",
   "sender_handle": "bob",
   "content": "Would you take 90 for it if I pick up today?",

@@ -29,6 +29,14 @@ pub struct ChannelMessageEvent {
     /// Server-assigned message UUID; minted client-side by the publisher.
     pub message_id: String,
     /// JetStream sequence within the channel subject.
+    ///
+    /// Not present in the publisher body — the publisher cannot know
+    /// the stream sequence at mint time. The consumer populates this
+    /// from `msg.info()?.stream_sequence` after JSON parse, before
+    /// dispatching to the handler. `serde(default)` lets the body parse
+    /// without it; the post-parse injection in `process_channel`
+    /// guarantees the value the handler sees is the real sequence.
+    #[serde(default)]
     pub sequence: u64,
     pub sender_user_id: String,
     pub sender_handle: String,
@@ -38,15 +46,62 @@ pub struct ChannelMessageEvent {
     pub created_at: String,
 }
 
-/// Public summary of a listing carried inside a `search.match` wake.
+/// One delivery option a seller advertises on a listing. Mirrors
+/// `tool-catalog/src/delivery.ts:DeliveryOffer` field-for-field.
+///
+/// `serde(tag = "method")` matches the TS discriminator literal —
+/// `pickup` / `ship` / `digital`. Each variant rejects sibling fields
+/// at the type level: a `Ship.shipsTo` deserializing into a `Pickup`
+/// payload is a parse error, just as in TypeBox's
+/// `additionalProperties: false`.
+///
+/// The TS wire shape uses camelCase (`shipsTo`); explicit `rename`
+/// on the field maps it to the Rust snake_case identifier. A blanket
+/// `rename_all = "camelCase"` at the enum level only renames variant
+/// discriminators, not nested struct-variant fields.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(tag = "method")]
+pub enum DeliveryOffer {
+    #[serde(rename = "pickup")]
+    Pickup { location: PickupLocation },
+    #[serde(rename = "ship")]
+    Ship {
+        from: ShipOrigin,
+        #[serde(rename = "shipsTo")]
+        ships_to: Vec<String>,
+    },
+    #[serde(rename = "digital")]
+    Digital,
+}
+
+/// Pickup meeting-point coordinates + human-readable area string.
+/// Mirrors `tool-catalog/src/delivery.ts` pickup `location`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct PickupLocation {
+    pub lat: f64,
+    pub lng: f64,
+    pub area: String,
+}
+
+/// Origin country for a `ship` offer. ISO 3166-1 alpha-2.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ShipOrigin {
+    pub country: String,
+}
+
+/// Public summary of a listing carried inside a `search.match` wake.
+///
+/// `fulfillment` replaces the prior flat `(delivery_method, location_area)`
+/// pair — see `tool-catalog/src/delivery.ts` for the redesign rationale.
+/// The publisher (`services/marketplace/src/handlers/listings-search-evaluator.ts`)
+/// emits the `DeliveryOffer[]` directly; the parser must accept it as such.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct SearchMatchListingSummary {
     pub title: String,
     /// Asking price in cents.
     pub asking_price: i64,
     pub currency: String,
-    pub delivery_method: String,
-    pub location_area: Option<String>,
+    pub fulfillment: Vec<DeliveryOffer>,
     pub seller_handle: String,
     pub photos: Vec<String>,
 }
@@ -226,6 +281,29 @@ mod tests {
         assert_eq!(back, evt);
     }
 
+    /// The publisher (`nats-client-ts/src/publish.ts`) does NOT include
+    /// `sequence` in the body — the JetStream sequence is unknown at
+    /// mint time. The consumer must therefore parse a body without
+    /// sequence and inject the value from `msg.info()` post-parse.
+    /// `serde(default)` on the field makes that parse path succeed.
+    #[test]
+    fn channel_message_parses_without_sequence_in_body() {
+        let body = serde_json::json!({
+            "kind": "channel.message",
+            "event_id": "11111111-1111-1111-1111-111111111111",
+            "channel_id": "ch1",
+            "message_id": "22222222-2222-2222-2222-222222222222",
+            "sender_user_id": "u1",
+            "sender_handle": "alice",
+            "content": "hello",
+            "created_at": "2026-04-25T10:00:00.000Z"
+        });
+        let evt: ChannelMessageEvent =
+            serde_json::from_value(body).expect("parse without sequence");
+        assert_eq!(evt.sequence, 0, "sequence defaults to 0 — consumer overwrites post-parse");
+        assert_eq!(evt.event_id, "11111111-1111-1111-1111-111111111111");
+    }
+
     #[test]
     fn notification_offer_proposed_round_trips() {
         let body = serde_json::json!({
@@ -256,8 +334,16 @@ mod tests {
                 "title": "Pentax K1000",
                 "asking_price": 9500,
                 "currency": "USD",
-                "delivery_method": "pickup",
-                "location_area": "Brooklyn, NY",
+                "fulfillment": [
+                    {
+                        "method": "pickup",
+                        "location": {
+                            "lat": 40.6782,
+                            "lng": -73.9442,
+                            "area": "Brooklyn, NY"
+                        }
+                    }
+                ],
                 "seller_handle": "alice",
                 "photos": ["https://example/1.jpg"]
             }
@@ -267,12 +353,44 @@ mod tests {
         match &evt {
             NotificationEvent::SearchMatch { listing_summary, .. } => {
                 assert_eq!(listing_summary.asking_price, 9500);
-                assert_eq!(listing_summary.location_area.as_deref(), Some("Brooklyn, NY"));
+                assert_eq!(listing_summary.fulfillment.len(), 1);
+                match &listing_summary.fulfillment[0] {
+                    DeliveryOffer::Pickup { location } => {
+                        assert_eq!(location.area, "Brooklyn, NY");
+                    }
+                    other => panic!("expected pickup offer, got {other:?}"),
+                }
             }
             other => panic!("wrong variant: {other:?}"),
         }
         let back = serde_json::to_value(&evt).expect("serialize");
         assert_eq!(back, body);
+    }
+
+    /// All three `DeliveryOffer` variants must round-trip with their
+    /// variant-specific fields preserved. `additionalProperties: false`
+    /// on the TS side means a `Pickup` carrying `shipsTo` must fail —
+    /// but that's a TS-side concern; here we only need to verify the
+    /// happy-path encoding for each variant.
+    #[test]
+    fn delivery_offer_variants_round_trip() {
+        let pickup = serde_json::json!({
+            "method": "pickup",
+            "location": { "lat": 40.6782, "lng": -73.9442, "area": "Brooklyn, NY" }
+        });
+        let ship = serde_json::json!({
+            "method": "ship",
+            "from": { "country": "US" },
+            "shipsTo": ["US-NY", "GB"]
+        });
+        let digital = serde_json::json!({ "method": "digital" });
+
+        for body in [pickup, ship, digital] {
+            let parsed: DeliveryOffer =
+                serde_json::from_value(body.clone()).expect("parse offer");
+            let back = serde_json::to_value(&parsed).expect("re-serialize offer");
+            assert_eq!(back, body, "delivery offer must round-trip byte-equal");
+        }
     }
 
     #[test]
