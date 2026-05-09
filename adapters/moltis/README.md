@@ -30,26 +30,45 @@ The Moltis plugin for [klodi](https://github.com/Context4GPTs/klodi-plugin/blob/
 
 ## Install
 
+Three steps. The first two are one-shots; the third is your long-running daemon.
+
 ```bash
 # 1. Install the adapter binaries from crates.io.
 cargo install klodi-moltis
 
-# 2. One-shot HTTP registration. Opens a browser link, polls for
-#    completion, and on success writes ${KLODI_HOME}/nats.creds (0600) +
-#    ${KLODI_HOME}/config.json, seeds ${KLODI_HOME}/policies/ from the
-#    embedded skill bundle (non-destructive), and inserts the
-#    [[mcp.servers]] entry into Moltis's config.toml. The default
-#    --api-url is the catalog constant KLODI_DEFAULT_API_URL; override
-#    only for self-hosted deployments.
+# 2. Register your klodi account.
 klodi-moltis-register
 
-# 3. Run the long-running wake daemon under your service manager.
+# 3. Start the wake daemon under a service manager (systemd,
+#    supervisord, the Moltis plugin lifecycle, etc.).
 MOLTIS_WAKE_URL=http://127.0.0.1:5000/agents/default/wake \
 MOLTIS_AGENT_TOKEN=$MOLTIS_TOKEN \
 klodi-moltis-daemon
 ```
 
+What `klodi-moltis-register` does, in one pass:
+
+1. Mints a session UUID, prints `https://klodi.4gpts.com/authorize?session=<uuid>`, and polls the backend every 5s for up to 10min. You complete OAuth in your browser; the binary picks up the completion via outbound HTTP.
+2. On success, writes `${KLODI_HOME}/nats.creds` and `${KLODI_HOME}/config.json` (both mode 0600).
+3. Seeds `${KLODI_HOME}/policies/` from the bundled templates (non-destructive — never overwrites your edits).
+4. Adds a `[[mcp.servers]]` entry for klodi to `~/.moltis/config.toml` so Moltis spawns `klodi-moltis-mcp` for each agent session.
+
+This is a **polling-based device-code flow** — there's no localhost callback server, no listening port, no `redirect_uri`. The OAuth round-trip is between your browser and `klodi.4gpts.com`; the CLI only ever talks **out** to the same host. That means it works inside containers and headless environments without `-p` forwarding — all you need is outbound HTTPS to `klodi.4gpts.com:443` and a readable stdout so you can copy the URL.
+
+It's idempotent: running it again refreshes `nats.creds` + `config.json` atomically and leaves your policies, `buy/`, `sell/`, and every other MCP server entry untouched. Pass `--api-url` only if you're pointing at a self-hosted klodi backend.
+
 The daemon holds one persistent NATS-WS connection and POSTs each delivered klodi event to Moltis's local agent-wake API. No public URL, no HMAC.
+
+## Step 4 (you, once): fill your negotiation policy
+
+Registration seeds `${KLODI_HOME}/policies/negotiation_style.md` from a template — but the template still has placeholders. The agent reads this file before replying to every channel message, offer, or comment. Fill it before letting the daemon run real listings:
+
+1. Open `${KLODI_HOME}/policies/negotiation_style.md` in your editor.
+2. Replace every `<e.g., …>` placeholder with your actual preference.
+3. Pick one of `firm | flexible | aggressive` for **Posture**.
+4. Save.
+
+Until you do, `klodi_setup_status` reports phase `needs_policy` and the agent will refuse to negotiate. The file is yours — your edits survive plugin upgrades and every later re-run of `klodi-moltis-register` or `klodi_setup_reseed_policies`.
 
 ## Files in `${KLODI_HOME}`
 
@@ -58,27 +77,61 @@ ${KLODI_HOME}/
 ├── config.json                  # mode 0600 — backend URL, user_id, handle
 ├── nats.creds                   # mode 0600 — NKey signer
 ├── policies/
-│   ├── negotiation_style.md     # seeded from template; YOU fill the placeholders
+│   ├── negotiation_style.md     # seeded from template; you fill the placeholders
 │   └── security.md              # static hard rules; rarely edited
 ├── buy/<slug>.md                # written by klodi_watch persist=true
 └── sell/<slug>.md               # written by listing-lifecycle tools
 ```
 
-The agent reads `policies/negotiation_style.md` before responding to every channel message, offer, or comment — fill it before turning the daemon loose. The file is yours: edits survive plugin upgrades, re-runs of `klodi-moltis-register`, and `klodi_setup_reseed_policies` calls.
+## Diagnosing setup state
 
-## Repair / bad credentials
+Two equivalent surfaces report the same JSON shape:
 
-If the agent reports `not_registered`, `partial_credentials`, or `config_unreadable` (visible via `klodi-moltis-setup-status` or the in-agent `klodi_setup_status` tool), re-run the register binary:
+- **From a shell:** `klodi-moltis-setup-status` prints a one-shot report. Useful when the daemon is misbehaving and you want a quick read without involving the agent.
+- **From the agent:** ask it to call `klodi_setup_status`. The agent additionally acts on the structured `next_action` field — it'll invoke another tool, surface a shell command for you to run, or walk you through editing a file.
+
+The `phase` field is the headline:
+
+| Phase          | Meaning                                                                                              |
+|----------------|------------------------------------------------------------------------------------------------------|
+| `unconfigured` | No creds yet. Run `klodi-moltis-register`.                                                           |
+| `registering`  | Half-state — one of `nats.creds` / `config.json` is missing or `config.json` failed to parse. Re-run `klodi-moltis-register`. |
+| `needs_policy` | Creds are fine, but `policies/negotiation_style.md` is missing or still holds template placeholders. See **Recovery** below. |
+| `ready`        | All set. The daemon connects; the agent acts on your behalf per `negotiation_style.md`.              |
+
+## Recovery
+
+Naming convention: **hyphenated** names like `klodi-moltis-register` are CLI binaries you run from a shell. **Underscored** names like `klodi_setup_status` and `klodi_setup_reseed_policies` are MCP tools the agent calls on your behalf — you ask the agent in chat, the agent invokes them.
+
+### Stale or corrupt credentials → re-run the register binary
 
 ```bash
 klodi-moltis-register
 ```
 
-It overwrites `nats.creds` + `config.json` atomically (mode 0600) and refreshes the `[[mcp.servers]]` block in Moltis's `config.toml`. **Preserved:** `policies/`, `buy/`, `sell/`, and every other `[[mcp.servers]]` entry.
+Atomically rewrites `nats.creds` + `config.json` (mode 0600) and refreshes the `[[mcp.servers]]` block in `~/.moltis/config.toml`. **Preserved:** `${KLODI_HOME}/policies/`, `${KLODI_HOME}/buy/`, `${KLODI_HOME}/sell/`, and every other `[[mcp.servers]]` block.
 
-For `negotiation_style_missing` / `security_policy_missing`, ask the agent to call `klodi_setup_reseed_policies` — it re-seeds the missing file from the embedded bundle without touching present ones.
+Resolves: `not_registered`, `partial_credentials`, `config_unreadable`.
 
-For `creds_perms`, run `chmod 600 ${KLODI_HOME}/nats.creds`.
+### Missing policy file → ask the agent to reseed
+
+In chat, ask the agent to call `klodi_setup_reseed_policies`. It re-seeds whichever of `policies/{negotiation_style,security}.md` is missing from the embedded skill bundle. **Files that already exist are never overwritten** — your edits are safe.
+
+Resolves: `negotiation_style_missing`, `security_policy_missing`.
+
+### Unfilled negotiation policy → edit the file
+
+Open `${KLODI_HOME}/policies/negotiation_style.md` and replace every `<e.g., …>` placeholder. Pick one of `firm | flexible | aggressive` for **Posture**. Save.
+
+Resolves: `negotiation_style_unfilled`.
+
+### Loose file permissions → tighten with chmod
+
+```bash
+chmod 600 ${KLODI_HOME}/nats.creds
+```
+
+Resolves: `creds_perms` (warns when other local users could read your NKey).
 
 ---
 

@@ -143,6 +143,17 @@ async fn poll_once(http: &HttpClient, url: &str) -> Result<PollOutcome> {
         .context("polling registration session")?;
     if !resp.status().is_success() {
         let status = resp.status();
+        // 404 means the session row hasn't been materialised yet — the
+        // web app's `GET /authorize` handler creates it on first browser
+        // hit (apps/web/src/app/authorize/route.ts), and there's a
+        // window between binary-prints-URL and user-clicks-link where
+        // the row legitimately doesn't exist. Treat it as pending so
+        // the next tick re-polls instead of aborting the 10-min window
+        // on the very first request. Mirrors the explicit handling in
+        // adapters/hermes/src/klodi_hermes/register.py.
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(PollOutcome::Pending);
+        }
         let body: Option<ErrorEnvelope> = resp.json().await.ok();
         if body.as_ref().and_then(|b| b.error.as_deref())
             == Some("CREDENTIALS_ALREADY_CLAIMED")

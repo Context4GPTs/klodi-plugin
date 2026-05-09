@@ -15,7 +15,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
-use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value, value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value, value};
 
 const SERVER_NAME: &str = "klodi";
 const TRANSPORT_STDIO: &str = "stdio";
@@ -76,20 +76,52 @@ fn upsert_klodi_server(doc: &mut DocumentMut, entry: &HostMcpEntry) -> Result<()
         .entry("servers")
         .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
 
+    // `[[mcp.servers]]` (toml_edit::ArrayOfTables) and
+    // `servers = [{ … }]` (Value::Array of inline tables) are
+    // TOML-equivalent — both deserialize to the same Vec<Server>. Foreign
+    // serializers (e.g. ZeroClaw's daemon, which round-trips this file
+    // through serde on pairing) may rewrite the headered form into the
+    // inline form; mutate in place either way so we leave their formatting
+    // alone. Reject only non-arrays or arrays containing non-tables.
+    if let Some(arr) = servers_item.as_array_of_tables_mut() {
+        upsert_into_array_of_tables(arr, entry);
+    } else if let Some(arr) = servers_item.as_array_mut() {
+        upsert_into_inline_array(arr, entry)?;
+    } else {
+        bail!("mcp.servers exists but isn't an array — refusing to overwrite");
+    }
+    Ok(())
+}
+
+fn upsert_into_array_of_tables(arr: &mut ArrayOfTables, entry: &HostMcpEntry) {
     let target = build_klodi_server_table(entry);
-
-    let arr = servers_item.as_array_of_tables_mut().ok_or_else(|| {
-        anyhow::anyhow!(
-            "[[mcp.servers]] exists but isn't an array-of-tables — refusing to overwrite"
-        )
-    })?;
-
     let existing_idx = arr
         .iter()
         .position(|t| t.get("name").and_then(Item::as_str) == Some(SERVER_NAME));
     match existing_idx {
         Some(idx) => *arr.get_mut(idx).expect("idx in bounds") = target,
         None => arr.push(target),
+    }
+}
+
+fn upsert_into_inline_array(arr: &mut Array, entry: &HostMcpEntry) -> Result<()> {
+    for v in arr.iter() {
+        if !v.is_inline_table() {
+            bail!("mcp.servers contains a non-table entry — refusing to overwrite");
+        }
+    }
+    let target = build_klodi_server_inline_table(entry);
+    let existing_idx = arr.iter().position(|v| {
+        v.as_inline_table()
+            .and_then(|t| t.get("name"))
+            .and_then(|n| n.as_str())
+            == Some(SERVER_NAME)
+    });
+    match existing_idx {
+        Some(idx) => {
+            arr.replace(idx, Value::InlineTable(target));
+        }
+        None => arr.push(Value::InlineTable(target)),
     }
     Ok(())
 }
@@ -100,10 +132,23 @@ fn build_klodi_server_table(entry: &HostMcpEntry) -> Table {
     table.insert("transport", value(TRANSPORT_STDIO));
     table.insert("command", value(entry.command.clone()));
 
-    let mut env = toml_edit::InlineTable::new();
+    let mut env = InlineTable::new();
     let home_str = entry.klodi_home.display().to_string();
     env.insert("KLODI_HOME", Value::from(home_str));
     table.insert("env", Item::Value(Value::InlineTable(env)));
+    table
+}
+
+fn build_klodi_server_inline_table(entry: &HostMcpEntry) -> InlineTable {
+    let mut table = InlineTable::new();
+    table.insert("name", Value::from(SERVER_NAME));
+    table.insert("transport", Value::from(TRANSPORT_STDIO));
+    table.insert("command", Value::from(entry.command.clone()));
+
+    let mut env = InlineTable::new();
+    let home_str = entry.klodi_home.display().to_string();
+    env.insert("KLODI_HOME", Value::from(home_str));
+    table.insert("env", Value::InlineTable(env));
     table
 }
 
@@ -217,6 +262,151 @@ command = "old-klodi-binary"
         assert!(
             body.contains("auto_approve = [\"read_*\"]"),
             "[autonomy] section preserved",
+        );
+    }
+
+    #[test]
+    fn replaces_klodi_in_inline_array_form() {
+        // Mirrors what ZeroClaw's daemon writes after a pairing event: the
+        // headered `[[mcp.servers]]` block has been collapsed to a single
+        // `servers = [{ … }, { … }]` line with the Server struct's default
+        // fields (`args`, `headers`) materialized.
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("klodi-home");
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(
+            &cfg,
+            "[mcp]\nenabled = true\nservers = [{ name = \"klodi\", \
+             transport = \"stdio\", command = \"old-klodi-binary\", \
+             env = { KLODI_HOME = \"/x\" }, args = [], headers = {} }, \
+             { name = \"other\", transport = \"stdio\", \
+             command = \"other-mcp\" }]\n",
+        )
+        .unwrap();
+
+        let entry = HostMcpEntry {
+            config_path: cfg.clone(),
+            command: "klodi-zeroclaw-mcp".into(),
+            klodi_home: home.clone(),
+        };
+        apply_host_mcp_entry(&entry).expect("apply against inline form");
+
+        let body = std::fs::read_to_string(&cfg).unwrap();
+        assert!(
+            body.contains("servers = ["),
+            "inline form should be preserved, got:\n{body}",
+        );
+
+        let parsed: DocumentMut = body.parse().unwrap();
+        let servers = parsed["mcp"]["servers"]
+            .as_array()
+            .expect("servers stays an inline array");
+        assert_eq!(servers.len(), 2, "no duplicate klodi entry appended");
+
+        let klodi = servers
+            .iter()
+            .find(|v| {
+                v.as_inline_table()
+                    .and_then(|t| t.get("name"))
+                    .and_then(|n| n.as_str())
+                    == Some("klodi")
+            })
+            .expect("klodi entry present")
+            .as_inline_table()
+            .unwrap();
+        assert_eq!(
+            klodi.get("command").and_then(|v| v.as_str()),
+            Some("klodi-zeroclaw-mcp"),
+            "klodi command updated in place",
+        );
+        assert_eq!(
+            klodi
+                .get("env")
+                .and_then(|v| v.as_inline_table())
+                .and_then(|env| env.get("KLODI_HOME"))
+                .and_then(|v| v.as_str()),
+            Some(home.display().to_string().as_str()),
+        );
+
+        let other = servers
+            .iter()
+            .find(|v| {
+                v.as_inline_table()
+                    .and_then(|t| t.get("name"))
+                    .and_then(|n| n.as_str())
+                    == Some("other")
+            })
+            .expect("other entry preserved")
+            .as_inline_table()
+            .unwrap();
+        assert_eq!(
+            other.get("command").and_then(|v| v.as_str()),
+            Some("other-mcp"),
+            "other entry untouched",
+        );
+    }
+
+    #[test]
+    fn appends_klodi_to_inline_array_form_when_absent() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("klodi-home");
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(
+            &cfg,
+            "[mcp]\nenabled = true\nservers = [\
+             { name = \"other\", transport = \"stdio\", command = \"other-mcp\" }\
+             ]\n",
+        )
+        .unwrap();
+
+        let entry = HostMcpEntry {
+            config_path: cfg.clone(),
+            command: "klodi-zeroclaw-mcp".into(),
+            klodi_home: home,
+        };
+        apply_host_mcp_entry(&entry).expect("apply against inline form");
+
+        let body = std::fs::read_to_string(&cfg).unwrap();
+        assert!(
+            body.contains("servers = ["),
+            "inline form should be preserved, got:\n{body}",
+        );
+        let parsed: DocumentMut = body.parse().unwrap();
+        let servers = parsed["mcp"]["servers"]
+            .as_array()
+            .expect("servers stays an inline array");
+        assert_eq!(servers.len(), 2);
+        assert!(
+            servers.iter().any(|v| {
+                v.as_inline_table()
+                    .and_then(|t| t.get("name"))
+                    .and_then(|n| n.as_str())
+                    == Some("klodi")
+            }),
+            "klodi entry was appended",
+        );
+    }
+
+    #[test]
+    fn rejects_inline_array_with_non_table_elements() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(
+            &cfg,
+            "[mcp]\nenabled = true\nservers = [\"foo\", \"bar\"]\n",
+        )
+        .unwrap();
+
+        let entry = HostMcpEntry {
+            config_path: cfg,
+            command: "klodi-zeroclaw-mcp".into(),
+            klodi_home: dir.path().to_path_buf(),
+        };
+        let err = apply_host_mcp_entry(&entry).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("non-table entry"),
+            "expected non-table error, got: {msg}",
         );
     }
 

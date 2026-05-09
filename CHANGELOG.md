@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **klodi-{zeroclaw,moltis,ironclaw}-register:** the host `config.toml` merge step now accepts both `[[mcp.servers]]` (headered) and `servers = [{ … }]` (inline) representations of `mcp.servers`. Previously the inline form failed with `[[mcp.servers]] exists but isn't an array-of-tables — refusing to overwrite`, blocking re-runs of register on any `config.toml` rewritten by another writer — e.g. ZeroClaw's daemon persisting `config.toml` after a pairing event, which materializes the headered block as an inline table with the Server struct's default fields (`args`, `headers`). The two TOML forms are semantically identical (both deserialize to the same `Vec<Server>`); the merge step now mutates either form in place, updating only the `klodi` entry while preserving every other entry and the writer's chosen syntax. Rejection is reserved for `mcp.servers` being a non-array or an array containing non-tables.
+
 ## [0.2.2] — 2026-05-07
 
 **Rust adapters (klodi-zeroclaw, klodi-moltis, klodi-ironclaw).** OpenClaw and the Python adapters (klodi-hermes, klodi-nanobot) are unaffected and not republished at this version.
