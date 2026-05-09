@@ -2,13 +2,17 @@
 //!
 //! Subscribes the [`KlodiClient`] to both consumers, then translates
 //! each delivered notification or channel message into an HTTP POST to
-//! a local host wake URL. Three adapter-specific knobs configure this:
+//! a local host wake URL. Adapter-specific knobs configure this:
 //!
 //! - `wake_url`         where to POST.
-//! - `bearer_token`     optional `Authorization: Bearer …` (Moltis).
+//! - `bearer_token`     optional `Authorization: Bearer …`.
 //! - `user_agent`       per-adapter UA string.
 //! - `log_event_prefix` per-adapter log namespace (e.g. `"klodi_moltis"`).
 //! - `health_port`      optional `--health-port` for `/healthz` probe.
+//! - `body_shape`       structured envelope vs `{"message": "<json>"}`
+//!                      wrapper. ZeroClaw 0.7.4's `/webhook` contract
+//!                      only accepts the wrapped form; Moltis + IronClaw
+//!                      consume the structured envelope directly.
 //!
 //! Failure semantics: a non-2xx response or transport error from the
 //! host wake POST returns `Err` from the consumer handler, which causes
@@ -34,6 +38,20 @@ use std::time::Duration;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Body shape the host's wake endpoint accepts. Picked per-adapter at
+/// daemon startup; the forwarder dispatches on it in [`forward`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyShape {
+    /// Structured envelope: `{ channel, kind, event_id, user_id, payload }`.
+    /// Moltis and IronClaw consume this directly.
+    Structured,
+    /// Single-string wrapper: `{ "message": "<JSON-stringified envelope>" }`.
+    /// ZeroClaw 0.7.4's `/webhook` route accepts only this shape — the
+    /// gateway treats the body as a free-form prompt-shaped payload and
+    /// rejects unknown keys at the top level.
+    MessageWrapped,
+}
+
 /// Daemon configuration. Per-adapter binaries build this from CLI/env.
 pub struct ForwarderConfig {
     /// Path to `nats.creds`.
@@ -42,7 +60,7 @@ pub struct ForwarderConfig {
     pub config_path: PathBuf,
     /// Local host wake URL (e.g. Moltis's
     /// `http://127.0.0.1:5000/agents/default/wake`, IronClaw's
-    /// `/event-trigger`, ZeroClaw's `/hooks/wake`).
+    /// `/event-trigger`, ZeroClaw 0.7.4's `/webhook`).
     pub wake_url: String,
     /// Optional bearer token. P1-14 promotes this from Moltis-only to
     /// shared — IronClaw + ZeroClaw inherit the mechanism.
@@ -58,6 +76,8 @@ pub struct ForwarderConfig {
     /// daemon binds `0.0.0.0:<port>` and serves `GET /healthz` →
     /// `200 OK` if NATS connected, `503` otherwise.
     pub health_port: Option<u16>,
+    /// Body shape the host accepts. See [`BodyShape`].
+    pub body_shape: BodyShape,
 }
 
 #[derive(Serialize)]
@@ -115,6 +135,7 @@ pub async fn run_forwarder(config: ForwarderConfig) -> Result<()> {
         token: config.bearer_token,
         user_id: user_id.clone(),
         log_event_prefix: config.log_event_prefix.clone(),
+        body_shape: config.body_shape,
         logger,
     });
 
@@ -171,6 +192,7 @@ struct SharedState {
     token: Option<String>,
     user_id: String,
     log_event_prefix: String,
+    body_shape: BodyShape,
     /// Per **D § D15** + P3-14: HTTP error bodies route through KlodiLogger
     /// so the catalog redact list (`body`, `bearer_token`, etc.) is honored
     /// before anything reaches the operator log. Replaces the previous
@@ -237,8 +259,22 @@ async fn forward<T: Serialize>(
     let mut request = state
         .http
         .post(&state.wake_url)
-        .header("Content-Type", "application/json")
-        .json(body);
+        .header("Content-Type", "application/json");
+    request = match state.body_shape {
+        BodyShape::Structured => request.json(body),
+        BodyShape::MessageWrapped => {
+            // ZeroClaw 0.7.4 `/webhook` accepts only `{"message": "<text>"}`.
+            // We carry the full structured envelope as a JSON-encoded
+            // string in `message` so no payload field is dropped — the
+            // agent can `JSON.parse` it on receipt.
+            let inner = serde_json::to_string(body).map_err(|err| {
+                KlodiError::NatsPublish(format!(
+                    "wake POST body serialise: {err}"
+                ))
+            })?;
+            request.json(&json!({ "message": inner }))
+        }
+    };
     if let Some(token) = &state.token {
         request = request.bearer_auth(token);
     }
@@ -334,5 +370,43 @@ mod tests {
         assert_eq!(json["kind"], "channel.message");
         assert_eq!(json["event_id"], "e2");
         assert_eq!(json["payload"]["sequence"], 42);
+    }
+
+    #[test]
+    fn message_wrapped_body_carries_full_envelope_as_json_string() {
+        // ZeroClaw 0.7.4 `/webhook` accepts only `{"message": "<text>"}` —
+        // we round-trip the structured WakePost through serde_json::to_string
+        // and assert the resulting wrapped body parses back to the same
+        // envelope. This is the contract the daemon ships against when
+        // BodyShape::MessageWrapped is selected.
+        let evt = NotificationEvent::ListingCreated {
+            event_id: "e1".into(),
+            listing_id: "l1".into(),
+            title: Some("vintage chair".into()),
+        };
+        let post = WakePost::Notification {
+            kind: evt.kind(),
+            event_id: evt.event_id(),
+            user_id: "u1",
+            payload: &evt,
+        };
+        let inner = serde_json::to_string(&post).unwrap();
+        let wrapped = json!({ "message": inner });
+
+        // Wrapped body has exactly one top-level key.
+        let obj = wrapped.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert!(obj.contains_key("message"));
+
+        // The string parses back to the original structured envelope.
+        let round_trip: Value = serde_json::from_str(
+            wrapped["message"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(round_trip["channel"], "notification");
+        assert_eq!(round_trip["kind"], "listing.created");
+        assert_eq!(round_trip["event_id"], "e1");
+        assert_eq!(round_trip["user_id"], "u1");
+        assert_eq!(round_trip["payload"]["listing_id"], "l1");
     }
 }

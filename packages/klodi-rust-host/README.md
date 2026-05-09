@@ -23,7 +23,7 @@ Three host adapters consume this crate:
 
 - `klodi-moltis` — POSTs to Moltis's local agent-wake API.
 - `klodi-ironclaw` — POSTs to IronClaw's `/event-trigger` endpoint.
-- `klodi-zeroclaw` — POSTs to ZeroClaw's gateway `/hooks/wake` endpoint.
+- `klodi-zeroclaw` — POSTs to ZeroClaw's gateway `/webhook` endpoint (≥ 0.7.4) with a `{"message": "<json>"}` body wrap.
 
 Each adapter's bin/ files are ~30 LOC drivers that build a
 `ForwarderConfig` / `RegisterArgs` from CLI/env and call into the

@@ -99,8 +99,8 @@ hosts:
     maturity: "beta"
     notes: |
       Two control planes from one cargo install:
-        - `klodi-zeroclaw-daemon` forwards NATS wakes to ZeroClaw's
-          `/hooks/wake` HTTP endpoint.
+        - `klodi-zeroclaw-daemon` forwards NATS wakes to ZeroClaw 0.7.4's
+          `/webhook` HTTP endpoint with a bearer minted via `/pair`.
         - `klodi-zeroclaw-mcp` exposes the klodi tool catalog and skill
           bundle to the agent over stdio MCP. `klodi-zeroclaw-register`
           wires it into `~/.zeroclaw/config.toml` automatically on

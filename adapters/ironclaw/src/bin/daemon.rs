@@ -11,7 +11,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use klodi_rust_host::{ForwarderConfig, paths, run_forwarder};
+use klodi_rust_host::{BodyShape, ForwarderConfig, paths, run_forwarder};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -85,6 +85,7 @@ async fn main() -> Result<()> {
         ),
         log_event_prefix: "klodi_ironclaw".into(),
         health_port: cli.health_port,
+        body_shape: BodyShape::Structured,
     })
     .await
     .context("running klodi-ironclaw-daemon")

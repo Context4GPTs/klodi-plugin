@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-05-09
+
+**klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.
+
+### Fixed
+
+- **klodi-zeroclaw wake delivery (P0):** ZeroClaw 0.7.4 retired the `/hooks/wake` route in favor of `POST /webhook`. The old route now falls through to the gateway's SPA static-file fallback, which only serves `GET`/`HEAD` — every wake POST got `405 Method Not Allowed`, NAK'd back into JetStream, and redelivered until `max_deliver` exhausted. Today's container rebuild pulled the new ZeroClaw runtime via the `ghcr.io/zeroclaw-labs/zeroclaw:debian` floating tag, so wakes had been silently failing since the upstream tag moved. The daemon now posts to `/webhook` with `Authorization: Bearer <zc_…>`.
+
+### Changed
+
+- **klodi-zeroclaw `--zeroclaw-hooks-wake-url` / `ZEROCLAW_HOOKS_WAKE_URL` renamed** to `--zeroclaw-webhook-url` / `ZEROCLAW_WEBHOOK_URL` to match the new endpoint name. **Hard break** — the old name is no longer read. Default URL changes from `http://127.0.0.1:7070/hooks/wake` to `http://127.0.0.1:7070/webhook`. Init scripts that exported the old var must update in lockstep with the version bump.
+- **klodi-zeroclaw forwarder body shape:** the daemon now wraps the structured wake envelope (`{channel, kind, event_id, user_id, payload}`) as a single JSON-stringified `message` field — `{"message": "<json>"}` — to match ZeroClaw 0.7.4's `/webhook` contract, which only accepts that shape and treats unknown top-level keys as an error. The agent recovers the structured wake by `JSON.parse`-ing the `message` field on receipt. No payload is dropped. Implemented as a new `BodyShape::MessageWrapped` variant on `klodi_rust_host::ForwarderConfig`; Moltis and IronClaw stay on the existing `BodyShape::Structured` path with no behavioral change.
+
+### Added
+
+- **klodi-zeroclaw daemon-side pair bootstrap.** The daemon resolves its bearer at startup in this priority order:
+  1. `ZEROCLAW_AGENT_TOKEN` env var (operator manages the token themselves).
+  2. `${KLODI_HOME}/zeroclaw.pairing-code` — a sidecar one-time pairing code the operator's init script writes per boot. The daemon POSTs `/pair` with `X-Pairing-Code: <code>`, caches the resulting `zc_<hex>` bearer at `${KLODI_HOME}/zeroclaw.token` (mode 0600), and deletes the consumed code file so it cannot be replayed.
+  3. `${KLODI_HOME}/zeroclaw.token` — the cached bearer from a prior successful pair.
+
+  This closes the `gateway.paired_tokens` lifecycle gap: deployments that rewrite ZeroClaw's `config.toml` per container boot (dropping all paired bearers) are now self-healing as long as the same init script also refreshes the sidecar code file. Pair endpoint is derived from the webhook URL by replacing the `/webhook` suffix with `/pair`; override via the new `ZEROCLAW_PAIR_URL` / `--zeroclaw-pair-url` for non-canonical layouts.
+
+### Migrating from 0.2.3 to 0.2.4 (klodi-zeroclaw operators only)
+
+1. Update your init script: rename `ZEROCLAW_HOOKS_WAKE_URL=…/hooks/wake` to `ZEROCLAW_WEBHOOK_URL=…/webhook`. (Or rely on the new default — the daemon now defaults to `http://127.0.0.1:7070/webhook` if the env var is unset.)
+2. Provide a bearer source. Either:
+    - Export `ZEROCLAW_AGENT_TOKEN=<zc_…>` after pairing manually (call `POST /pair` with `X-Pairing-Code: <code>` against ZeroClaw's gateway), OR
+    - Drop the gateway's startup pairing code at `${KLODI_HOME}/zeroclaw.pairing-code` so the daemon can mint + cache the bearer itself. Refresh the file on every container boot if your deployment wipes ZeroClaw's `config.toml`.
+3. Confirm ZeroClaw core is ≥ 0.7.4. Older builds shipped the retired `/hooks/wake` route; this adapter no longer targets them.
+
 ## [0.2.3] — 2026-05-09
 
 **Rust adapters (klodi-zeroclaw, klodi-moltis, klodi-ironclaw).** OpenClaw and the Python adapters (klodi-hermes, klodi-nanobot) are unaffected and not republished at this version.

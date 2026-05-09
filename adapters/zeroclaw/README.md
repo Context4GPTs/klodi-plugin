@@ -39,8 +39,15 @@ cargo install klodi-zeroclaw
 # 2. Register your klodi account.
 klodi-zeroclaw-register
 
-# 3. Start the wake daemon under a supervisor (systemd, etc.).
-ZEROCLAW_HOOKS_WAKE_URL=http://127.0.0.1:7070/hooks/wake \
+# 3. Pair with the local ZeroClaw gateway. Either:
+#    a) drop the gateway's one-time pairing code (printed to its stdout)
+#       into ${KLODI_HOME}/zeroclaw.pairing-code so the daemon mints +
+#       caches the bearer for you, OR
+#    b) call POST /pair yourself and export the resulting `zc_<hex>`
+#       token as ZEROCLAW_AGENT_TOKEN.
+
+# 4. Start the wake daemon under a supervisor (systemd, etc.).
+ZEROCLAW_WEBHOOK_URL=http://127.0.0.1:7070/webhook \
 klodi-zeroclaw-daemon
 ```
 
@@ -55,7 +62,7 @@ This is a **polling-based device-code flow** — there's no localhost callback s
 
 It's idempotent: running it again refreshes `nats.creds` + `config.json` atomically and leaves your policies, `buy/`, `sell/`, and every other MCP server entry untouched. Pass `--api-url` only if you're pointing at a self-hosted klodi backend.
 
-The daemon holds one persistent NATS-WS connection and forwards each delivered klodi event to ZeroClaw's gateway via `POST /hooks/wake`. No public URL, no HMAC. The pre-0012 HMAC-verifying passthrough is gone — JetStream's at-least-once delivery plus the durable consumer's explicit ack semantics provide the same end-to-end guarantee without a second HTTP layer.
+The daemon holds one persistent NATS-WS connection and forwards each delivered klodi event to ZeroClaw's gateway via `POST /webhook` with `Authorization: Bearer <zc_…>`. The body shape is `{"message": "<JSON-stringified envelope>"}` to match the `/webhook` contract; the agent `JSON.parse`s the message field on receipt to recover the structured wake. No public URL, no HMAC — JetStream's at-least-once delivery plus the durable consumer's explicit ack semantics provide the end-to-end guarantee.
 
 ## Step 4 (you, once): fill your negotiation policy
 
@@ -74,6 +81,8 @@ Until you do, `klodi_setup_status` reports phase `needs_policy` and the agent wi
 ${KLODI_HOME}/
 ├── config.json                  # mode 0600 — backend URL, user_id, handle
 ├── nats.creds                   # mode 0600 — NKey signer
+├── zeroclaw.pairing-code        # one-time code (operator-written, daemon-consumed)
+├── zeroclaw.token               # mode 0600 — cached `zc_<hex>` bearer
 ├── policies/
 │   ├── negotiation_style.md     # seeded from template; you fill the placeholders
 │   └── security.md              # static hard rules; rarely edited
@@ -137,7 +146,8 @@ Resolves: `creds_perms` (warns when other local users could read your NKey).
 
 - **Rust toolchain** for `cargo install` (or pre-built binaries from a release).
 - **A long-running supervisor** (systemd, etc.) for `klodi-zeroclaw-daemon`.
-- **ZeroClaw `/hooks/wake` reachable** at `ZEROCLAW_HOOKS_WAKE_URL`.
+- **ZeroClaw `/webhook` reachable** at `ZEROCLAW_WEBHOOK_URL` (≥ 0.7.4).
+- **A bearer token** — either pre-paired (`ZEROCLAW_AGENT_TOKEN`) or a one-time pairing code dropped at `${KLODI_HOME}/zeroclaw.pairing-code` so the daemon can mint + cache one itself. ZeroClaw 0.7.4 prints the pairing code to its gateway's stdout on startup; deployments that wipe `gateway.paired_tokens` per boot should refresh the sidecar code-file at the same time.
 
 ---
 
@@ -158,7 +168,8 @@ Mirrors the in-agent `klodi_channel_message` tool.
 ZeroClaw-specific security highlights — the [repo SECURITY policy](https://github.com/Context4GPTs/klodi-plugin/blob/main/SECURITY.md) is the authoritative document for the full trust model.
 
 - **NATS NKey credentials at `${KLODI_HOME}/nats.creds`** (mode 0600).
-- **Outbound-only NATS-WS to klodi**, plus the local POST to `ZEROCLAW_HOOKS_WAKE_URL`. No public URL, no HMAC.
+- **Cached ZeroClaw bearer at `${KLODI_HOME}/zeroclaw.token`** (mode 0600), minted by the daemon from a one-time pairing code. The cache is local-only — no network exposure.
+- **Outbound-only NATS-WS to klodi**, plus the local POST to `ZEROCLAW_WEBHOOK_URL` with `Authorization: Bearer <zc_…>`. No public URL, no HMAC.
 
 ---
 

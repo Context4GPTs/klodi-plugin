@@ -50,7 +50,7 @@ pub mod host_mcp_config;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
-pub use forwarder::{ForwarderConfig, run_forwarder};
+pub use forwarder::{BodyShape, ForwarderConfig, run_forwarder};
 pub use register::{RegisterArgs, run_register};
 pub use setup_status::{
     IssueSeverity, NextAction, SetupIssue, SetupPhase, SetupStatus, klodi_setup_status,

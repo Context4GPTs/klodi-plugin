@@ -83,8 +83,9 @@ All three hosts share the same env contract via `klodi_rust_host` in `klodi-plug
 | `IRONCLAW_EVENT_URL` | IronClaw | yes (no default) | URL the daemon POSTs wakes to |
 | `IRONCLAW_AGENT_TOKEN` | IronClaw | yes | Bearer token |
 | `IRONCLAW_HEALTH_PORT` | IronClaw | no | Same as Moltis |
-| `ZEROCLAW_HOOKS_WAKE_URL` | ZeroClaw | yes (no default) | URL the daemon POSTs wakes to |
-| `ZEROCLAW_AGENT_TOKEN` | ZeroClaw | yes | Bearer token |
+| `ZEROCLAW_WEBHOOK_URL` | ZeroClaw | no — defaults to `http://127.0.0.1:7070/webhook` | URL the daemon POSTs wakes to (ZeroClaw 0.7.4's `/webhook` route) |
+| `ZEROCLAW_PAIR_URL` | ZeroClaw | no — derived from `ZEROCLAW_WEBHOOK_URL` by replacing `/webhook` with `/pair` | Override only when the gateway exposes `/pair` at a non-canonical path |
+| `ZEROCLAW_AGENT_TOKEN` | ZeroClaw | one of: env, cached token, or sidecar pairing-code at `${KLODI_HOME}/zeroclaw.pairing-code` | Bearer token (`zc_<hex>` minted by ZeroClaw's `/pair`) |
 | `ZEROCLAW_HEALTH_PORT` | ZeroClaw | no | Same as Moltis |
 
 Source for per-adapter vars: `klodi-plugin/adapters/{moltis,ironclaw,zeroclaw}/src/bin/daemon.rs` `Cli` struct.
@@ -172,6 +173,7 @@ These are not deployment vars; they configure tests.
 |------|------------|-------------|
 | `KLODI_LOG_PAYLOADS` | Phase 4 | Use `LOG_LEVEL=DEBUG` (KlodiLogger redacts at INFO and below) |
 | `KLODI_PLUGIN_REPO_URL` | Phase 3 | Hardcoded official URL in `klodi-plugin/adapters/hermes/install.sh` |
+| `ZEROCLAW_HOOKS_WAKE_URL` | klodi-zeroclaw 0.2.4 | Renamed to `ZEROCLAW_WEBHOOK_URL` when ZeroClaw 0.7.4 retired the `/hooks/wake` route in favor of `/webhook`. Update env in lockstep with the version bump. |
 
 ---
 
