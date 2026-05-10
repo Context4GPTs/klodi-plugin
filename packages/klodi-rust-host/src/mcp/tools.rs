@@ -283,14 +283,17 @@ pub(super) async fn dispatch(
     name: &str,
     arguments: Option<JsonObject>,
 ) -> Result<CallToolResult, McpError> {
-    // `args` is `mut` only when the zeroclaw_session feature compiles
-    // in the approval-gate field stripping. Without that feature it's
-    // read-only and `mut` would warn — keep the binding minimal so
-    // moltis/ironclaw's check stays clean.
-    #[cfg(feature = "zeroclaw_session")]
+    // `args` needs to be `mut` so the zeroclaw_session approval-gate
+    // path can strip the reserved fields out of the agent's call. The
+    // moltis/ironclaw build doesn't compile in that path — they get an
+    // unused-mut warning suppressed by `allow` rather than a parallel
+    // immutable binding. Two reasons we can't cfg-split the binding:
+    // (a) zeroclaw's vendor.py strips `#[cfg(feature = "zeroclaw_session")]`
+    // lines so both halves of a cfg-split would go live in the staged
+    // crate, and (b) cfg(not(feature = ...)) survives the strip so the
+    // immutable arm would still fire when the feature is "always-on".
+    #[allow(unused_mut)]
     let mut args = arguments.unwrap_or_default();
-    #[cfg(not(feature = "zeroclaw_session"))]
-    let args = arguments.unwrap_or_default();
 
     // Local-only zeroclaw_session tool — handle before the gate, since
     // it doesn't need approval and isn't in the catalog.
