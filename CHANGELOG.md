@@ -6,7 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.7] — 2026-05-10
+
+**klodi-zeroclaw only.** Tag-only re-issue of the 0.2.6 redesign plus the build fix it needed to publish. 0.2.6 was tagged at a commit that contained a `#[cfg]` split in `klodi-rust-host::mcp::tools::dispatch` whose `not(feature = ...)` arm survived the zeroclaw vendor's cfg strip — both halves of the split went live in the staged crate, `cargo publish --dry-run` failed on E0382 + E0596, and the tag never actually shipped to crates.io. 0.2.7 collapses the split to a single `let mut args` with `#[allow(unused_mut)]` for the moltis/ironclaw build that doesn't reach the approval-gate path. The 0.2.6 tag remains on the repo for audit trail; nothing was published under that version.
+
+All operator-facing changes are documented in the [0.2.6] section below.
+
+### Migrating from 0.2.5 to 0.2.7 (klodi-zeroclaw operators only)
+
+Identical to the migration described in [0.2.6] below. There is no separate 0.2.6 → 0.2.7 step — 0.2.6 was never published, so operators upgrading from 0.2.5 land on 0.2.7 directly.
+
 ## [0.2.6] — 2026-05-10
+
+> **Never published to crates.io.** This tag exists on the repo for audit trail. The actual publish happened from [0.2.7], which adds the one-line build fix that 0.2.6 needed but didn't have. Operators install 0.2.7; 0.2.6 read as a fully-superseded mirror of 0.2.7's notes.
 
 **klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.
 
