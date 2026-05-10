@@ -21,6 +21,9 @@ mod tools;
 
 pub use handler::McpConfig;
 
+#[cfg(feature = "zeroclaw_session")]
+pub use handler::OperatorChannel;
+
 use anyhow::{Context, Result};
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;

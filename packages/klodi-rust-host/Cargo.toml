@@ -44,6 +44,16 @@ default = []
 # whose host acts as an MCP client (ZeroClaw, future Moltis/IronClaw)
 # pull this in; daemon-only adapters keep the lean dependency tree.
 mcp = ["dep:rmcp", "dep:toml_edit"]
+# Enables the ZeroClaw session-aware path: `zeroclaw_ws` (WebSocket
+# client against `/ws/chat`), `zeroclaw_session` (operator-session-id
+# bootstrap + persistence under `${KLODI_HOME}/zeroclaw.session`),
+# `zeroclaw_bootstrap_note` (plugin-authored intro/heartbeat note), and
+# `zeroclaw_approval` (irreversible-tool gate). Adds `BodyShape::ZeroClawSession`
+# to the forwarder so wakes write into the operator's session via WS
+# instead of POSTing to `/webhook` (resolves the 30s `TimeoutLayer` 408).
+# Only the ZeroClaw adapter enables this — Moltis/IronClaw stay on
+# `BodyShape::Structured` against their async wake hooks.
+zeroclaw_session = ["dep:tokio-tungstenite", "dep:http"]
 
 [dependencies]
 klodi-nats-client = { path = "../nats-client-rs" }
@@ -81,6 +91,19 @@ include_dir = "=0.7.4"
 
 rmcp = { version = "=1.6.0", features = ["server", "transport-io", "macros"], optional = true }
 toml_edit = { version = "=0.22.22", optional = true }
+
+# `zeroclaw_session` feature only — see [features].
+# `tokio-tungstenite` is the WebSocket client used to write into the
+# operator's ZeroClaw session via `/ws/chat`. `rustls-tls-native-roots`
+# matches the `rustls-tls` posture of the existing reqwest dep so the
+# release binary stays OpenSSL-free. `http` is needed to construct the
+# WS upgrade request with `Authorization: Bearer …` + the
+# `?session_id=<uuid>` query.
+tokio-tungstenite = { version = "=0.24.0", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }
+# `http` 1.x — match whatever reqwest's resolver picks (currently 1.4.x).
+# Tungstenite 0.24 uses `http` 1 too; both crates re-export the parts we
+# touch so the runtime contract stays the same across patch bumps.
+http = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "test-util"] }

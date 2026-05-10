@@ -30,6 +30,25 @@ pub struct McpConfig {
     /// `next_action` messages so the agent surfaces the correct command
     /// for the current host. Default: `"klodi-register"`.
     pub register_cli: String,
+    /// ZeroClaw operator-channel binding. Set by the
+    /// `klodi-zeroclaw-mcp` binary so the I-4 (`klodi_report_to_operator`)
+    /// and I-5 (approval gate) tools can write into the persisted
+    /// operator session. Daemon-only adapters leave this `None`; in that
+    /// case the operator-channel surface is filtered out of the catalog
+    /// and the approval gate is a no-op (the host's own approval
+    /// mechanism is responsible).
+    #[cfg(feature = "zeroclaw_session")]
+    pub operator_channel: Option<OperatorChannel>,
+}
+
+/// Resolved (`ZeroClawWsConfig`, persisted `session_id`) pair. Built by
+/// `klodi-zeroclaw-mcp` from `${KLODI_HOME}/zeroclaw.{token,session}`
+/// + the gateway URL on process start.
+#[cfg(feature = "zeroclaw_session")]
+#[derive(Clone)]
+pub struct OperatorChannel {
+    pub ws_config: crate::zeroclaw_ws::ZeroClawWsConfig,
+    pub session_id: String,
 }
 
 #[derive(Clone)]
@@ -58,6 +77,13 @@ impl KlodiMcpHandler {
 
     pub(super) fn register_cli(&self) -> &str {
         &self.inner.cfg.register_cli
+    }
+
+    /// `Some(channel)` iff the binary plugged a ZeroClaw session in;
+    /// `None` for daemon-only adapters.
+    #[cfg(feature = "zeroclaw_session")]
+    pub(super) fn operator_channel(&self) -> Option<&OperatorChannel> {
+        self.inner.cfg.operator_channel.as_ref()
     }
 
     /// Lazily open the persistent NATS-WS connection. Subsequent calls

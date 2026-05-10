@@ -122,6 +122,17 @@ pub struct SetupStatus {
     pub user_id: Option<String>,
     pub handle: Option<String>,
     pub nats_url: Option<String>,
+    /// `${KLODI_HOME}/zeroclaw.token` exists with a non-empty body. Set
+    /// for any adapter (the field is always present), but only
+    /// load-bearing for the ZeroClaw daemon — moltis/ironclaw will
+    /// always read `false` here. Surfaced so the operator can tell at a
+    /// glance whether the pair-dance has run.
+    pub zeroclaw_token_present: bool,
+    /// `${KLODI_HOME}/zeroclaw.session` exists with a non-empty body —
+    /// the persisted operator-session UUID the I-2 redesign relies on.
+    /// Same caveat as `zeroclaw_token_present`: always present, only
+    /// meaningful for ZeroClaw.
+    pub zeroclaw_session_present: bool,
     /// Stable issue codes the agent / operator should surface. Order is
     /// significance-first (registration before perms before policy);
     /// `next_action` defaults to `issues[0].fix`.
@@ -161,6 +172,9 @@ pub fn klodi_setup_status_with_register_cli(
     let negotiation_style_filled =
         negotiation_style_seeded && policy_seed::is_negotiation_style_filled(&negotiation_style_path);
     let security_policy_seeded = security_policy_path.is_file();
+    let zeroclaw_token_present = file_with_body_present(&klodi_home.join("zeroclaw.token"));
+    let zeroclaw_session_present =
+        file_with_body_present(&klodi_home.join("zeroclaw.session"));
 
     let (user_id, handle, nats_url) = if config_present {
         match read_config(&config_path) {
@@ -209,9 +223,24 @@ pub fn klodi_setup_status_with_register_cli(
         user_id,
         handle,
         nats_url,
+        zeroclaw_token_present,
+        zeroclaw_session_present,
         issues,
         issue_codes,
         next_action,
+    }
+}
+
+/// Best-effort: file exists, is a regular file, has at least one
+/// non-whitespace byte. Used by the zeroclaw_{token,session}_present
+/// fields so an empty leftover file doesn't get reported as "ready".
+fn file_with_body_present(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    match std::fs::read_to_string(path) {
+        Ok(s) => !s.trim().is_empty(),
+        Err(_) => false,
     }
 }
 
@@ -508,6 +537,35 @@ mod tests {
         assert!(status.next_action.is_none());
         assert_eq!(status.user_id.as_deref(), Some("u1"));
         assert_eq!(status.handle.as_deref(), Some("alice"));
+        // ZeroClaw artifacts absent on a fresh KLODI_HOME — these
+        // fields are always present in the JSON, but `false` until the
+        // daemon writes them.
+        assert!(!status.zeroclaw_token_present);
+        assert!(!status.zeroclaw_session_present);
+    }
+
+    #[test]
+    fn zeroclaw_session_and_token_flagged_when_present() {
+        let dir = tempdir().unwrap();
+        write_valid_config(dir.path());
+        policy_seed::seed_policies_if_absent(dir.path()).unwrap();
+        fill_negotiation_style(dir.path());
+        fs::write(dir.path().join("zeroclaw.token"), "zc_abc\n").unwrap();
+        fs::write(dir.path().join("zeroclaw.session"), "abc-uuid\n").unwrap();
+        let status = klodi_setup_status(dir.path());
+        assert!(status.zeroclaw_token_present);
+        assert!(status.zeroclaw_session_present);
+    }
+
+    #[test]
+    fn zeroclaw_artifacts_treated_as_absent_when_empty() {
+        let dir = tempdir().unwrap();
+        write_valid_config(dir.path());
+        fs::write(dir.path().join("zeroclaw.token"), "   \n").unwrap();
+        fs::write(dir.path().join("zeroclaw.session"), "").unwrap();
+        let status = klodi_setup_status(dir.path());
+        assert!(!status.zeroclaw_token_present);
+        assert!(!status.zeroclaw_session_present);
     }
 
     #[cfg(unix)]

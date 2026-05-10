@@ -62,7 +62,36 @@ This is a **polling-based device-code flow** — there's no localhost callback s
 
 It's idempotent: running it again refreshes `nats.creds` + `config.json` atomically and leaves your policies, `buy/`, `sell/`, and every other MCP server entry untouched. Pass `--api-url` only if you're pointing at a self-hosted klodi backend.
 
-The daemon holds one persistent NATS-WS connection and forwards each delivered klodi event to ZeroClaw's gateway via `POST /webhook` with `Authorization: Bearer <zc_…>`. The body shape is `{"message": "<JSON-stringified envelope>"}` to match the `/webhook` contract; the agent `JSON.parse`s the message field on receipt to recover the structured wake. No public URL, no HMAC — JetStream's at-least-once delivery plus the durable consumer's explicit ack semantics provide the end-to-end guarantee.
+The daemon holds one persistent NATS-WS connection. Per-wake delivery (0.2.6+) writes the marketplace event into the operator's persisted ZeroClaw chat session via `WS /ws/chat?session_id=<uuid>` — bypassing the synchronous `/webhook` route and its 30s `TimeoutLayer` entirely. The session UUID is bootstrapped on first daemon start and persisted at `${KLODI_HOME}/zeroclaw.session`; the daemon also posts a heartbeat + plugin-authored bootstrap note into that session so you see it the moment you open ZeroClaw's dashboard.
+
+NATS ack semantics are decoupled from the agent's turn duration: the WS write returns as soon as the gateway acknowledges the frame (typically <1s), and the daemon waits up to 180s for an `agent_start` / `turn_complete` confirmation before falling back to ack-on-write. The forwarder serves notifications and channel messages on independent subscriber tasks, so a slow agent turn doesn't stall other deliveries. Operators on a ZeroClaw build that doesn't expose `/ws/chat` can fall back to the legacy `/webhook` path with `--legacy-webhook` (or `ZEROCLAW_LEGACY_WEBHOOK=1`); that mode keeps the 240s wake-post timeout from 0.2.5.
+
+### Operator visibility + approval
+
+Two consequences of the session-based delivery:
+
+- **Visibility by default.** Open your ZeroClaw chat. The daemon's heartbeat ("🟢 klodi daemon connected as @…") appears within seconds of startup; every subsequent wake lands inline as a `🔔 marketplace event` line with the structured envelope embedded. The agent's reasoning, klodi tool calls, and replies all interleave in the same chat window — no separate dashboard, no policy file required to surface them.
+- **Two-tier approvals.** The plugin enforces a hardcoded gate **only** on the irreversible operations (`klodi_tx_confirm`, `klodi_tx_cancel`, `klodi_list_withdraw`); for those, the plugin posts `🔒 Operator approval needed (request_id: …)` into your session and refuses to execute the tool until the agent retries with your verbatim reply text. Reply `yes` / `approve` / `ok` to authorize, `no` / `deny` / `cancel` to refuse. Pending approvals persist under `${KLODI_HOME}/approvals/<request_id>.json` and survive MCP-server restarts; entries older than 24h are reaped automatically.
+
+  Every other tool (`klodi_offer_respond`, `klodi_list_update`, `klodi_channel_message`, etc.) is the agent's call. Whether it asks you first is governed by your `negotiation_style.md` and the on-disk strategy files under `${KLODI_HOME}/{buy,sell}/` — not by plugin-side enforcement. This keeps you free to define your own workflow ("ask before any accept", "ask only when below floor", "never ask for buyers I've transacted with before") without the plugin locking a single pattern. The agent uses `klodi_report_to_operator` to ask; the same `yes` / `no` vocabulary applies.
+
+The agent can also write to the session directly via the `klodi_report_to_operator` MCP tool — for "I just accepted offer #abc for €600" status updates that don't need a response.
+
+> **Known gap (I-3 of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`).** ZeroClaw's `/ws/chat` doesn't carry a per-message ack today — the gateway's `agent_start` frame applies to whatever turn the agent loop is currently driving, not necessarily to the wake we just sent. For a low-volume marketplace this is fine (the agent's serial processing typically outpaces wake arrival); for high-volume marketplaces a wake could be acked-by-write before the agent observes it. Acceptable for the demo / per-operator case; revisit when measured drop rates demand a per-message handshake.
+
+### Operator session id (`zeroclaw.session`) and the `--adopt-session` flag
+
+By default the daemon mints a fresh ZeroClaw session for klodi on first start and persists its UUID at `${KLODI_HOME}/zeroclaw.session`. This keeps your klodi inbox cleanly separated from any prior chat history you have with your agent — operators with an existing session see two: their original chat, plus the new klodi-only one.
+
+If you'd rather merge — let klodi write into a session you've already been using — pass `--adopt-session=<uuid>` (or set `ZEROCLAW_ADOPT_SESSION=<uuid>`). The daemon probes the gateway to confirm the id resumes successfully, then persists it. Typos / wrong bearer / deleted sessions cause the daemon to bail loudly rather than silently mint a new one. To find an eligible id, hit `GET /api/sessions` against your gateway: `curl -H "Authorization: Bearer $ZEROCLAW_AGENT_TOKEN" http://127.0.0.1:7070/api/sessions`.
+
+### Per-session write ordering
+
+Both NATS subscribers (`klodi-notifications-{user_id}` for marketplace events and `klodi-channels-{user_id}` for in-channel chat) write into the same operator session via independent forwarder tasks. The daemon serialises these writes client-side with a per-session mutex so frames land in NATS-arrival order even if the gateway's `SessionActorQueue` reordering proves incomplete (the gateway is presumed to serialise turns correctly per session, but plan §8.6 flags this as unverified under load). Per-session throughput is bounded by the WS drain time per write — typically <2s on an idle session, capped at the 180s drain timeout in the worst case. If your marketplace volume exceeds that, raise an issue.
+
+### Why direct WS instead of `sessions_send`?
+
+ZeroClaw exposes a built-in `sessions_send(session_id, content)` agent tool that could in principle back the `klodi_report_to_operator` MCP tool. We chose direct WS for three reasons: (a) the daemon's wake-forwarding path needs WS regardless, so adding a second transport for one MCP tool would duplicate the connection logic; (b) the approval-gate prompts originate from the MCP server before any tool dispatch, so they likewise need direct WS; (c) keeping all three on the same code path means one set of timeouts, one mutex, one set of error semantics. If a future ZeroClaw release exposes `sessions_send` as a stable MCP-internal call we can reconsider for `klodi_report_to_operator` only — the daemon and approval gate would stay on direct WS.
 
 ## Step 4 (you, once): fill your negotiation policy
 
@@ -83,6 +112,8 @@ ${KLODI_HOME}/
 ├── nats.creds                   # mode 0600 — NKey signer
 ├── zeroclaw.pairing-code        # one-time code (operator-written, daemon-consumed)
 ├── zeroclaw.token               # mode 0600 — cached `zc_<hex>` bearer
+├── zeroclaw.session             # mode 0600 — persisted operator-session UUID (0.2.6+)
+├── approvals/<request_id>.json  # mode 0600 — pending approvals (0.2.6+; reaped after 24h)
 ├── policies/
 │   ├── negotiation_style.md     # seeded from template; you fill the placeholders
 │   └── security.md              # static hard rules; rarely edited

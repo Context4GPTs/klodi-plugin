@@ -50,6 +50,21 @@ pub mod host_mcp_config;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
+// `zeroclaw_session` feature only — see Cargo.toml. These modules carry
+// the I-1/I-2/I-4/I-5/I-7/I-8 changes from the
+// 2026-05-10-klodi-zeroclaw-wake-routing-redesign plan: WS client,
+// persisted session id, plugin-authored bootstrap note, and the
+// approval gate. Other adapters (Moltis, IronClaw) don't enable this
+// feature and never compile this code in.
+#[cfg(feature = "zeroclaw_session")]
+pub mod zeroclaw_approval;
+#[cfg(feature = "zeroclaw_session")]
+pub mod zeroclaw_bootstrap_note;
+#[cfg(feature = "zeroclaw_session")]
+pub mod zeroclaw_session;
+#[cfg(feature = "zeroclaw_session")]
+pub mod zeroclaw_ws;
+
 pub use forwarder::{BodyShape, ForwarderConfig, run_forwarder};
 pub use register::{RegisterArgs, run_register};
 pub use setup_status::{
@@ -61,3 +76,13 @@ pub use setup_status::{
 pub use host_mcp_config::{HostMcpEntry, apply_host_mcp_entry, default_host_config_path};
 #[cfg(feature = "mcp")]
 pub use mcp::{McpConfig, run_mcp_server};
+
+#[cfg(feature = "zeroclaw_session")]
+pub use zeroclaw_session::{
+    ResolvedSession, adopt_session_id, resolve_session_id, session_path,
+};
+#[cfg(feature = "zeroclaw_session")]
+pub use zeroclaw_ws::{
+    SessionOutcome, ZeroClawWsConfig, bootstrap_session,
+    bootstrap_session_with_first_message, send_session_message,
+};

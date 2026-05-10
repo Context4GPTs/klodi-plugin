@@ -280,33 +280,53 @@ def stage_mcp_assets() -> None:
 
 
 def strip_mcp_cfg_gates() -> int:
-    """Remove `#[cfg(feature = "mcp")]` lines from the vendored sources.
+    """Remove `#[cfg(feature = "<f>")]` lines from the vendored sources
+    for every feature the published klodi-zeroclaw crate ships
+    unconditionally.
 
-    In the workspace tree `klodi-rust-host` exposes the MCP server behind
-    the `mcp` Cargo feature; daemon-only adapters (Moltis, IronClaw) skip
-    it and avoid pulling in `rmcp`. ZeroClaw's published crate, by
-    contrast, always ships the MCP plane — there is no opt-out and no
-    second feature surface for users to flip. Stripping the gates here
-    keeps the published crate self-contained: every rmcp-touching module
-    compiles unconditionally, the optional deps below get pulled in
-    unconditionally, and we don't need a synthesised `[features]` table
-    in the staged Cargo.toml just to flip a flag back on.
+    In the workspace tree `klodi-rust-host` exposes optional surfaces
+    behind Cargo features so daemon-only adapters (Moltis, IronClaw) can
+    skip them and avoid pulling the optional deps. ZeroClaw's published
+    crate, by contrast, always ships the full feature matrix — there is
+    no opt-out and no second feature surface for users to flip.
+    Stripping the gates here keeps the published crate self-contained:
+    every gated module compiles unconditionally, the optional deps
+    below get pulled in unconditionally (vendor's
+    `shared_dep_lines_to_inject` strips `optional = true`), and we don't
+    need a synthesised `[features]` table in the staged Cargo.toml just
+    to flip flags back on.
+
+    Currently stripped:
+    - `mcp`               → stdio MCP server + host config writer.
+    - `zeroclaw_session`  → WS client, persisted session id, bootstrap
+                            note, approval gate. Added by klodi-zeroclaw 0.2.6
+                            for the wake-routing redesign.
 
     The strip only runs in this adapter's `vendor.py`. Moltis and
-    IronClaw keep the gates intact and the cfg evaluates to false in
-    their staged crates, leaving the MCP modules out.
+    IronClaw keep the gates intact and the cfgs evaluate to false in
+    their staged crates, leaving the gated modules out.
     """
-    pattern = re.compile(r'^\s*#\[cfg\(feature\s*=\s*"mcp"\)\]\s*\n', re.MULTILINE)
+    features_to_strip = ["mcp", "zeroclaw_session"]
     rust_host_dir = STAGED / "src" / "_rust_host"
-    rewritten = 0
-    for rs in rust_host_dir.rglob("*.rs"):
-        text = rs.read_text(encoding="utf-8")
-        new = pattern.sub("", text)
-        if new != text:
-            rs.write_text(new, encoding="utf-8")
-            rewritten += 1
-    print(f"[vendor] stripped #[cfg(feature = \"mcp\")] gates in {rewritten} file(s)")
-    return rewritten
+    total = 0
+    for feat in features_to_strip:
+        pattern = re.compile(
+            rf'^\s*#\[cfg\(feature\s*=\s*"{re.escape(feat)}"\)\]\s*\n',
+            re.MULTILINE,
+        )
+        rewritten = 0
+        for rs in rust_host_dir.rglob("*.rs"):
+            text = rs.read_text(encoding="utf-8")
+            new = pattern.sub("", text)
+            if new != text:
+                rs.write_text(new, encoding="utf-8")
+                rewritten += 1
+        print(
+            f"[vendor] stripped #[cfg(feature = \"{feat}\")] gates "
+            f"in {rewritten} file(s)"
+        )
+        total += rewritten
+    return total
 
 
 def write_staged_lib_rs() -> None:

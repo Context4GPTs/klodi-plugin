@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-05-10
+
+**klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.
+
+This release replaces the `/webhook` wake-delivery path with a session-based path against ZeroClaw's `/ws/chat`, gives the operator visible heartbeat + bootstrap context the moment the daemon connects, and adds a plugin-side approval gate for irreversible klodi tools. Implements I-1, I-2, I-4, I-5, I-7, I-8 of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`. I-3 (per-message ack handshake) is documented as a known gap, deferred until wake volume requires it. I-6 (drop the 240s `/webhook` timeout band-aid) is achieved by default; the legacy path is still selectable via `--legacy-webhook`.
+
+### Changed
+
+- **klodi-zeroclaw wake delivery (P0):** wakes now write into the operator's persisted ZeroClaw session via `WS /ws/chat?session_id=<uuid>` instead of POSTing to `/webhook`. The 30s `TimeoutLayer` on `/webhook` no longer applies — frame writes return as soon as the gateway acknowledges the WS message, decoupling NATS ack semantics from the agent's full turn duration. The forwarder waits up to 180s for a post-send `agent_start` / `turn_complete` confirmation (covers a typical 60s+ agent turn plus one prior in-flight turn draining), then acks the NATS message regardless — the WS write itself is the durability boundary.
+
+  Concretely: `klodi_rust_host::forwarder::BodyShape` gains a `ZeroClawSession { ws_config, session_id }` variant. `klodi-zeroclaw-daemon` builds it from the resolved bearer + the operator-session UUID at startup. The legacy `MessageWrapped` shape against `/webhook` is still selectable with `--legacy-webhook` / `ZEROCLAW_LEGACY_WEBHOOK=1` for operators on a ZeroClaw build that doesn't expose `/ws/chat`.
+
+### Added
+
+- **Persisted operator session (`${KLODI_HOME}/zeroclaw.session`).** The daemon resolves a single ZeroClaw session per persona at startup: read the cached UUID, probe-resume it via WS, and re-bootstrap from scratch if the gateway no longer recognises it. Idempotent across restarts. Mode 0600. Surfaced by `klodi_setup_status` as the new `zeroclaw_session_present` flag.
+
+- **Plugin-authored heartbeat + bootstrap note.** On every daemon connect the operator's session receives a one-line `🟢 klodi daemon connected as @<handle>` heartbeat. On a freshly-minted session the daemon also posts a multi-line bootstrap note covering the wake event kinds, klodi-namespaced tools, and the approval-via-chat convention. Sessions with prior messages skip the bootstrap note so the operator's chat doesn't accumulate identical intros across restarts.
+
+- **`klodi_report_to_operator` MCP tool (I-4).** New tool the agent can call to write a structured note (severity + summary + optional details + optional structured payload) directly into the operator's session. Renders as `ℹ️`/`⚠️`/`🛑` headline + markdown body + fenced JSON block. Available only when `klodi-zeroclaw-mcp` finds both `${KLODI_HOME}/zeroclaw.token` and `${KLODI_HOME}/zeroclaw.session` populated (i.e. the daemon has run at least once).
+
+- **Approval gate for irreversible klodi tools (I-5).** Hardcoded gated list: `klodi_tx_confirm`, `klodi_tx_cancel`, `klodi_list_withdraw`. First call posts a `🔒 Operator approval needed (request_id: …)` prompt to the operator session, persists pending state under `${KLODI_HOME}/approvals/<request_id>.json` (mode 0600, reaped after 24h), and returns `{ approval_required: true, request_id, instructions }` to the agent. The agent retries with `_klodi_approval_request_id` + `_klodi_approval_operator_text` set to the operator's verbatim chat reply; the plugin matches the args fingerprint, runs an affirmation/denial regex, and either opens the gate or returns a `denied` / `still_pending` response. Pending state is durable across MCP-server crashes.
+
+  **Scope deliberately narrow.** `klodi_offer_respond`, `klodi_list_update`, and other policy-shaped operations are NOT gated by the plugin — the agent reads the operator's `negotiation_style.md` + on-disk strategy files (`${KLODI_HOME}/{buy,sell}/`) and decides whether to call `klodi_report_to_operator` first. This is a deliberate choice: the plugin is mechanism, not policy; locking a "below-min" or "always-ask" pattern inside the plugin would prevent operators who want different workflows from defining them.
+
+- **`klodi-zeroclaw-mcp` operator-channel binding.** New CLI args `--zeroclaw-ws-url` / `--zeroclaw-http-base` (and matching `ZEROCLAW_WS_URL` / `ZEROCLAW_HTTP_BASE` env vars) override the WS endpoint derived from `--zeroclaw-webhook-url`. Useful when the gateway lives at a non-canonical path.
+
+- **`--adopt-session=<uuid>` operator opt-in (plan §5 I-2 collision case).** New CLI arg / `ZEROCLAW_ADOPT_SESSION` env var on `klodi-zeroclaw-daemon`. Default behaviour is unchanged (always mint a fresh dedicated klodi session); this flag is the explicit opt-in for operators who want klodi activity to land in an existing chat session. The daemon probes the gateway to confirm the id resumes; bails loudly on any failure so typos don't silently re-bootstrap.
+
+- **Atomic session bootstrap → first-write (plan §4 update).** Combined `bootstrap_session` + first heartbeat write into a single WS lifecycle (`bootstrap_session_with_first_message`) so a freshly-minted session always carries at least one durable user-role message before its WS closes. Closes the empty-session GC window flagged in the updated plan §4 (where the gateway's empty-session retention behaviour was unverified during research).
+
+- **Per-session write serialisation (plan §8.6).** Notifications + channel-message subscribers write into the same operator session from independent forwarder tasks. Added an `Arc<tokio::sync::Mutex<()>>` in `SharedState`, acquired around the full WS connect → send → drain cycle for `BodyShape::ZeroClawSession`, so writes land in NATS-arrival order even if the gateway's `SessionActorQueue` reordering is incomplete. Per-session throughput is bounded by drain time (typically <2s, capped at 180s).
+
+- **WS reconnect backoff (plan §9 reconnect-storm risk).** Added a per-session consecutive-failure counter; before each WS send, if prior sends have failed, sleep for an exponential backoff (250ms base, 2× multiplier, capped at 30s) under the per-session mutex. Reset on success. Keeps NATS redeliveries from hammering a flapping gateway with fresh handshakes — JetStream's redelivery cadence already adds spacing across wakes, this caps the *additional* per-failure wait. Reuses `klodi_nats_client::backoff::compute_backoff` for shared math.
+
+### Changed (internal)
+
+- **Drain protocol simplification (plan §4 update).** `zeroclaw_ws::send_session_message` now treats `agent_start` as the sole expected post-send ack frame. The `turn_complete` arm is dropped — per the updated plan §4 it was unobserved during live research, and `agent_start` already proves the gateway routed the message into the agent loop. `turn_complete` (and any other future frame) lands in `InboundFrame::Other` and is silently drained.
+
+### Known gaps
+
+- **I-3 — no per-message WS ack.** `agent_start` and `turn_complete` aren't tied to the message that triggered them. For a low-volume marketplace this is fine (the wake count rarely outpaces the agent's serial processing); for high-volume marketplaces the daemon could ack a wake before the agent observes it. Acceptable for now; revisit when measured drop rates demand it.
+
+### Migrating from 0.2.5 to 0.2.6 (klodi-zeroclaw operators only)
+
+Drop-in replacement — no config or env changes. Rebuild the daemon (`cargo build -p klodi-zeroclaw --release` or pull the new container image) and restart. The first daemon start after the bump will:
+1. Bootstrap a fresh ZeroClaw session and persist its UUID at `${KLODI_HOME}/zeroclaw.session`.
+2. Post a heartbeat + bootstrap note into that session — open ZeroClaw's chat dashboard to read them.
+3. Switch the forwarder over to WS-based wake delivery — `klodi_wake_forwarded_via_ws` replaces `klodi_wake_forwarded` in the daemon's logs.
+
+If your deployment requires the legacy `/webhook` path for any reason, set `ZEROCLAW_LEGACY_WEBHOOK=1` (or pass `--legacy-webhook`) and the 0.2.5 behaviour is unchanged.
+
 ## [0.2.5] — 2026-05-09
 
 **klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.

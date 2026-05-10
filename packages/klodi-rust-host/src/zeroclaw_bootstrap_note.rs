@@ -1,0 +1,199 @@
+//! Plugin-authored bootstrap + heartbeat notes for the operator session.
+//!
+//! Implements I-7 + I-8 of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`.
+//! These are the strings the daemon writes into the operator's ZeroClaw
+//! session at startup so:
+//!
+//! - The operator can tell the daemon is alive (I-8 — "klodi daemon
+//!   connected as @… NATS: …").
+//! - The agent has a baseline of plugin-bundled context (I-7 — handle,
+//!   user_id, wake event kinds, klodi-namespaced tools, the
+//!   approval-via-chat convention) without the operator having to author
+//!   any policy file.
+//!
+//! The note bodies are formatted here so the daemon binary stays a thin
+//! CLI shell. Everything the operator sees is a deterministic function
+//! of inputs the daemon already has on hand (handle, user_id, NATS URL,
+//! version) — easy to unit-test, and easy to swap out when the
+//! plugin-vs-operator content boundary shifts.
+
+/// Inputs the bootstrap-note formatter needs from the daemon.
+pub struct BootstrapInputs<'a> {
+    pub handle: &'a str,
+    pub user_id: &'a str,
+    pub nats_url: &'a str,
+    pub daemon_version: &'a str,
+}
+
+/// One-line heartbeat written on every daemon (re)start. Always-on
+/// regardless of whether the bootstrap note is being skipped — the
+/// operator should always see "the daemon just started" the moment they
+/// open the dashboard.
+pub fn heartbeat(inputs: &BootstrapInputs<'_>) -> String {
+    format!(
+        "🟢 klodi daemon connected as @{handle} ({user_id}). NATS: {nats_url}. \
+         Daemon: klodi-zeroclaw v{ver}. Wakes will appear in this session.",
+        handle = inputs.handle,
+        user_id = inputs.user_id,
+        nats_url = inputs.nats_url,
+        ver = inputs.daemon_version,
+    )
+}
+
+/// Multi-line plugin-authored bootstrap note. Posted exactly once per
+/// session — the daemon checks the gateway-reported `message_count`
+/// against zero before posting. Ships the catalog of wake event kinds,
+/// klodi-namespaced tools, and the approval convention.
+pub fn bootstrap_note(inputs: &BootstrapInputs<'_>) -> String {
+    // Plain-text + markdown — ZeroClaw renders the operator dashboard as
+    // a chat surface; we want this readable by a human and parseable by
+    // the agent.
+    let mut s = String::with_capacity(2048);
+
+    s.push_str(&format!(
+        "👋 **klodi just connected for @{handle} ({user_id}).**\n\n",
+        handle = inputs.handle,
+        user_id = inputs.user_id,
+    ));
+
+    s.push_str(
+        "This is your klodi inbox. Marketplace events arrive here as they happen, and the \
+         counterparty agent reasons about them inline. You can read what it does, intervene \
+         with chat at any time, or approve / deny gated actions when it asks you to.\n\n",
+    );
+
+    s.push_str("**Wake event kinds you'll see:**\n");
+    s.push_str("- `listing.created` — your listing was published\n");
+    s.push_str("- `listing.matched` — a counterparty's search matched your listing\n");
+    s.push_str("- `offer.created` — somebody offered on your listing\n");
+    s.push_str("- `offer.responded` — counterparty responded to your offer\n");
+    s.push_str("- `transaction.*` — escrow / settlement events\n");
+    s.push_str("- `channel.message` — incoming chat in an open negotiation\n\n");
+
+    s.push_str(
+        "**klodi-namespaced tools the agent can call (selection):**\n\
+         - `klodi_search` / `klodi_watch` / `klodi_unwatch` — discovery\n\
+         - `klodi_offer_create` / `klodi_offer_respond` — bidding (the agent decides whether to ask you, per your `negotiation_style.md`)\n\
+         - `klodi_channel_message` — replies in open negotiations\n\
+         - `klodi_report_to_operator` — when the agent wants you to know something or ask\n\
+         - `klodi_list_update` — listing edits (the agent decides whether to ask you)\n\
+         - `klodi_tx_confirm` / `klodi_tx_cancel` / `klodi_list_withdraw` — **gated by the plugin: irreversible, the plugin always asks before executing**\n\n",
+    );
+
+    s.push_str(
+        "**Approval convention.** Two kinds of asks land in this chat:\n\
+         - 🔒 **Plugin-gated** (`tx_confirm`, `tx_cancel`, `list_withdraw`): the plugin posts the request and refuses to execute the tool until you reply. Reply `yes` (or `approve` / `ok` / `proceed`) to authorize, or `no` (or `deny` / `cancel` / `stop`) to refuse. The agent then retries the call on your behalf.\n\
+         - ℹ️ **Agent-discretion** (everything else): the agent reads your `negotiation_style.md` and on-disk strategy files (`buy/`, `sell/`) to decide whether to ask. When it asks, it'll use `klodi_report_to_operator` and wait for your reply in this chat — same vocabulary applies.\n\n",
+    );
+
+    s.push_str(&format!(
+        "_NATS: `{nats_url}` · Daemon: klodi-zeroclaw v{ver}_\n",
+        nats_url = inputs.nats_url,
+        ver = inputs.daemon_version,
+    ));
+
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture<'a>() -> BootstrapInputs<'a> {
+        BootstrapInputs {
+            handle: "alice",
+            user_id: "u_alice_123",
+            nats_url: "wss://nats.klodi.4gpts.com:4222",
+            daemon_version: "0.2.6",
+        }
+    }
+
+    #[test]
+    fn heartbeat_includes_handle_and_user_id() {
+        let line = heartbeat(&fixture());
+        assert!(line.contains("@alice"), "got: {line}");
+        assert!(line.contains("u_alice_123"), "got: {line}");
+        assert!(line.contains("wss://nats.klodi.4gpts.com:4222"), "got: {line}");
+        assert!(line.contains("0.2.6"), "got: {line}");
+    }
+
+    #[test]
+    fn heartbeat_is_one_line() {
+        // The heartbeat is meant to read as a single chat-line so the
+        // operator's session log stays tight on every (re)start.
+        let line = heartbeat(&fixture());
+        assert!(!line.contains('\n'), "heartbeat must be one line, got: {line}");
+    }
+
+    #[test]
+    fn bootstrap_note_includes_all_load_bearing_content() {
+        let note = bootstrap_note(&fixture());
+        assert!(note.contains("@alice"));
+        assert!(note.contains("u_alice_123"));
+        assert!(note.contains("wss://nats.klodi.4gpts.com:4222"));
+        assert!(note.contains("0.2.6"));
+        // Wake event catalog
+        assert!(note.contains("listing.created"));
+        assert!(note.contains("listing.matched"));
+        assert!(note.contains("offer.created"));
+        assert!(note.contains("offer.responded"));
+        assert!(note.contains("channel.message"));
+        // Tool catalog
+        assert!(note.contains("klodi_search"));
+        assert!(note.contains("klodi_watch"));
+        assert!(note.contains("klodi_offer_create"));
+        assert!(note.contains("klodi_channel_message"));
+        assert!(note.contains("klodi_report_to_operator"));
+        assert!(note.contains("klodi_tx_confirm"));
+        assert!(note.contains("klodi_list_withdraw"));
+        // Approval convention — must explain BOTH the prompt shape the
+        // operator will see AND the affirmation vocabulary the agent
+        // expects them to type.
+        assert!(
+            note.contains("Plugin-gated") || note.contains("Operator approval needed"),
+            "must reference the plugin-gated prompt the operator will see: {note}",
+        );
+        assert!(note.contains("yes"));
+        assert!(note.contains("no"));
+    }
+
+    #[test]
+    fn bootstrap_note_marks_gated_tools_explicitly() {
+        // Agents reading the note rely on the "gated" annotation to know
+        // which tools will trigger an approval prompt. Removing the
+        // marker silently would re-introduce the misalignment risk
+        // I-5 is meant to close.
+        let note = bootstrap_note(&fixture());
+        assert!(note.contains("gated"), "must mention gated tools: {note}");
+        // Every plugin-gated tool must appear in the same hardcoded
+        // line so the operator and the agent see the same list.
+        for tool in ["klodi_tx_confirm", "klodi_tx_cancel", "klodi_list_withdraw"] {
+            assert!(
+                note.contains(tool),
+                "{tool} must appear in bootstrap note: {note}",
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_note_distinguishes_plugin_gated_from_agent_discretion() {
+        // The two-tier approval model (plugin enforces irreversibles +
+        // agent decides everything else from policy) needs to be
+        // explicit so the operator knows which prompts come from where.
+        let note = bootstrap_note(&fixture());
+        assert!(note.contains("Plugin-gated"), "must label plugin-side gates: {note}");
+        assert!(note.contains("Agent-discretion"), "must label agent-driven asks: {note}");
+        assert!(
+            note.contains("negotiation_style.md"),
+            "must point operator at their policy file for agent-discretion behaviour: {note}",
+        );
+    }
+
+    #[test]
+    fn bootstrap_note_is_deterministic_for_same_inputs() {
+        // The daemon's "skip if already posted" check relies on this.
+        let a = bootstrap_note(&fixture());
+        let b = bootstrap_note(&fixture());
+        assert_eq!(a, b);
+    }
+}

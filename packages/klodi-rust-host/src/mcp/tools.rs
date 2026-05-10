@@ -39,6 +39,33 @@ const LOCAL_TOOL_CHANNEL_MESSAGE: &str = "klodi_channel_message";
 const LOCAL_TOOL_WATCH: &str = "klodi_watch";
 const LOCAL_TOOL_UNWATCH: &str = "klodi_unwatch";
 
+/// I-4: post a structured note into the operator's ZeroClaw session.
+/// Only registered + dispatched when the `zeroclaw_session` feature is
+/// on AND `McpConfig::operator_channel` is `Some`. Daemon-only adapters
+/// don't expose this tool.
+#[cfg(feature = "zeroclaw_session")]
+const LOCAL_TOOL_REPORT_TO_OPERATOR: &str = "klodi_report_to_operator";
+
+/// Approval-gate retry parameter the agent passes back. Reserved field
+/// the plugin recognises on EVERY tool call — gated tools use it to
+/// match the retry against the persisted pending entry. Listed here so
+/// the agent and the plugin agree on the exact field name.
+#[cfg(feature = "zeroclaw_session")]
+const APPROVAL_REQUEST_ID_FIELD: &str = "_klodi_approval_request_id";
+
+/// Approval-gate retry parameter carrying the operator's verbatim chat
+/// reply. The plugin's affirmation regex runs against this value.
+#[cfg(feature = "zeroclaw_session")]
+const APPROVAL_TEXT_FIELD: &str = "_klodi_approval_operator_text";
+
+/// Maximum age before [`zeroclaw_approval::reap_expired`] drops a
+/// pending entry. 24h gives the operator a full day to come back and
+/// approve a long-running negotiation thread; older entries are almost
+/// always abandoned and would otherwise grow unbounded under
+/// `${KLODI_HOME}/approvals/`.
+#[cfg(feature = "zeroclaw_session")]
+const APPROVAL_MAX_AGE_SECONDS: i64 = 24 * 60 * 60;
+
 const BUY_FILE_HINT: &str =
     "Append your standing-search strategy (target price, walk-away rules, dialogue digest) \
      to the body below the frontmatter. The agent reads this file before responding to \
@@ -185,6 +212,46 @@ fn build_tool_list() -> Vec<Tool> {
             "additionalProperties": false
         }),
     ));
+    #[cfg(feature = "zeroclaw_session")]
+    out.push(make_tool(
+        LOCAL_TOOL_REPORT_TO_OPERATOR,
+        "Post a structured note directly to the operator's ZeroClaw chat session. \
+         Use whenever the operator should know something the agent has done, learned, \
+         or is about to ask. Examples: 'I accepted offer #abc for €600, awaiting your \
+         confirmation', 'search.match found 3 listings — here are the top picks', \
+         'no path to settle this negotiation, dropping with seller's permission'. \
+         The note appears in the same chat the operator opened to talk to klodi; \
+         it does NOT trigger a fresh agent context. Severity is informational only — \
+         the gateway renders all severities the same way today.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "One-line headline the operator sees first (1..200 chars)",
+                    "minLength": 1,
+                    "maxLength": 200
+                },
+                "details": {
+                    "type": "string",
+                    "description": "Optional multi-line body. Markdown OK.",
+                    "maxLength": 4000
+                },
+                "severity": {
+                    "type": "string",
+                    "enum": ["info", "warn", "error"],
+                    "description": "Visual cue for the headline. Default 'info'."
+                },
+                "structured": {
+                    "type": "object",
+                    "description": "Optional structured payload, embedded as a fenced JSON block",
+                    "additionalProperties": true
+                }
+            },
+            "required": ["summary"],
+            "additionalProperties": false
+        }),
+    ));
     out
 }
 
@@ -205,12 +272,42 @@ fn make_tool(name: &str, description: &str, schema: &Value) -> Tool {
 
 /// Dispatch a `tools/call` request. Branches on the tool name into
 /// either a NATS passthrough or one of the local handlers.
+///
+/// I-5: any call (passthrough or local) goes through the approval gate
+/// first when the tool is in the gated list AND the MCP server has an
+/// operator channel configured. Gated tools without operator-channel
+/// support fall through (the host's own approval mechanism is
+/// authoritative in that mode).
 pub(super) async fn dispatch(
     handler: &KlodiMcpHandler,
     name: &str,
     arguments: Option<JsonObject>,
 ) -> Result<CallToolResult, McpError> {
+    // `args` is `mut` only when the zeroclaw_session feature compiles
+    // in the approval-gate field stripping. Without that feature it's
+    // read-only and `mut` would warn — keep the binding minimal so
+    // moltis/ironclaw's check stays clean.
+    #[cfg(feature = "zeroclaw_session")]
+    let mut args = arguments.unwrap_or_default();
+    #[cfg(not(feature = "zeroclaw_session"))]
     let args = arguments.unwrap_or_default();
+
+    // Local-only zeroclaw_session tool — handle before the gate, since
+    // it doesn't need approval and isn't in the catalog.
+    #[cfg(feature = "zeroclaw_session")]
+    if name == LOCAL_TOOL_REPORT_TO_OPERATOR {
+        return dispatch_report_to_operator(handler, args).await;
+    }
+
+    // Approval-gate evaluation — strips the reserved fields out of
+    // `args` before passing them on so downstream handlers never see
+    // them. Returns Some(result) when the gate is closed (first call,
+    // or denied retry) and None when it's open (no gating, or approved
+    // retry).
+    #[cfg(feature = "zeroclaw_session")]
+    if let Some(gated_response) = approval_gate(handler, name, &mut args).await? {
+        return Ok(gated_response);
+    }
 
     // Locally-handled tools take priority over passthrough lookup so a
     // catalog rename can't accidentally shadow a local handler.
@@ -232,6 +329,270 @@ pub(super) async fn dispatch(
         format!("unknown klodi tool: {name}"),
         Some(json!({ "tool": name })),
     ))
+}
+
+/// Approval-gate evaluation. Returns:
+///
+/// - `Ok(None)` — tool is not gated, OR operator channel is not configured,
+///   OR the retry was approved (and the reserved fields are stripped from
+///   `args` so downstream handlers don't see them).
+/// - `Ok(Some(result))` — first call (prompt posted, "approval_required"
+///   response surfaced to the agent), denied retry, or "still pending"
+///   ambiguous retry.
+/// - `Err(...)` — internal failure (couldn't post the prompt, couldn't
+///   persist state, etc.).
+#[cfg(feature = "zeroclaw_session")]
+async fn approval_gate(
+    handler: &KlodiMcpHandler,
+    name: &str,
+    args: &mut JsonObject,
+) -> Result<Option<CallToolResult>, McpError> {
+    // Operator channel is the only thing that makes the gate enforceable
+    // — without it, we can't post the prompt to the operator's session
+    // and there's nothing to retry against. Bail out cleanly so
+    // daemon-only adapters keep working.
+    let channel = match handler.operator_channel() {
+        Some(c) => c.clone(),
+        None => return Ok(None),
+    };
+
+    // Reap stale pending entries. Doing this on every gated call adds
+    // O(n) directory work to gated tools only — well below the cost of
+    // a NATS round-trip. Failures here log but don't block the actual
+    // dispatch.
+    if let Err(err) = crate::zeroclaw_approval::reap_expired(
+        handler.klodi_home(),
+        APPROVAL_MAX_AGE_SECONDS,
+    ) {
+        tracing::warn!(error = %err, "klodi_approval_reap_failed");
+    }
+
+    let request_id_value = args.remove(APPROVAL_REQUEST_ID_FIELD);
+    let approval_text_value = args.remove(APPROVAL_TEXT_FIELD);
+    let args_for_decision = Value::Object(args.clone());
+
+    if !crate::zeroclaw_approval::should_gate(name, &args_for_decision) {
+        // Tool isn't gated; the reserved fields (if the agent passed
+        // them anyway) have been stripped, so downstream handlers see a
+        // clean args object.
+        return Ok(None);
+    }
+
+    let request_id = request_id_value.and_then(|v| v.as_str().map(str::to_string));
+    let approval_text = approval_text_value.and_then(|v| v.as_str().map(str::to_string));
+
+    match (request_id, approval_text) {
+        (None, _) => {
+            // First call — post prompt, persist pending state, surface
+            // the request_id back to the agent so it can retry.
+            let summary = render_summary(name, &args_for_decision);
+            let pending = crate::zeroclaw_approval::new_pending(
+                name,
+                &args_for_decision,
+                summary.clone(),
+            );
+            let prompt = crate::zeroclaw_approval::format_prompt(
+                name,
+                &pending.request_id,
+                &summary,
+            );
+            // Persist BEFORE posting so a crash mid-post doesn't leave
+            // an unresolvable approval id on the operator's chat.
+            crate::zeroclaw_approval::persist(handler.klodi_home(), &pending)
+                .map_err(|err| McpError::internal_error(
+                    format!("persisting approval state: {err}"),
+                    None,
+                ))?;
+            crate::zeroclaw_ws::send_session_message(
+                &channel.ws_config,
+                &channel.session_id,
+                &prompt,
+            )
+            .await
+            .map_err(|err| {
+                // Drop the pending entry so the agent can retry the gate
+                // from scratch instead of hitting a "request_id missing"
+                // dead-end. Best-effort.
+                let _ = crate::zeroclaw_approval::clear(
+                    handler.klodi_home(),
+                    &pending.request_id,
+                );
+                McpError::internal_error(
+                    format!("posting approval prompt to operator session: {err:#}"),
+                    None,
+                )
+            })?;
+            Ok(Some(structured_with_text(json!({
+                "approval_required": true,
+                "request_id": pending.request_id,
+                "tool": name,
+                "summary": summary,
+                "instructions": format!(
+                    "Wait for the operator's reply in their ZeroClaw chat session. \
+                     When they answer, retry this same tool call with the same args \
+                     plus '{APPROVAL_REQUEST_ID_FIELD}' set to '{}' and \
+                     '{APPROVAL_TEXT_FIELD}' set to the operator's verbatim reply text.",
+                    pending.request_id,
+                ),
+            }))))
+        }
+        (Some(rid), Some(text)) => {
+            let pending = match crate::zeroclaw_approval::load(
+                handler.klodi_home(),
+                &rid,
+            ) {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    return Ok(Some(structured_with_text(json!({
+                        "approval_required": true,
+                        "request_id": rid,
+                        "denied": true,
+                        "reason": format!(
+                            "no pending approval matches request_id={rid}. \
+                             It may have expired (>24h) or never been issued. \
+                             Drop the reserved fields and retry to start a fresh approval flow."
+                        ),
+                    }))));
+                }
+                Err(err) => {
+                    return Err(McpError::internal_error(
+                        format!("loading approval state: {err}"),
+                        None,
+                    ));
+                }
+            };
+            if pending.tool != name {
+                return Ok(Some(structured_with_text(json!({
+                    "approval_required": true,
+                    "request_id": rid,
+                    "denied": true,
+                    "reason": format!(
+                        "request_id {rid} was issued for tool {} but the retry called {name}. \
+                         Drop the reserved fields and retry to start a fresh approval flow.",
+                        pending.tool,
+                    ),
+                }))));
+            }
+            match crate::zeroclaw_approval::evaluate_retry(&pending, &text, &args_for_decision) {
+                crate::zeroclaw_approval::ApprovalDecision::Approved => {
+                    let _ = crate::zeroclaw_approval::clear(
+                        handler.klodi_home(),
+                        &rid,
+                    );
+                    // Open the gate — let the call fall through to the
+                    // normal dispatcher.
+                    Ok(None)
+                }
+                crate::zeroclaw_approval::ApprovalDecision::Denied => {
+                    let _ = crate::zeroclaw_approval::clear(
+                        handler.klodi_home(),
+                        &rid,
+                    );
+                    Ok(Some(structured_with_text(json!({
+                        "approval_required": true,
+                        "request_id": rid,
+                        "denied": true,
+                        "reason": "operator declined the request",
+                    }))))
+                }
+                crate::zeroclaw_approval::ApprovalDecision::NotGranted { reason } => {
+                    Ok(Some(structured_with_text(json!({
+                        "approval_required": true,
+                        "request_id": rid,
+                        "still_pending": true,
+                        "reason": reason,
+                    }))))
+                }
+            }
+        }
+        (Some(rid), None) => Ok(Some(structured_with_text(json!({
+            "approval_required": true,
+            "request_id": rid,
+            "still_pending": true,
+            "reason": format!(
+                "request_id {rid} present but '{APPROVAL_TEXT_FIELD}' missing — \
+                 retry the call with the operator's verbatim chat reply",
+            ),
+        })))),
+    }
+}
+
+/// Compact, operator-readable summary of the about-to-be-gated call.
+/// Plain JSON-of-args by default; we'd want richer per-tool formatting
+/// later but the JSON shape matches what the agent already sees.
+#[cfg(feature = "zeroclaw_session")]
+fn render_summary(tool: &str, args: &Value) -> String {
+    let pretty = serde_json::to_string_pretty(args)
+        .unwrap_or_else(|_| args.to_string());
+    format!("Tool: `{tool}`\n\nArgs:\n```json\n{pretty}\n```")
+}
+
+#[cfg(feature = "zeroclaw_session")]
+async fn dispatch_report_to_operator(
+    handler: &KlodiMcpHandler,
+    args: JsonObject,
+) -> Result<CallToolResult, McpError> {
+    let channel = handler.operator_channel().ok_or_else(|| {
+        McpError::invalid_request(
+            "klodi_report_to_operator: this MCP server has no ZeroClaw operator session bound. \
+             Run klodi-zeroclaw-daemon first so ${KLODI_HOME}/zeroclaw.session is populated."
+                .to_string(),
+            None,
+        )
+    })?;
+    let summary = args
+        .get("summary")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                "klodi_report_to_operator: 'summary' (string) is required".to_string(),
+                None,
+            )
+        })?;
+    let details = args.get("details").and_then(Value::as_str);
+    let severity = args
+        .get("severity")
+        .and_then(Value::as_str)
+        .unwrap_or("info");
+    let structured = args.get("structured");
+
+    let icon = match severity {
+        "warn" => "⚠️",
+        "error" => "🛑",
+        _ => "ℹ️",
+    };
+    let mut content = format!("{icon} **{summary}**");
+    if let Some(d) = details {
+        content.push_str("\n\n");
+        content.push_str(d);
+    }
+    if let Some(payload) = structured {
+        let pretty = serde_json::to_string_pretty(payload)
+            .unwrap_or_else(|_| payload.to_string());
+        content.push_str("\n\n```json\n");
+        content.push_str(&pretty);
+        content.push_str("\n```");
+    }
+
+    crate::zeroclaw_ws::send_session_message(
+        &channel.ws_config,
+        &channel.session_id,
+        &content,
+    )
+    .await
+    .map_err(|err| {
+        McpError::internal_error(
+            format!("posting note to operator session: {err:#}"),
+            None,
+        )
+    })?;
+
+    Ok(structured_with_text(json!({
+        "posted": true,
+        "session_id": channel.session_id,
+        "severity": severity,
+        "characters": content.chars().count(),
+    })))
 }
 
 async fn dispatch_passthrough(
@@ -567,6 +928,30 @@ mod tests {
             "expected at least 26 passthrough + 6 local tools — got {}",
             tools.len(),
         );
+    }
+
+    #[cfg(feature = "zeroclaw_session")]
+    #[test]
+    fn report_to_operator_tool_listed_when_zeroclaw_session_feature_enabled() {
+        let tools = build_tool_list();
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+        assert!(
+            names.contains(&"klodi_report_to_operator"),
+            "klodi_report_to_operator must appear when zeroclaw_session is on; got {names:?}",
+        );
+        let report_tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "klodi_report_to_operator")
+            .expect("found above");
+        // Schema shape — `summary` required, `severity` enum, `structured`
+        // optional object.
+        let schema = &report_tool.input_schema;
+        let required = schema.get("required").and_then(Value::as_array).unwrap();
+        assert!(required.iter().any(|v| v.as_str() == Some("summary")));
+        let props = schema.get("properties").and_then(Value::as_object).unwrap();
+        assert!(props.contains_key("summary"));
+        assert!(props.contains_key("severity"));
+        assert!(props.contains_key("details"));
     }
 
     #[test]
