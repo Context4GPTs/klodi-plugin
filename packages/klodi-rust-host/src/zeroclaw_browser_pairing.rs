@@ -3,13 +3,12 @@
 //! ZeroClaw's gateway prints a single one-time pairing code to its
 //! stdout at boot. The klodi daemon consumes that code (`POST /pair`
 //! with `X-Pairing-Code:`) to mint its own `zc_<hex>` bearer — used as
-//! `Authorization: Bearer` on the canonical `WS /ws/chat` wake path
-//! (since 0.2.6 / plan I-1) and on the legacy `/webhook` POST for
-//! operators who opt back in. That single boot-time code is consumed
-//! by the daemon, leaving the operator's browser without a code to
-//! enter at the dashboard's "PAIRING REQUIRED" prompt. This module
-//! mints a *second* pairing code on demand by invoking the gateway's
-//! existing `zeroclaw gateway get-paircode --new` CLI.
+//! `Authorization: Bearer` on the `WS /ws/chat` wake path (since 0.2.6
+//! / plan I-1). That single boot-time code is consumed by the daemon,
+//! leaving the operator's browser without a code to enter at the
+//! dashboard's "PAIRING REQUIRED" prompt. This module mints a *second*
+//! pairing code on demand by invoking the gateway's existing
+//! `zeroclaw gateway get-paircode --new` CLI.
 //!
 //! The minter is shared by two consumers in the daemon:
 //!

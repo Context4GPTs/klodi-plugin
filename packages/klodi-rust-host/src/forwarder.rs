@@ -1,23 +1,24 @@
 //! Wake-forwarder daemon — shared across all Rust adapters.
 //!
-//! Subscribes the [`KlodiClient`] to both consumers, then translates
-//! each delivered notification or channel message into an HTTP POST to
-//! a local host wake URL. Adapter-specific knobs configure this:
+//! Subscribes the [`KlodiClient`] to both consumers, then dispatches
+//! each delivered notification or channel message according to the
+//! adapter's body shape: HTTP POST to a local host wake URL for
+//! Moltis + IronClaw (`BodyShape::Structured`), or a WebSocket write
+//! into the operator's persisted ZeroClaw session for the ZeroClaw
+//! adapter (`BodyShape::ZeroClawSession`). Adapter-specific knobs:
 //!
-//! - `wake_url`         where to POST.
+//! - `wake_url`         where to POST (HTTP path); unused on the
+//!                      ZeroClaw WS path.
 //! - `bearer_token`     optional `Authorization: Bearer …`.
 //! - `user_agent`       per-adapter UA string.
 //! - `log_event_prefix` per-adapter log namespace (e.g. `"klodi_moltis"`).
 //! - `health_port`      optional `--health-port` for `/healthz` probe.
-//! - `body_shape`       structured envelope vs `{"message": "<json>"}`
-//!                      wrapper. ZeroClaw 0.7.4's `/webhook` contract
-//!                      only accepts the wrapped form; Moltis + IronClaw
-//!                      consume the structured envelope directly.
+//! - `body_shape`       see [`BodyShape`].
 //!
-//! Failure semantics: a non-2xx response or transport error from the
-//! host wake POST returns `Err` from the consumer handler, which causes
-//! a JetStream NAK and redelivery per `max_deliver: 5`. The daemon
-//! never silently drops a wake.
+//! Failure semantics: a non-2xx HTTP response, a WS frame error, or a
+//! transport error returns `Err` from the consumer handler, which
+//! causes a JetStream NAK and redelivery per `max_deliver: 5`. The
+//! daemon never silently drops a wake.
 //!
 //! Per **D § D8** + P1-13 + P1-14 + P2-25: SIGTERM handling, optional
 //! bearer-token auth, and optional health endpoint all land here in
@@ -39,26 +40,17 @@ use std::time::Duration;
 /// Body shape the host's wake endpoint accepts. Picked per-adapter at
 /// daemon startup; the forwarder dispatches on it in [`forward`].
 ///
-/// `Structured` and `MessageWrapped` both go to the HTTP wake URL.
-/// `ZeroClawSession` is the I-1 redesign path — the wake is written
-/// into the operator's persisted ZeroClaw session via WebSocket
-/// (`/ws/chat?session_id=…`), bypassing `/webhook` and the 30s
-/// `TimeoutLayer` entirely.
+/// `Structured` goes to the HTTP wake URL. `ZeroClawSession` is the
+/// I-1 redesign path — the wake is written into the operator's
+/// persisted ZeroClaw session via WebSocket (`/ws/chat?session_id=…`),
+/// bypassing `/webhook` and the 30s `TimeoutLayer` entirely.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyShape {
     /// Structured envelope: `{ channel, kind, event_id, user_id, payload }`.
-    /// Moltis and IronClaw consume this directly.
+    /// Moltis and IronClaw consume this directly via HTTP POST.
     Structured,
-    /// Single-string wrapper: `{ "message": "<JSON-stringified envelope>" }`.
-    /// ZeroClaw 0.7.4's `/webhook` route accepts only this shape — the
-    /// gateway treats the body as a free-form prompt-shaped payload and
-    /// rejects unknown keys at the top level.
-    ///
-    /// Retained for legacy / fallback configurations; the canonical
-    /// ZeroClaw path is now [`BodyShape::ZeroClawSession`].
-    MessageWrapped,
     /// Write the wake into the operator's persisted ZeroClaw session via
-    /// WebSocket. The carried `String`s are the resolved session id and
+    /// WebSocket. The carried fields are the resolved session id and
     /// WS / HTTP base / bearer at daemon-start time. Only the
     /// `klodi-zeroclaw-daemon` builds this variant; the
     /// `zeroclaw_session` Cargo feature gates the supporting modules.
@@ -77,7 +69,9 @@ pub struct ForwarderConfig {
     pub config_path: PathBuf,
     /// Local host wake URL (e.g. Moltis's
     /// `http://127.0.0.1:5000/agents/default/wake`, IronClaw's
-    /// `/event-trigger`, ZeroClaw 0.7.4's `/webhook`).
+    /// `/event-trigger`). Unused on the ZeroClaw path — the
+    /// `BodyShape::ZeroClawSession` variant carries its own WS URL on
+    /// the embedded `ws_config`.
     pub wake_url: String,
     /// Optional bearer token. P1-14 promotes this from Moltis-only to
     /// shared — IronClaw + ZeroClaw inherit the mechanism.
@@ -95,16 +89,13 @@ pub struct ForwarderConfig {
     pub health_port: Option<u16>,
     /// Body shape the host accepts. See [`BodyShape`].
     pub body_shape: BodyShape,
-    /// Per-attempt reqwest timeout for the wake POST. Picked per-adapter:
-    /// asynchronous hosts that ack on receipt and run the agent in the
-    /// background (Moltis, IronClaw) want a small bound — seconds — so a
-    /// stalled host surfaces fast and JetStream redelivers. Synchronous
-    /// hosts that block the response on the agent's full turn (ZeroClaw
-    /// 0.7.4 `/webhook` runs the agent loop inline and returns
-    /// `{"model","response"}` only after the agent finishes) need minutes,
-    /// since real wakes routinely take 15–60s. A timeout shorter than the
-    /// agent's typical turn pins the daemon in a NAK / redeliver loop and
-    /// no wake ever resolves.
+    /// Per-attempt reqwest timeout for the wake POST. Picked per-adapter
+    /// for `BodyShape::Structured` consumers — asynchronous hosts that
+    /// ack on receipt and run the agent in the background (Moltis,
+    /// IronClaw) want a small bound — seconds — so a stalled host
+    /// surfaces fast and JetStream redelivers. Unused on the
+    /// `BodyShape::ZeroClawSession` path; ZeroClaw's daemon sets a
+    /// nominal value here that's never consulted.
     pub wake_post_timeout: Duration,
 }
 
@@ -312,9 +303,7 @@ async fn forward<T: Serialize>(
     kind: &str,
 ) -> Result<(), KlodiError> {
     match &state.body_shape {
-        BodyShape::Structured | BodyShape::MessageWrapped => {
-            forward_http(state, body, kind).await
-        }
+        BodyShape::Structured => forward_http(state, body, kind).await,
         #[cfg(feature = "zeroclaw_session")]
         BodyShape::ZeroClawSession {
             ws_config,
@@ -334,18 +323,6 @@ async fn forward_http<T: Serialize>(
         .header("Content-Type", "application/json");
     request = match &state.body_shape {
         BodyShape::Structured => request.json(body),
-        BodyShape::MessageWrapped => {
-            // ZeroClaw 0.7.4 `/webhook` accepts only `{"message": "<text>"}`.
-            // We carry the full structured envelope as a JSON-encoded
-            // string in `message` so no payload field is dropped — the
-            // agent can `JSON.parse` it on receipt.
-            let inner = serde_json::to_string(body).map_err(|err| {
-                KlodiError::NatsPublish(format!(
-                    "wake POST body serialise: {err}"
-                ))
-            })?;
-            request.json(&json!({ "message": inner }))
-        }
         #[cfg(feature = "zeroclaw_session")]
         BodyShape::ZeroClawSession { .. } => {
             // Unreachable: `forward` dispatches `ZeroClawSession` to the
@@ -606,41 +583,4 @@ mod tests {
         assert_eq!(json["payload"]["sequence"], 42);
     }
 
-    #[test]
-    fn message_wrapped_body_carries_full_envelope_as_json_string() {
-        // ZeroClaw 0.7.4 `/webhook` accepts only `{"message": "<text>"}` —
-        // we round-trip the structured WakePost through serde_json::to_string
-        // and assert the resulting wrapped body parses back to the same
-        // envelope. This is the contract the daemon ships against when
-        // BodyShape::MessageWrapped is selected.
-        let evt = NotificationEvent::ListingCreated {
-            event_id: "e1".into(),
-            listing_id: "l1".into(),
-            title: Some("vintage chair".into()),
-        };
-        let post = WakePost::Notification {
-            kind: evt.kind(),
-            event_id: evt.event_id(),
-            user_id: "u1",
-            payload: &evt,
-        };
-        let inner = serde_json::to_string(&post).unwrap();
-        let wrapped = json!({ "message": inner });
-
-        // Wrapped body has exactly one top-level key.
-        let obj = wrapped.as_object().unwrap();
-        assert_eq!(obj.len(), 1);
-        assert!(obj.contains_key("message"));
-
-        // The string parses back to the original structured envelope.
-        let round_trip: Value = serde_json::from_str(
-            wrapped["message"].as_str().unwrap(),
-        )
-        .unwrap();
-        assert_eq!(round_trip["channel"], "notification");
-        assert_eq!(round_trip["kind"], "listing.created");
-        assert_eq!(round_trip["event_id"], "e1");
-        assert_eq!(round_trip["user_id"], "u1");
-        assert_eq!(round_trip["payload"]["listing_id"], "l1");
-    }
 }

@@ -30,13 +30,19 @@ This release closes the dashboard pairing-friction gap (plan I-9 of `docs/plans/
   - `--zeroclaw-dashboard-url` (`ZEROCLAW_DASHBOARD_URL`) — override the dashboard URL surfaced to the operator. Default: derived from `--zeroclaw-webhook-url` by stripping `/webhook`. Set this when the daemon runs in a container with port-mapped access from the host (e.g. `http://localhost:18793`).
   - `--open-browser={auto,always,never}` (`ZEROCLAW_OPEN_BROWSER`, default `auto`) — controls the OS-native browser launch. `auto` honours tty detection (interactive run = on, systemd / docker compose = off).
 
+### Removed
+
+- **`--legacy-webhook` / `ZEROCLAW_LEGACY_WEBHOOK` (and `BodyShape::MessageWrapped`).** The pre-0.2.6 wake-delivery path that POSTed each event to ZeroClaw's `/webhook` was deprecated in 0.2.6 when wakes moved to `/ws/chat`, retained as a fallback in 0.2.5–0.2.7, and is now removed entirely. Audit confirmed no deployment was setting the flag — every supported gateway (≥ 0.7.4) exposes `/ws/chat`, and the legacy path was unusable in practice on real klodi turns (gateway's hard 30s `TimeoutLayer` vs. typical 60s+ agent turns). Operators on a hypothetical pre-0.7.4 ZeroClaw build that doesn't expose `/ws/chat` would have to stay on klodi-zeroclaw 0.2.7. Touched files: `packages/klodi-rust-host/src/forwarder.rs` (variant + match arms + a now-dead test), `adapters/zeroclaw/src/bin/daemon.rs` (CLI flag, env var, branch, `LEGACY_WAKE_POST_TIMEOUT` constant).
+
 ### Migrating from 0.2.7 to 0.2.8 (klodi-zeroclaw operators only)
 
-Drop-in replacement — no config or env changes. Rebuild the daemon (`cargo install klodi-zeroclaw` or pull the new container image) and restart. On first boot after the bump:
+Drop-in replacement for any operator who was on the canonical `/ws/chat` path (the default in 0.2.6+). Rebuild the daemon (`cargo install klodi-zeroclaw` or pull the new container image) and restart. On first boot after the bump:
 
 1. If the gateway CLI is on `PATH` (canonical deployment), the daemon auto-mints + caches its own bearer when no other source is configured. Existing cached tokens / sidecar pairing-code files / `ZEROCLAW_AGENT_TOKEN` continue to work and take precedence.
 2. The loopback shim binds on an ephemeral port; its URL appears in the heartbeat in chat, in a boxed stdout block, and (if running interactively) opens automatically in the operator's browser.
-3. To keep 0.2.7 behaviour exactly: set `ZEROCLAW_BROWSER_PAIR_DISABLE=1`. To keep auto-pair but suppress the browser launch: set `ZEROCLAW_OPEN_BROWSER=never`.
+3. To keep auto-pair behaviour disabled (mirrors the 0.2.7 bearer-resolve flow): set `ZEROCLAW_BROWSER_PAIR_DISABLE=1`. To keep auto-pair but suppress the browser launch: set `ZEROCLAW_OPEN_BROWSER=never`.
+
+**Operators who were running with `ZEROCLAW_LEGACY_WEBHOOK=1` set:** unset the env var (or remove the flag); 0.2.8 will refuse to parse it. If your gateway lacks `/ws/chat` (any ZeroClaw build < 0.7.4), pin klodi-zeroclaw to 0.2.7. If your gateway has `/ws/chat`, the WS path will Just Work — that's been the canonical path since 0.2.6.
 
 The interim `demo/scripts/up-zeroclaw.sh:200-233` workaround in the marketplace repo (which `docker exec`s `gateway get-paircode --new` and prints the code) becomes redundant once 0.2.8 ships and can be removed in a follow-up.
 

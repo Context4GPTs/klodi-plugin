@@ -7,7 +7,11 @@
 //! `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`), and
 //! then hands a [`ForwarderConfig`] with `BodyShape::ZeroClawSession`
 //! (I-1) to the shared runner so wakes write into the operator's
-//! ZeroClaw session via `/ws/chat` instead of POSTing to `/webhook`.
+//! ZeroClaw session via `/ws/chat`. The pre-0.2.6 `POST /webhook`
+//! delivery path was removed in 0.2.8 — every supported ZeroClaw build
+//! (≥ 0.7.4) exposes `/ws/chat`, and the legacy synchronous-prompt
+//! path was unusable on real klodi turns (30s gateway timeout vs. 60s+
+//! agent turns).
 //!
 //! Bearer pairing flow as of 0.2.8 (plan I-9): when no explicit env
 //! token, no cached `${KLODI_HOME}/zeroclaw.token`, and no sidecar
@@ -37,13 +41,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Per-attempt timeout for the wake POST. Only relevant when the daemon
-/// runs in the legacy `BodyShape::MessageWrapped` path against
-/// `/webhook` — the WS path doesn't use reqwest at all. Kept as a
-/// generous fallback so an operator who explicitly opts into the legacy
-/// path (`--legacy-webhook`) still gets the long-tail headroom that
-/// klodi-zeroclaw 0.2.5 had.
-const LEGACY_WAKE_POST_TIMEOUT: Duration = Duration::from_secs(240);
+/// Nominal value for `ForwarderConfig::wake_post_timeout`. The
+/// `BodyShape::ZeroClawSession` path doesn't use reqwest for wake
+/// delivery — the field is required by the shared `ForwarderConfig`
+/// struct but never consulted on this code path.
+const WAKE_POST_TIMEOUT_PLACEHOLDER: Duration = Duration::from_secs(60);
 
 /// Timeout for spawning + waiting on the gateway CLI when the daemon
 /// auto-mints a pairing code. The CLI typically responds in <100ms;
@@ -83,11 +85,14 @@ struct Cli {
     creds: Option<PathBuf>,
     #[arg(long, env = "KLODI_CONFIG")]
     config: Option<PathBuf>,
-    /// Local ZeroClaw `/webhook` URL. The daemon derives the WS endpoint
-    /// (`/ws/chat`) and the REST base from this — see
-    /// `klodi_rust_host::ZeroClawWsConfig::from_webhook_url`. Override
-    /// with `--ws-url` / `--http-base` when the gateway lives at a
-    /// non-canonical path.
+    /// ZeroClaw gateway base-URL hint. The daemon derives the canonical
+    /// `/ws/chat` (wake delivery) and `/pair` (bearer mint) endpoints
+    /// from this — see `klodi_rust_host::ZeroClawWsConfig::from_webhook_url`.
+    /// The env-var name is a holdover from the pre-0.2.6 era when wakes
+    /// went to `POST /webhook` directly; today the literal `/webhook`
+    /// route is unused. Override with `--zeroclaw-ws-url` /
+    /// `--zeroclaw-http-base` when the gateway lives at a non-canonical
+    /// path.
     #[arg(
         long,
         env = "ZEROCLAW_WEBHOOK_URL",
@@ -106,24 +111,18 @@ struct Cli {
     /// Override the derived REST base used for session diagnostics.
     #[arg(long, env = "ZEROCLAW_HTTP_BASE")]
     zeroclaw_http_base: Option<String>,
-    /// Bearer token for ZeroClaw's `/webhook` and `/ws/chat`. When unset
-    /// the daemon resolves the bearer at startup: a sidecar pairing-code
-    /// file at `${KLODI_HOME}/zeroclaw.pairing-code` triggers a
-    /// pair-dance and caches the resulting `zc_<hex>` token at
-    /// `${KLODI_HOME}/zeroclaw.token`; otherwise the daemon reads the
-    /// cached token.
+    /// Bearer token used as `Authorization: Bearer` on the `/ws/chat`
+    /// upgrade. When unset the daemon resolves the bearer at startup:
+    /// a sidecar pairing-code file at `${KLODI_HOME}/zeroclaw.pairing-code`
+    /// triggers a `POST /pair` and caches the resulting `zc_<hex>`
+    /// token at `${KLODI_HOME}/zeroclaw.token`; otherwise the daemon
+    /// reads the cached token, or (0.2.8+) auto-mints a fresh code via
+    /// the gateway CLI.
     #[arg(long, env = "ZEROCLAW_AGENT_TOKEN")]
     zeroclaw_token: Option<String>,
     /// Optional `/healthz` HTTP probe port (P2-25).
     #[arg(long, env = "ZEROCLAW_HEALTH_PORT")]
     health_port: Option<u16>,
-    /// Force the legacy `POST /webhook` body shape instead of the new
-    /// WS / operator-session delivery path. Only useful for operators
-    /// running a ZeroClaw build that hasn't deployed `/ws/chat` (none
-    /// shipped post-0.7.x). Default is `false` — the WS path is the
-    /// canonical one as of klodi-zeroclaw 0.2.6.
-    #[arg(long, env = "ZEROCLAW_LEGACY_WEBHOOK", default_value_t = false)]
-    legacy_webhook: bool,
     /// Adopt an existing ZeroClaw session id for klodi instead of
     /// minting a new one. Per plan §5 I-2, the default is to always
     /// create a new dedicated session (operators with a pre-existing
@@ -142,16 +141,18 @@ struct Cli {
     /// demand (per plan I-9). Default `"zeroclaw"`, resolved on PATH.
     /// Override when the gateway lives at a non-canonical path or when
     /// the daemon runs on a different host. If the binary is not
-    /// reachable, the daemon falls back to the legacy bearer-resolve
-    /// flow (env / cached token / sidecar code) and the loopback
-    /// browser-pairing helper auto-disables itself.
+    /// reachable, the daemon falls back to the env / cached token /
+    /// sidecar code bearer-resolve flow and the loopback browser-pairing
+    /// helper auto-disables itself.
     #[arg(long, env = "ZEROCLAW_CLI", default_value = "zeroclaw")]
     zeroclaw_cli: PathBuf,
     /// Disable the loopback browser-pairing helper. When set, the
     /// daemon does not detect the gateway CLI, does not auto-mint its
     /// own bearer, does not bind the helper port, and does not
-    /// auto-open the operator's browser. Use to keep the daemon's
-    /// behaviour identical to the 0.2.7 release.
+    /// auto-open the operator's browser. Use for non-canonical
+    /// deployments where `zeroclaw` isn't on PATH, or when you want
+    /// the operator to manage pairing manually via
+    /// `${KLODI_HOME}/zeroclaw.pairing-code` or `ZEROCLAW_AGENT_TOKEN`.
     #[arg(
         long,
         env = "ZEROCLAW_BROWSER_PAIR_DISABLE",
@@ -261,33 +262,6 @@ async fn main() -> Result<()> {
         cli.zeroclaw_http_base.as_deref(),
         bearer.clone(),
     )?;
-
-    if cli.legacy_webhook {
-        // Operator explicitly opted into the pre-0.2.6 path. Skip the
-        // session bootstrap + heartbeat (no session to write into) and
-        // hand the forwarder the old `MessageWrapped` shape against
-        // `/webhook`. The 240s timeout band-aid stays in this branch.
-        tracing::warn!(
-            "klodi_zeroclaw_legacy_webhook_enabled — bypassing /ws/chat session delivery; \
-             wake processing will block on the agent's full turn duration"
-        );
-        return run_forwarder(ForwarderConfig {
-            creds_path,
-            config_path,
-            wake_url: cli.zeroclaw_webhook_url.clone(),
-            bearer_token: Some(bearer),
-            user_agent: format!(
-                "klodi-zeroclaw-daemon/{}",
-                env!("CARGO_PKG_VERSION")
-            ),
-            log_event_prefix: "klodi_zeroclaw".into(),
-            health_port: cli.health_port,
-            body_shape: BodyShape::MessageWrapped,
-            wake_post_timeout: LEGACY_WAKE_POST_TIMEOUT,
-        })
-        .await
-        .context("running klodi-zeroclaw-daemon (legacy /webhook path)");
-    }
 
     // Heartbeat + (optional) bootstrap note. Read handle/user_id/nats_url
     // from config.json directly — KlodiClient::new will load it again
@@ -422,11 +396,8 @@ async fn main() -> Result<()> {
             ws_config,
             session_id: resolved.session_id,
         },
-        // The WS path doesn't use this — it's only consulted by
-        // forward_http when body_shape is Structured/MessageWrapped.
-        // Keep the generous default in case a future operator flips
-        // back to the legacy path mid-config without restarting.
-        wake_post_timeout: LEGACY_WAKE_POST_TIMEOUT,
+        // Unused on the WS path — see WAKE_POST_TIMEOUT_PLACEHOLDER.
+        wake_post_timeout: WAKE_POST_TIMEOUT_PLACEHOLDER,
     })
     .await
     .context("running klodi-zeroclaw-daemon")

@@ -61,7 +61,7 @@ It's idempotent: running it again refreshes `nats.creds` + `config.json` atomica
 
 The daemon holds one persistent NATS-WS connection. Per-wake delivery (0.2.6+) writes the marketplace event into the operator's persisted ZeroClaw chat session via `WS /ws/chat?session_id=<uuid>` — bypassing the synchronous `/webhook` route and its 30s `TimeoutLayer` entirely. The session UUID is bootstrapped on first daemon start and persisted at `${KLODI_HOME}/zeroclaw.session`; the daemon also posts a heartbeat + plugin-authored bootstrap note into that session so you see it the moment you open ZeroClaw's dashboard.
 
-NATS ack semantics are decoupled from the agent's turn duration: the WS write returns as soon as the gateway acknowledges the frame (typically <1s), and the daemon waits up to 180s for an `agent_start` / `turn_complete` confirmation before falling back to ack-on-write. The forwarder serves notifications and channel messages on independent subscriber tasks, so a slow agent turn doesn't stall other deliveries. Operators on a ZeroClaw build that doesn't expose `/ws/chat` can fall back to the legacy `/webhook` path with `--legacy-webhook` (or `ZEROCLAW_LEGACY_WEBHOOK=1`); that mode keeps the 240s wake-post timeout from 0.2.5.
+NATS ack semantics are decoupled from the agent's turn duration: the WS write returns as soon as the gateway acknowledges the frame (typically <1s), and the daemon waits up to 180s for an `agent_start` / `turn_complete` confirmation before falling back to ack-on-write. The forwarder serves notifications and channel messages on independent subscriber tasks, so a slow agent turn doesn't stall other deliveries.
 
 ### Browser pairing helper
 
@@ -216,7 +216,7 @@ Resolves: `creds_perms` (warns when other local users could read your NKey).
 
 - **Rust toolchain** for `cargo install` (or pre-built binaries from a release).
 - **A long-running supervisor** (systemd, etc.) for `klodi-zeroclaw-daemon`.
-- **ZeroClaw gateway reachable** at `ZEROCLAW_WEBHOOK_URL` (≥ 0.7.4 for `/ws/chat` + `/pair`). The env var name is a holdover from the pre-0.2.6 wake-routing era — the daemon uses the URL only as a base-URL hint, deriving `/ws/chat` (canonical wake delivery) and `/pair` (bearer mint) from it. The literal `/webhook` route only matters if you opt into legacy mode with `--legacy-webhook` / `ZEROCLAW_LEGACY_WEBHOOK=1`.
+- **ZeroClaw gateway reachable** at `ZEROCLAW_WEBHOOK_URL` (≥ 0.7.4 for `/ws/chat` + `/pair`). The env-var name is a holdover from the pre-0.2.6 era — the daemon uses the URL only as a base-URL hint, deriving `/ws/chat` (canonical wake delivery) and `/pair` (bearer mint) from it. The literal `/webhook` route is unused as of 0.2.8.
 - **A bearer token.** On 0.2.8+ canonical deployments the daemon auto-mints one on first boot via the gateway CLI — no operator action needed. Pre-0.2.8 (or with `ZEROCLAW_BROWSER_PAIR_DISABLE=1`): either pre-pair manually and export `ZEROCLAW_AGENT_TOKEN`, or drop a one-time pairing code at `${KLODI_HOME}/zeroclaw.pairing-code` so the daemon mints + caches one itself. ZeroClaw 0.7.4 prints the gateway's startup pairing code to its stdout; deployments that wipe `gateway.paired_tokens` per boot should refresh the sidecar code-file at the same time (or rely on the auto-mint path).
 
 ---
@@ -239,7 +239,7 @@ ZeroClaw-specific security highlights — the [repo SECURITY policy](https://git
 
 - **NATS NKey credentials at `${KLODI_HOME}/nats.creds`** (mode 0600).
 - **Cached ZeroClaw bearer at `${KLODI_HOME}/zeroclaw.token`** (mode 0600), minted by the daemon from a one-time pairing code (operator-supplied sidecar, gateway CLI auto-mint on 0.2.8+, or pre-paired via `ZEROCLAW_AGENT_TOKEN`). The cache is local-only — no network exposure.
-- **Outbound-only NATS-WS to klodi**, plus a local WebSocket connection to ZeroClaw's `/ws/chat` for wake delivery and a one-shot `POST /pair` when minting the bearer. The WS connection carries `Authorization: Bearer <zc_…>` on the upgrade. No public URL, no HMAC. The pre-0.2.6 path that POSTed wakes to `/webhook` is still selectable via `--legacy-webhook` for operators on a ZeroClaw build without `/ws/chat`; modern operators stay on the WS path.
+- **Outbound-only NATS-WS to klodi**, plus a local WebSocket connection to ZeroClaw's `/ws/chat` for wake delivery and a one-shot `POST /pair` when minting the bearer. The WS connection carries `Authorization: Bearer <zc_…>` on the upgrade. No public URL, no HMAC.
 - **Loopback browser-pairing helper (0.2.8+, see above)** binds `127.0.0.1:<ephemeral>` only — never widened to a non-loopback address. `Host:` header validation defends against DNS rebinding; the rendered HTML uses HTML-safe JSON encoding so a hostile dashboard URL cannot break out of the page's `<script>` block. Disable with `ZEROCLAW_BROWSER_PAIR_DISABLE=1` if you don't want the surface.
 
 ---

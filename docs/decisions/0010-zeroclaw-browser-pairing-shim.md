@@ -7,7 +7,7 @@
 
 ## Context
 
-ZeroClaw's gateway prints a single one-time pairing code at boot. Through 0.2.7, the klodi daemon consumed that code (`POST /pair` with `X-Pairing-Code:`) to mint its own `zc_<hex>` bearer — used since 0.2.6 as `Authorization: Bearer` on the canonical `WS /ws/chat` data path (and on the legacy `/webhook` POST for operators who opt back into it). That single boot-time code went to the daemon, leaving the operator's browser without a code to enter at the dashboard's "PAIRING REQUIRED" prompt.
+ZeroClaw's gateway prints a single one-time pairing code at boot. Through 0.2.7, the klodi daemon consumed that code (`POST /pair` with `X-Pairing-Code:`) to mint its own `zc_<hex>` bearer — used since 0.2.6 as `Authorization: Bearer` on the canonical `WS /ws/chat` data path. That single boot-time code went to the daemon, leaving the operator's browser without a code to enter at the dashboard's "PAIRING REQUIRED" prompt.
 
 The expected workaround was for operators to know that `zeroclaw gateway get-paircode --new` exists and run it inside the gateway container. Verified during plan authoring: even a power user familiar with ZeroClaw stalls at this step on first install. The marketplace demo's `up-zeroclaw.sh` script papers over the friction by `docker exec`ing the CLI from outside and printing the result, but only for the demo containers — operators who `cargo install klodi-zeroclaw` and run the daemon directly get nothing.
 
