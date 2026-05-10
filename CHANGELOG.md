@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.8] — 2026-05-10
+
+**klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.
+
+This release closes the dashboard pairing-friction gap (plan I-9 of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`). Operators on the canonical "cargo install + run daemon" deployment now go from `klodi-zeroclaw-register` straight to a working dashboard with a single ⌘V + Enter, without `docker exec` or hunting for the gateway's startup pairing code in container logs.
+
+### Added
+
+- **Auto-mint daemon pairing.** When no `ZEROCLAW_AGENT_TOKEN`, no cached `${KLODI_HOME}/zeroclaw.token`, and no sidecar `${KLODI_HOME}/zeroclaw.pairing-code` are present, the daemon now mints its own pairing code by invoking `zeroclaw gateway get-paircode --new` on `PATH` and POSTs it to `/pair` itself. The minted bearer is cached as before. First-boot is zero-touch: the operator no longer has to find the gateway's startup pairing code printed in container logs and write it to a file. Sidecar codes still take precedence — operators who control re-pair flow manually keep the existing semantics.
+
+- **Loopback browser-pairing helper.** `klodi-zeroclaw-daemon` 0.2.8 binds a small HTTP/1.1 server on `127.0.0.1:<port>` (default port 0 = OS-picked ephemeral). Hitting `/` mints a fresh pairing code via the same gateway CLI, renders an HTML page that copies the code to clipboard, and redirects to the gateway dashboard URL. The dashboard's "PAIRING REQUIRED" prompt becomes a single ⌘V + Enter. Codes are minted on every page hit so reloads always produce fresh codes (codes expire ≈60s server-side). The shim's URL is surfaced through three channels:
+  - **Heartbeat in the operator's chat session** — the existing one-line `🟢 klodi daemon connected as @…` heartbeat now carries `Browser pairing: <url>` when the helper is running.
+  - **Boxed stdout block** at daemon startup with the URL and a freshly-minted code (so even non-interactive deployments see it in logs).
+  - **Auto-launch** of the operator's browser at the URL when stdout is a tty (override via `--open-browser={auto,always,never}` / `ZEROCLAW_OPEN_BROWSER`).
+
+  The shim's threat model: loopback bind only (hardcoded 127.0.0.1, never widened by CLI), `Host:` header validation against `127.0.0.1:<port>` / `localhost:<port>` literals (DNS-rebinding defense), `Cache-Control: no-store` + `Referrer-Policy: no-referrer` + `X-Content-Type-Options: nosniff` headers, HTML-safe JSON encoding inside the inline `<script>` (`<` / `>` / `&` rewritten as `\uXXXX` so a hostile dashboard URL can't break out of the script element). Per `docs/SECURITY.md` § Trust model the workstation owner is the trust anchor — local processes running as the operator are inside the boundary, so no PIN / CSRF token is added.
+
+- **New CLI flags on `klodi-zeroclaw-daemon`.** All env-var-backed:
+  - `--zeroclaw-cli` (`ZEROCLAW_CLI`, default `zeroclaw`) — path to the gateway CLI used by auto-mint and the shim. When unreachable, both auto-disable and the daemon falls back to the 0.2.7 bearer-resolve flow.
+  - `--no-browser-pair-shim` (`ZEROCLAW_BROWSER_PAIR_DISABLE`) — opt out of auto-mint + shim entirely. Use for non-canonical deployments or to keep behaviour identical to 0.2.7.
+  - `--browser-pair-shim-port` (`ZEROCLAW_BROWSER_PAIR_PORT`, default `0`) — pin a specific loopback port; default is OS-picked ephemeral.
+  - `--zeroclaw-dashboard-url` (`ZEROCLAW_DASHBOARD_URL`) — override the dashboard URL surfaced to the operator. Default: derived from `--zeroclaw-webhook-url` by stripping `/webhook`. Set this when the daemon runs in a container with port-mapped access from the host (e.g. `http://localhost:18793`).
+  - `--open-browser={auto,always,never}` (`ZEROCLAW_OPEN_BROWSER`, default `auto`) — controls the OS-native browser launch. `auto` honours tty detection (interactive run = on, systemd / docker compose = off).
+
+### Migrating from 0.2.7 to 0.2.8 (klodi-zeroclaw operators only)
+
+Drop-in replacement — no config or env changes. Rebuild the daemon (`cargo install klodi-zeroclaw` or pull the new container image) and restart. On first boot after the bump:
+
+1. If the gateway CLI is on `PATH` (canonical deployment), the daemon auto-mints + caches its own bearer when no other source is configured. Existing cached tokens / sidecar pairing-code files / `ZEROCLAW_AGENT_TOKEN` continue to work and take precedence.
+2. The loopback shim binds on an ephemeral port; its URL appears in the heartbeat in chat, in a boxed stdout block, and (if running interactively) opens automatically in the operator's browser.
+3. To keep 0.2.7 behaviour exactly: set `ZEROCLAW_BROWSER_PAIR_DISABLE=1`. To keep auto-pair but suppress the browser launch: set `ZEROCLAW_OPEN_BROWSER=never`.
+
+The interim `demo/scripts/up-zeroclaw.sh:200-233` workaround in the marketplace repo (which `docker exec`s `gateway get-paircode --new` and prints the code) becomes redundant once 0.2.8 ships and can be removed in a follow-up.
+
 ## [0.2.7] — 2026-05-10
 
 **klodi-zeroclaw only.** Tag-only re-issue of the 0.2.6 redesign plus the build fix it needed to publish. 0.2.6 was tagged at a commit that contained a `#[cfg]` split in `klodi-rust-host::mcp::tools::dispatch` whose `not(feature = ...)` arm survived the zeroclaw vendor's cfg strip — both halves of the split went live in the staged crate, `cargo publish --dry-run` failed on E0382 + E0596, and the tag never actually shipped to crates.io. 0.2.7 collapses the split to a single `let mut args` with `#[allow(unused_mut)]` for the moltis/ironclaw build that doesn't reach the approval-gate path. The 0.2.6 tag remains on the repo for audit trail; nothing was published under that version.

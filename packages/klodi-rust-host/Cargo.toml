@@ -60,7 +60,10 @@ klodi-nats-client = { path = "../nats-client-rs" }
 klodi-logger = { path = "../logger-rs" }
 
 # Async runtime — match the workspace pin.
-tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync"] }
+# `process` is needed by the ZeroClaw browser-pairing minter
+# (`zeroclaw_browser_pairing`) which shells out to
+# `zeroclaw gateway get-paircode --new`.
+tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "process"] }
 
 # Outbound HTTP for the host wake POST and the registration HTTP poll.
 # `rustls-tls` keeps OpenSSL out of the build for portability.
@@ -106,5 +109,5 @@ tokio-tungstenite = { version = "=0.24.0", default-features = false, features = 
 http = { version = "1", optional = true }
 
 [dev-dependencies]
-tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "test-util"] }
+tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "test-util", "process"] }
 tempfile = "=3.14.0"

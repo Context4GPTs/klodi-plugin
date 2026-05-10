@@ -61,6 +61,10 @@ pub mod zeroclaw_approval;
 #[cfg(feature = "zeroclaw_session")]
 pub mod zeroclaw_bootstrap_note;
 #[cfg(feature = "zeroclaw_session")]
+pub mod zeroclaw_browser_pairing;
+#[cfg(feature = "zeroclaw_session")]
+pub mod zeroclaw_pairing_shim;
+#[cfg(feature = "zeroclaw_session")]
 pub mod zeroclaw_session;
 #[cfg(feature = "zeroclaw_session")]
 pub mod zeroclaw_ws;
@@ -77,6 +81,12 @@ pub use host_mcp_config::{HostMcpEntry, apply_host_mcp_entry, default_host_confi
 #[cfg(feature = "mcp")]
 pub use mcp::{McpConfig, run_mcp_server};
 
+#[cfg(feature = "zeroclaw_session")]
+pub use zeroclaw_browser_pairing::{
+    BrowserPairConfig, BrowserPairError, MinterImpl, ZeroclawCliMinter,
+};
+#[cfg(feature = "zeroclaw_session")]
+pub use zeroclaw_pairing_shim::{ShimConfig, ShimHandle};
 #[cfg(feature = "zeroclaw_session")]
 pub use zeroclaw_session::{
     ResolvedSession, adopt_session_id, resolve_session_id, session_path,

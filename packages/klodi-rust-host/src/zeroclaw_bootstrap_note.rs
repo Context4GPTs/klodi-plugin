@@ -23,6 +23,13 @@ pub struct BootstrapInputs<'a> {
     pub user_id: &'a str,
     pub nats_url: &'a str,
     pub daemon_version: &'a str,
+    /// Loopback URL of the browser-pairing helper shim
+    /// (`crate::zeroclaw_pairing_shim`). `None` when the shim is
+    /// disabled (`--no-browser-pair-shim`) or failed to bind. When
+    /// present, the heartbeat surfaces it so an operator who hasn't yet
+    /// paired their browser has a clickable affordance in the chat.
+    /// Per plan I-9.
+    pub browser_pair_url: Option<&'a str>,
 }
 
 /// One-line heartbeat written on every daemon (re)start. Always-on
@@ -30,13 +37,18 @@ pub struct BootstrapInputs<'a> {
 /// operator should always see "the daemon just started" the moment they
 /// open the dashboard.
 pub fn heartbeat(inputs: &BootstrapInputs<'_>) -> String {
+    let pair_phrase = match inputs.browser_pair_url {
+        Some(url) => format!(" Browser pairing: {url}."),
+        None => String::new(),
+    };
     format!(
         "🟢 klodi daemon connected as @{handle} ({user_id}). NATS: {nats_url}. \
-         Daemon: klodi-zeroclaw v{ver}. Wakes will appear in this session.",
+         Daemon: klodi-zeroclaw v{ver}.{pair_phrase} Wakes will appear in this session.",
         handle = inputs.handle,
         user_id = inputs.user_id,
         nats_url = inputs.nats_url,
         ver = inputs.daemon_version,
+        pair_phrase = pair_phrase,
     )
 }
 
@@ -105,6 +117,7 @@ mod tests {
             user_id: "u_alice_123",
             nats_url: "wss://nats.klodi.4gpts.com:4222",
             daemon_version: "0.2.6",
+            browser_pair_url: None,
         }
     }
 
@@ -123,6 +136,36 @@ mod tests {
         // operator's session log stays tight on every (re)start.
         let line = heartbeat(&fixture());
         assert!(!line.contains('\n'), "heartbeat must be one line, got: {line}");
+    }
+
+    #[test]
+    fn heartbeat_omits_browser_pair_url_when_none() {
+        let line = heartbeat(&fixture());
+        assert!(
+            !line.contains("Browser pairing"),
+            "heartbeat must not mention browser pairing when url is None: {line}"
+        );
+    }
+
+    #[test]
+    fn heartbeat_appends_browser_pair_url_when_some() {
+        let mut inputs = fixture();
+        inputs.browser_pair_url = Some("http://127.0.0.1:53219");
+        let line = heartbeat(&inputs);
+        assert!(
+            line.contains("Browser pairing: http://127.0.0.1:53219"),
+            "heartbeat must surface the shim URL: {line}"
+        );
+    }
+
+    #[test]
+    fn heartbeat_one_line_invariant_holds_with_url() {
+        // Adding the URL must not split the line — operators rely on
+        // the heartbeat occupying a single chat-line.
+        let mut inputs = fixture();
+        inputs.browser_pair_url = Some("http://127.0.0.1:53219");
+        let line = heartbeat(&inputs);
+        assert!(!line.contains('\n'), "got: {line}");
     }
 
     #[test]

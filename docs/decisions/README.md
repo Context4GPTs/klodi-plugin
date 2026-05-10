@@ -32,3 +32,4 @@ Each ADR is a short, self-contained markdown file:
 | [0007](./0007-timer-cadence-clamp.md) | Timer cadences with parse clamps and silent auto-reject | Accepted |
 | [0008](./0008-bundled-deps-host-ignore-scripts.md) | Runtime deps via `bundleDependencies` + host-enforced `--ignore-scripts` | Superseded |
 | [0009](./0009-vendored-ts-workspace-deps.md) | Workspace TS deps vendored into `dist/_vendor/` at publish time | Accepted |
+| [0010](./0010-zeroclaw-browser-pairing-shim.md) | Browser-pairing helper for klodi-zeroclaw (auto-mint + loopback HTTP shim) | Accepted |

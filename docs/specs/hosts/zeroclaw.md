@@ -6,7 +6,9 @@
 
 ## 1. Identity
 
-ZeroClaw runs the agent inside a long-running daemon that owns one persistent NATS-WS connection. The adapter is a Rust binary crate that ships two control planes: a wake-forwarder daemon (NATS → HTTP `POST /webhook` against ZeroClaw 0.7.4's gateway, with `Authorization: Bearer <zc_…>` and a `{"message": "<JSON-stringified envelope>"}` body) and a stdio MCP server (`klodi-zeroclaw-mcp`) that exposes the tool catalog and skill bundle to the agent. Imports `async-nats` via the workspace `nats-client-rs` package.
+ZeroClaw runs the agent inside a long-running daemon that owns one persistent NATS-WS connection. The adapter is a Rust binary crate that ships two control planes: a wake-forwarder daemon (NATS → WebSocket write into the operator's persisted ZeroClaw chat session at `/ws/chat?session_id=<uuid>`, with `Authorization: Bearer <zc_…>` on the upgrade and a `{"type":"message","content":"<text>"}` frame body — see plan §4 + I-1) and a stdio MCP server (`klodi-zeroclaw-mcp`) that exposes the tool catalog and skill bundle to the agent. Imports `async-nats` via the workspace `nats-client-rs` package.
+
+> **Pre-0.2.6 path.** The legacy delivery path was `POST /webhook` with `{"message": "<JSON-stringified envelope>"}`. It is still selectable via `--legacy-webhook` / `ZEROCLAW_LEGACY_WEBHOOK=1` for operators on a ZeroClaw build that doesn't expose `/ws/chat`, but it has a hard 30s `TimeoutLayer` on the gateway side that routinely tripped on real klodi turns. Modern operators stay on the WS path.
 
 host_shape: daemon
 
@@ -26,7 +28,7 @@ host_shape: daemon
 
 ## 3. Lifecycle
 
-- **Wake forwarder:** `klodi-zeroclaw-daemon` runs under operator supervision; opens its own persistent NATS-WS connection and POSTs to ZeroClaw's `/webhook`. Resolves the bearer token at startup in this priority order: `ZEROCLAW_AGENT_TOKEN` env > sidecar pairing-code at `${KLODI_HOME}/zeroclaw.pairing-code` (consumed and POSTed to `/pair`) > cached token at `${KLODI_HOME}/zeroclaw.token`.
+- **Wake forwarder:** `klodi-zeroclaw-daemon` runs under operator supervision; opens its own persistent NATS-WS connection to klodi and writes each delivered marketplace event into the operator's persisted ZeroClaw session via `WS /ws/chat?session_id=<uuid>`. Wake delivery returns as soon as the gateway acknowledges the WS frame, decoupling NATS ack semantics from the agent's full turn duration. Resolves the bearer token at startup in this priority order: `ZEROCLAW_AGENT_TOKEN` env > sidecar pairing-code at `${KLODI_HOME}/zeroclaw.pairing-code` (consumed and POSTed to `/pair`) > cached token at `${KLODI_HOME}/zeroclaw.token` > **auto-mint via `zeroclaw gateway get-paircode --new` CLI** (0.2.8+, plan I-9 / [ADR-0010](../../decisions/0010-zeroclaw-browser-pairing-shim.md); auto-disables when the CLI isn't on PATH). The legacy `POST /webhook` path is still selectable with `--legacy-webhook` / `ZEROCLAW_LEGACY_WEBHOOK=1` for operators on a ZeroClaw build without `/ws/chat`.
 - **MCP server:** ZeroClaw spawns `klodi-zeroclaw-mcp` per agent session per its `[[mcp.servers]]` config. Each subprocess opens a separate persistent NATS-WS connection lazily on first `tools/call` and reuses it for the session's duration.
 - **`client.connect()`:** lazy in the MCP path (deferred until first call); eager at daemon start.
 - **`client.close()`:** at process exit on both planes.
@@ -34,11 +36,14 @@ host_shape: daemon
 
 ## 4. Wake primitive
 
-- **Native mechanism:** HTTP POST to `ZEROCLAW_WEBHOOK_URL` (default `http://127.0.0.1:7070/webhook`) with `Authorization: Bearer <zc_…>`. Body shape is `{"message": "<JSON-stringified envelope>"}` per ZeroClaw 0.7.4's `/webhook` contract; the agent recovers the structured wake by `JSON.parse`-ing `message`.
-- **Bearer source:** `ZEROCLAW_AGENT_TOKEN` env > sidecar pairing-code file at `${KLODI_HOME}/zeroclaw.pairing-code` (one-time, consumed by daemon on startup, POSTed to `/pair` with `X-Pairing-Code: <code>`, resulting `zc_<hex>` token cached at `${KLODI_HOME}/zeroclaw.token` mode 0600) > the cached token from a prior pair.
-- **Helper signature:** `run_forwarder(ForwarderConfig { …, body_shape: BodyShape::MessageWrapped })` in `klodi_rust_host::forwarder`; pair logic lives inline in `adapters/zeroclaw/src/bin/daemon.rs`.
-- **Failure semantics:** HTTP error → handler returns `Err` → consumer naks → JetStream redelivers. A 401 from `/webhook` (cached bearer no longer valid — typical after a deployment that wipes `gateway.paired_tokens`) currently NAKs and retries until `max_deliver`; recovery requires the operator's init script to drop a fresh pairing code at `${KLODI_HOME}/zeroclaw.pairing-code` and restart the daemon.
-- **Per-host wake-routing config:** `ZEROCLAW_WEBHOOK_URL` env var; optional `ZEROCLAW_PAIR_URL` override (defaults to swapping `/webhook` for `/pair` on the same gateway).
+- **Native mechanism (canonical, 0.2.6+):** WebSocket write into the operator's persisted ZeroClaw session at `WS /ws/chat?session_id=<uuid>` with `Authorization: Bearer <zc_…>` on the upgrade. Per-frame body is `{"type":"message","content":"<text>"}` — the only frame shape ZeroClaw's gateway accepts; the agent picks it up as a `user`-role message and triggers its turn. The session UUID is bootstrapped on first daemon start and persisted at `${KLODI_HOME}/zeroclaw.session` (mode 0600). Both NATS subscribers — `klodi-notifications-{user_id}` (marketplace events) and `klodi-channels-{user_id}` (channel messages) — write into the same operator session, serialised client-side by a per-session mutex so frames land in NATS-arrival order.
+- **Native mechanism (legacy, pre-0.2.6 / `--legacy-webhook`):** HTTP POST to `ZEROCLAW_WEBHOOK_URL` (default `http://127.0.0.1:7070/webhook`) with `Authorization: Bearer <zc_…>` and a `{"message": "<JSON-stringified envelope>"}` body. Subject to the gateway's hard 30s `TimeoutLayer`; the daemon mitigates with a 240s wake-post budget but the path is fundamentally synchronous-prompt-shaped and routinely 408s on real turns. Kept for operators on ZeroClaw builds that don't expose `/ws/chat`.
+- **`ZEROCLAW_WEBHOOK_URL` is a base-URL hint, not a data destination.** The env var is a holdover from the pre-0.2.6 wake-routing era. The daemon derives the canonical `/ws/chat` and `/pair` URLs from it (strip trailing `/webhook`, append the new path); override with `--zeroclaw-ws-url` / `--zeroclaw-http-base` / `--zeroclaw-pair-url` for non-canonical layouts. The literal `/webhook` route on the gateway only matters in legacy mode.
+- **Bearer source:** `ZEROCLAW_AGENT_TOKEN` env > sidecar pairing-code file at `${KLODI_HOME}/zeroclaw.pairing-code` (one-time, consumed by daemon on startup, POSTed to `/pair` with `X-Pairing-Code: <code>`, resulting `zc_<hex>` token cached at `${KLODI_HOME}/zeroclaw.token` mode 0600) > the cached token from a prior pair > 0.2.8+ auto-mint via the gateway CLI (shells `zeroclaw gateway get-paircode --new` itself when nothing else is set; eliminates the operator-writes-sidecar-code step on canonical first-boot deployments). The bearer is used both for the WS upgrade (`Authorization: Bearer`) and the legacy `/webhook` POST.
+- **Browser pairing helper (0.2.8+):** when the gateway CLI is reachable, the daemon also binds a loopback HTTP server on `127.0.0.1:<ephemeral>` that mints fresh dashboard codes on demand, copies them to clipboard via `navigator.clipboard.writeText`, and redirects to the dashboard URL. The shim's URL is surfaced in the I-8 heartbeat (chat) + a boxed stdout block + (when stdout is a tty) `open` / `xdg-open` / `start` auto-launch. Disable with `ZEROCLAW_BROWSER_PAIR_DISABLE=1`. See [ADR-0010](../../decisions/0010-zeroclaw-browser-pairing-shim.md).
+- **Helper signature:** `run_forwarder(ForwarderConfig { …, body_shape: BodyShape::ZeroClawSession { ws_config, session_id } })` in `klodi_rust_host::forwarder` is the canonical path; `BodyShape::MessageWrapped` is the legacy `/webhook` selector. Pair logic lives inline in `adapters/zeroclaw/src/bin/daemon.rs`.
+- **Failure semantics:** WS frame error → handler returns `Err` → consumer naks → JetStream redelivers. A 401 on the WS upgrade (cached bearer no longer valid — typical after a deployment that wipes `gateway.paired_tokens`) NAKs and retries until `max_deliver`; recovery requires the operator's init script to drop a fresh pairing code at `${KLODI_HOME}/zeroclaw.pairing-code` and restart the daemon, OR — on 0.2.8+ canonical deployments — simply remove the stale `${KLODI_HOME}/zeroclaw.token` and restart, at which point the auto-mint fallback re-pairs. Per plan I-3 there is no per-message ack handshake on `/ws/chat` today; for low-volume marketplaces the gateway's `agent_start` frame is a sufficient proxy for "the wake landed".
+- **Per-host wake-routing config:** `ZEROCLAW_WEBHOOK_URL` env var (base-URL hint, see above); optional `ZEROCLAW_WS_URL` / `ZEROCLAW_HTTP_BASE` / `ZEROCLAW_PAIR_URL` overrides for non-canonical layouts; `ZEROCLAW_LEGACY_WEBHOOK=1` falls back to the pre-0.2.6 path.
 
 ## 5. Setup particulars
 
@@ -88,17 +93,25 @@ ${klodi_home}/                       # mode 0700
 ## 9. Distribution and install
 
 - **Package manager:** cargo (`klodi-zeroclaw`).
-- **Install command:**
+- **Install command (0.2.8+ canonical deployment, daemon + gateway colocated):**
   ```bash
   cargo install klodi-zeroclaw
-  klodi-zeroclaw-register   # OAuth + writes nats.creds, config.json,
-                            # and the [[mcp.servers]] entry in ~/.zeroclaw/config.toml
+  klodi-zeroclaw-register     # OAuth + writes nats.creds, config.json,
+                              # and the [[mcp.servers]] entry in ~/.zeroclaw/config.toml
+  ZEROCLAW_WEBHOOK_URL=http://127.0.0.1:7070/webhook \
+      klodi-zeroclaw-daemon   # auto-pairs, opens browser-pairing helper, auto-launches browser
+  # ZeroClaw spawns klodi-zeroclaw-mcp on demand per agent session.
+  ```
+- **Install command (pre-0.2.8 or non-canonical: daemon and gateway on different hosts, or `zeroclaw` CLI not on PATH):**
+  ```bash
+  cargo install klodi-zeroclaw
+  klodi-zeroclaw-register
   # Drop ZeroClaw's startup pairing code so the daemon mints + caches the bearer:
   echo "$PAIRING_CODE" > "${KLODI_HOME:-$HOME/Library/Application Support/klodi}/zeroclaw.pairing-code"
+  ZEROCLAW_BROWSER_PAIR_DISABLE=1 \
   ZEROCLAW_WEBHOOK_URL=http://127.0.0.1:7070/webhook \
       klodi-zeroclaw-daemon
   # Or pre-pair manually and pass ZEROCLAW_AGENT_TOKEN=<zc_…> instead.
-  # ZeroClaw spawns klodi-zeroclaw-mcp on demand per agent session.
   ```
 - **Required runtime version:** ZeroClaw core ≥ 0.7.4 (introduces the `/webhook` + `/pair` routes; older builds shipped `/hooks/wake` which is no longer supported).
 - **Required env / pre-existing files:** `ZEROCLAW_WEBHOOK_URL` and a bearer source (either `ZEROCLAW_AGENT_TOKEN` or a sidecar pairing-code file at `${KLODI_HOME}/zeroclaw.pairing-code`); `KLODI_NATS_URL`. See `docs/ENVIRONMENT.md` for the full env contract.
