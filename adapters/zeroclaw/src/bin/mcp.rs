@@ -57,6 +57,16 @@ struct Cli {
     /// Override the derived REST base used for diagnostics.
     #[arg(long, env = "ZEROCLAW_HTTP_BASE")]
     zeroclaw_http_base: Option<String>,
+    /// Path to the `zeroclaw` CLI used by `UpstreamChannel` to invoke
+    /// `zeroclaw channel send` for configured upstream channels
+    /// (Telegram, Slack, etc.). Default `"zeroclaw"`, resolved on PATH.
+    /// Override when the gateway lives at a non-canonical path or when
+    /// the MCP server runs on a different host. If unreachable, upstream
+    /// channel sends fail with `klodi_zeroclaw_upstream_cli_missing`
+    /// warn logs; the registry continues serving dashboard + dedicated
+    /// session.
+    #[arg(long, env = "ZEROCLAW_CLI", default_value = "zeroclaw")]
+    zeroclaw_cli: PathBuf,
 }
 
 #[tokio::main]
@@ -110,7 +120,7 @@ async fn main() -> Result<()> {
                 ws_config: target.ws_config.clone(),
                 session_id: target.session_id.clone(),
             };
-            match build_channel_registry(&klodi_home, &binding).await {
+            match build_channel_registry(&klodi_home, &binding, &cli.zeroclaw_cli).await {
                 Ok((registry, _cfg)) => Some(registry),
                 Err(err) => {
                     tracing::warn!(

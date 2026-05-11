@@ -355,6 +355,7 @@ async fn main() -> Result<()> {
             ws_config: ws_config.clone(),
             session_id: resolved.session_id.clone(),
         },
+        &cli.zeroclaw_cli,
     )
     .await
     {

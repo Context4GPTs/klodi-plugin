@@ -49,6 +49,7 @@ pub struct SessionBinding {
 pub async fn build_channel_registry(
     klodi_home: &std::path::Path,
     binding: &SessionBinding,
+    zeroclaw_cli: &std::path::Path,
 ) -> Result<(ChannelRegistry, NotificationsConfig)> {
     let cfg = NotificationsConfig::load(klodi_home).with_context(|| {
         format!(
@@ -112,7 +113,10 @@ pub async fn build_channel_registry(
                 continue;
             }
         }
-        let invoker = Arc::new(ChannelInvoker::shell_default());
+        let invoker = Arc::new(ChannelInvoker::shell(
+            zeroclaw_cli.to_path_buf(),
+            super::invoker::DEFAULT_SHELL_TIMEOUT,
+        ));
         let upstream =
             UpstreamChannel::new(upstream_cfg.channel_id.clone(), invoker);
         let floor = upstream_cfg.resolve_severity_floor();
