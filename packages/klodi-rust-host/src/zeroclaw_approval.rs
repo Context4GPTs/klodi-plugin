@@ -430,7 +430,7 @@ mod tests {
     fn offer_respond_never_gated_by_plugin() {
         // Per user direction the plugin doesn't gate offer_respond at
         // all — the agent reads the operator's negotiation policy and
-        // sell-file floor and decides whether to call klodi_report_to_operator
+        // sell-file floor and decides whether to call klodi_escalate_to_user
         // before responding. Locking a "below-min" gate inside the
         // plugin would prevent operators who want different workflows
         // (e.g. "always ask", "never ask if buyer is verified").

@@ -123,7 +123,7 @@ Reply: /klodi yes:abc12345  to confirm   /klodi no:abc12345  to cancel
 
 **Approval gate.** The plugin enforces a hardcoded gate **only** on the irreversible operations (`klodi_tx_confirm`, `klodi_tx_cancel`, `klodi_list_withdraw`); for those, the plugin posts `🔒 Operator approval needed (request_id: …)` to every enabled channel and refuses to execute the tool until a reply comes through. **First matching reply wins** — released on the dashboard OR the dedicated klodi session; subsequent replies are idempotent no-ops via the persisted approval state. Pending approvals persist under `${KLODI_HOME}/approvals/<request_id>.json` (24h reap); captured dashboard replies persist under `${KLODI_HOME}/approvals/<request_id>.reply.json`.
 
-Every other tool (`klodi_offer_respond`, `klodi_list_update`, `klodi_channel_message`, etc.) is the agent's call. Whether it asks you first is governed by your `negotiation_style.md` and the on-disk strategy files under `${KLODI_HOME}/{buy,sell}/` — not by plugin-side enforcement. The agent uses `klodi_report_to_operator` to ask; the same vocabulary applies.
+Every other tool (`klodi_offer_respond`, `klodi_list_update`, `klodi_channel_message`, etc.) is the agent's call. Whether it asks you first is governed by your `negotiation_style.md` and the on-disk strategy files under `${KLODI_HOME}/{buy,sell}/` — not by plugin-side enforcement. The agent uses `klodi_escalate_to_user` to ask; the same vocabulary applies.
 
 **Severity defaults (per channel).** Override via `klodi.toml`:
 
@@ -190,7 +190,7 @@ Both NATS subscribers (`klodi-notifications-{user_id}` for marketplace events an
 
 ### Why direct WS instead of `sessions_send`?
 
-ZeroClaw exposes a built-in `sessions_send(session_id, content)` agent tool that could in principle back the `klodi_report_to_operator` MCP tool. We chose direct WS for three reasons: (a) the daemon's wake-forwarding path needs WS regardless, so adding a second transport for one MCP tool would duplicate the connection logic; (b) the approval-gate prompts originate from the MCP server before any tool dispatch, so they likewise need direct WS; (c) keeping all three on the same code path means one set of timeouts, one mutex, one set of error semantics. If a future ZeroClaw release exposes `sessions_send` as a stable MCP-internal call we can reconsider for `klodi_report_to_operator` only — the daemon and approval gate would stay on direct WS.
+ZeroClaw exposes a built-in `sessions_send(session_id, content)` agent tool that could in principle back the `klodi_escalate_to_user` MCP tool. We chose direct WS for three reasons: (a) the daemon's wake-forwarding path needs WS regardless, so adding a second transport for one MCP tool would duplicate the connection logic; (b) the approval-gate prompts originate from the MCP server before any tool dispatch, so they likewise need direct WS; (c) keeping all three on the same code path means one set of timeouts, one mutex, one set of error semantics. If a future ZeroClaw release exposes `sessions_send` as a stable MCP-internal call we can reconsider for `klodi_escalate_to_user` only — the daemon and approval gate would stay on direct WS.
 
 ## Step 4 (you, once): fill your negotiation policy
 

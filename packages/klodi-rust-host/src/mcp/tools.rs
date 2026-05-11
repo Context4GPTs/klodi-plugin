@@ -44,7 +44,7 @@ const LOCAL_TOOL_UNWATCH: &str = "klodi_unwatch";
 /// feature is on AND `McpConfig::klodi_session_target` is `Some`.
 /// Daemon-only adapters don't expose this tool.
 #[cfg(feature = "zeroclaw_session")]
-const LOCAL_TOOL_REPORT_TO_OPERATOR: &str = "klodi_report_to_operator";
+const LOCAL_TOOL_ESCALATE_TO_USER: &str = "klodi_escalate_to_user";
 
 /// Approval-gate retry parameter the agent passes back. Reserved field
 /// the plugin recognises on EVERY tool call — gated tools use it to
@@ -214,15 +214,36 @@ fn build_tool_list() -> Vec<Tool> {
     ));
     #[cfg(feature = "zeroclaw_session")]
     out.push(make_tool(
-        LOCAL_TOOL_REPORT_TO_OPERATOR,
-        "Post a structured note directly to the operator's ZeroClaw chat session. \
-         Use whenever the operator should know something the agent has done, learned, \
-         or is about to ask. Examples: 'I accepted offer #abc for €600, awaiting your \
-         confirmation', 'search.match found 3 listings — here are the top picks', \
-         'no path to settle this negotiation, dropping with seller's permission'. \
-         The note appears in the same chat the operator opened to talk to klodi; \
-         it does NOT trigger a fresh agent context. Severity is informational only — \
-         the gateway renders all severities the same way today.",
+        LOCAL_TOOL_ESCALATE_TO_USER,
+        "Yield to the user — post a klodi-prefixed message into the operator's \
+         most-recently-active dashboard session so the operator sees the ask \
+         wherever their cursor is. Routing is single-destination: each call \
+         lands in exactly ONE agent surface (no fan-out, no duplicate agent \
+         turns). With default or 'operator_important' / 'approval_request' \
+         severity the message reaches the operator's dashboard; if no dashboard \
+         session is active the registry falls through to the dedicated klodi \
+         session automatically (the chronicle of record). Upstream notification \
+         channels (Telegram/Slack/email) fan alongside the agent route since \
+         they don't trigger agent loops.\n\n\
+         \
+         The rendered message starts with `── klodi · req=<id> · \
+         klodi_escalate_to_user ──`. When the operator's dashboard agent sees \
+         that exact prefix-and-event-kind it MUST no-op the turn — klodi posted \
+         it, the operator is the one expected to reply (the agent fires again on \
+         the operator's next user-role message). The same prefix on a different \
+         event_kind slot (e.g. `· offer.accepted ──`, `· klodi_tx_confirm.approval \
+         ──`) is NOT a no-op — those are wakes / approval prompts the dashboard \
+         agent should surface to the operator inline.\n\n\
+         \
+         Call this whenever you can't proceed autonomously: a channel/comment \
+         message classifies as Unknown (SKILL.md §4), a policy decision is \
+         ambiguous, a wake's required input is missing from the sell/buy file. \
+         Never inline a blocking question in your assistant reply — the operator \
+         may be reading their dashboard tab, not the dedicated session.\n\n\
+         \
+         Returns { posted, destination_channel, session_id, severity, \
+         correlation_id }. `posted: false` means every accepting agent surface \
+         failed; retry or surface a visible error.",
         &json!({
             "type": "object",
             "properties": {
@@ -243,12 +264,9 @@ fn build_tool_list() -> Vec<Tool> {
                         "diagnostic",
                         "operator",
                         "operator_important",
-                        "approval_request",
-                        "info",
-                        "warn",
-                        "error"
+                        "approval_request"
                     ],
-                    "description": "Routing level. Use 'operator_important' for state changes the operator should see within minutes (offer accepted, transaction completed); 'operator' for routine activity; 'diagnostic' for daemon health / echo. Legacy aliases: 'info'→operator, 'warn'/'error'→operator_important. Default 'operator'."
+                    "description": "Routing level. 'approval_request' = blocking ask that gates agent progress (irreversible action, ambiguous policy, missing input) — routes to dashboard, bypasses batching. 'operator_important' (default) = the operator should see this within minutes; routes to dashboard, falls through to dedicated when no dashboard session is active. 'operator' = informational chronicle note — routes to the dedicated klodi session ONLY; the operator does NOT see it on the dashboard (use this only for logging from the dedicated agent, not for actual escalation). 'diagnostic' = daemon health / echo; dedicated session only."
                 },
                 "structured": {
                     "type": "object",
@@ -306,8 +324,8 @@ pub(super) async fn dispatch(
     // Local-only zeroclaw_session tool — handle before the gate, since
     // it doesn't need approval and isn't in the catalog.
     #[cfg(feature = "zeroclaw_session")]
-    if name == LOCAL_TOOL_REPORT_TO_OPERATOR {
-        return dispatch_report_to_operator(handler, args).await;
+    if name == LOCAL_TOOL_ESCALATE_TO_USER {
+        return dispatch_escalate_to_user(handler, args).await;
     }
 
     // Approval-gate evaluation — strips the reserved fields out of
@@ -409,10 +427,14 @@ async fn approval_gate(
                     format!("persisting approval state: {err}"),
                     None,
                 ))?;
-            // Fan the prompt out across every enabled channel
-            // when a registry is configured; fall back to the
-            // dedicated session direct write when not (preserves the
-            // v0.2.x single-surface behaviour).
+            // Single-destination prompt delivery. The prompt is a
+            // user-role message at the destination — that's
+            // intentional: the operator's session-agent reads it and
+            // surfaces inline to the operator. The registry handles
+            // fallback to the dedicated session if the dashboard's T3
+            // returned nothing; upstream channels (Telegram/Slack/…) fan
+            // alongside the picked agent route. Daemon-only adapters
+            // that bind no registry use the direct WS path below.
             let posted = match handler.channel_registry() {
                 Some(registry) => {
                     let notification = crate::channels::Notification {
@@ -427,8 +449,10 @@ async fn approval_gate(
                             rid = pending.request_id,
                         )),
                     };
-                    let ids = registry.notify(notification).await;
-                    !ids.is_empty()
+                    // Registry's fall-through chain has already tried
+                    // every accepting agent surface; `posted=false`
+                    // means all of them failed.
+                    registry.notify(notification).await.posted
                 }
                 None => {
                     let prompt = crate::zeroclaw_approval::format_prompt(
@@ -447,15 +471,14 @@ async fn approval_gate(
                 }
             };
             if !posted {
-                // Every channel in the registry failed to post (or the
-                // direct write failed). Drop the pending entry so the
-                // agent can retry the gate from scratch.
+                // Every accepting agent surface failed. Drop the
+                // pending entry so the agent can retry from scratch.
                 let _ = crate::zeroclaw_approval::clear(
                     handler.klodi_home(),
                     &pending.request_id,
                 );
                 return Err(McpError::internal_error(
-                    "posting approval prompt: every configured channel rejected the write"
+                    "posting approval prompt: every configured agent surface failed"
                         .to_string(),
                     None,
                 ));
@@ -626,20 +649,22 @@ fn render_summary(tool: &str, args: &Value) -> String {
 }
 
 /// Map the `severity` string the agent supplies on
-/// `klodi_report_to_operator` to a [`crate::channels::Severity`].
+/// `klodi_escalate_to_user` to a [`crate::channels::Severity`].
 ///
-/// Accepts both the canonical registry names (`diagnostic` /
-/// `operator` / `operator_important` / `approval_request`) and the
-/// legacy `info`/`warn`/`error` aliases the v0.2.x schema advertised.
-/// Unknown strings fall back to [`Severity::Operator`] — same
-/// conservative behaviour as the v0.2.x code path.
+/// Accepts the canonical registry names (`diagnostic` / `operator` /
+/// `operator_important` / `approval_request`) plus the legacy
+/// `info`/`warn`/`error` aliases — older agents still in flight may
+/// pass them. Unknown strings fall back to
+/// [`Severity::OperatorImportant`] (matching the tool's stated intent
+/// of "the operator should see this"); a tool named "escalate to user"
+/// should not silently route back to the dedicated session.
 ///
 /// **Why the canonical-first match.** A prior version recognised only
 /// `warn`/`error`; every other value (including the canonical
 /// `operator_important`) silently coerced to `Severity::Operator`,
-/// which the registry's dispatch table drops on the dashboard and
-/// upstream channels. Agents following the canonical vocabulary then
-/// looked like they bypassed the operator entirely — see
+/// which the new dispatch table routes to the dedicated session — i.e.
+/// straight back to the agent that just called the tool, not to the
+/// user. See
 /// `docs/reports/2026-05-11-klodi-zeroclaw-0.2.9-operator-fanout-bugs.md`.
 #[cfg(feature = "zeroclaw_session")]
 fn parse_report_severity(severity: &str) -> crate::channels::Severity {
@@ -649,17 +674,17 @@ fn parse_report_severity(severity: &str) -> crate::channels::Severity {
             "info" => Some(crate::channels::Severity::Operator),
             _ => None,
         })
-        .unwrap_or(crate::channels::Severity::Operator)
+        .unwrap_or(crate::channels::Severity::OperatorImportant)
 }
 
 #[cfg(feature = "zeroclaw_session")]
-async fn dispatch_report_to_operator(
+async fn dispatch_escalate_to_user(
     handler: &KlodiMcpHandler,
     args: JsonObject,
 ) -> Result<CallToolResult, McpError> {
     let target = handler.klodi_session_target().ok_or_else(|| {
         McpError::invalid_request(
-            "klodi_report_to_operator: this MCP server has no ZeroClaw operator session bound. \
+            "klodi_escalate_to_user: this MCP server has no ZeroClaw operator session bound. \
              Run klodi-zeroclaw-daemon first so ${KLODI_HOME}/zeroclaw.session is populated."
                 .to_string(),
             None,
@@ -670,65 +695,78 @@ async fn dispatch_report_to_operator(
         .and_then(Value::as_str)
         .ok_or_else(|| {
             McpError::invalid_params(
-                "klodi_report_to_operator: 'summary' (string) is required".to_string(),
+                "klodi_escalate_to_user: 'summary' (string) is required".to_string(),
                 None,
             )
         })?;
     let details = args.get("details").and_then(Value::as_str);
-    let severity = args
+    // Default: `operator_important`. The tool's purpose is to reach the
+    // user; defaulting to `operator` would route back to the dedicated
+    // session (same place the calling agent lives) and the user would
+    // never see the message.
+    let severity_str = args
         .get("severity")
         .and_then(Value::as_str)
-        .unwrap_or("info");
+        .unwrap_or("operator_important");
     let structured = args.get("structured");
 
-    // When the channel registry is configured, fan the report
-    // across every enabled surface. Otherwise preserve the v0.2.x
-    // direct-write behaviour against the dedicated klodi session.
-    let chosen_severity = parse_report_severity(severity);
+    let chosen_severity = parse_report_severity(severity_str);
+
+    // Single-destination dispatch through the channel registry. The
+    // registry picks the highest-floor agent surface accepting this
+    // severity (dashboard for OperatorImportant+, dedicated for
+    // Operator-) and falls through to lower-floor surfaces on Err — so
+    // the dashboard's T3-returned-nothing path naturally lands on
+    // dedicated without the MCP code re-implementing it. Upstream
+    // channels (Telegram/Slack/…) fan alongside the agent route.
+    //
+    // When no registry is configured (daemon-only adapters, tests),
+    // the direct WS path is the only available surface.
+    let notification = crate::channels::Notification {
+        event_kind: "klodi_escalate_to_user".into(),
+        summary: summary.to_string(),
+        details: details.map(str::to_string),
+        severity: chosen_severity,
+        structured: structured.cloned(),
+        correlation_id: None,
+        reply_hint: None,
+    };
 
     if let Some(registry) = handler.channel_registry() {
-        let notification = crate::channels::Notification {
-            event_kind: "klodi_report_to_operator".into(),
-            summary: summary.to_string(),
-            details: details.map(str::to_string),
-            severity: chosen_severity,
-            structured: structured.cloned(),
-            correlation_id: None,
-            reply_hint: None,
-        };
-        let ids = registry.notify(notification).await;
-        return Ok(structured_with_text(json!({
-            "posted": !ids.is_empty(),
-            "session_id": target.session_id,
-            "severity": severity,
-            "channels": registry.channel_names(),
-            "notification_ids": ids.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
-        })));
+        let outcome = registry.notify(notification).await;
+        if outcome.posted {
+            return Ok(structured_with_text(json!({
+                "posted": true,
+                "destination_channel": outcome.destination_channel,
+                "session_id": target.session_id,
+                "severity": chosen_severity.as_str(),
+                "correlation_id": outcome.correlation_id.as_ref().map(|n| n.as_str()),
+            })));
+        }
+        // Every accepting agent surface failed (including the dedicated
+        // backstop). Surface as a visible error — the agent can retry
+        // or fall back to its own logic.
+        return Err(McpError::internal_error(
+            format!(
+                "klodi_escalate_to_user: every configured agent surface failed \
+                 (last attempt: {:?})",
+                outcome.destination_channel,
+            ),
+            None,
+        ));
     }
 
-    let icon = match severity {
-        "warn" => "⚠️",
-        "error" => "🛑",
-        _ => "ℹ️",
-    };
-    let mut content = format!("{icon} **{summary}**");
-    if let Some(d) = details {
-        content.push_str("\n\n");
-        content.push_str(d);
-    }
-    if let Some(payload) = structured {
-        let pretty = serde_json::to_string_pretty(payload)
-            .unwrap_or_else(|_| payload.to_string());
-        content.push_str("\n\n```json\n");
-        content.push_str(&pretty);
-        content.push_str("\n```");
-    }
-
-    crate::zeroclaw_ws::send_session_message(
-        &target.ws_config,
-        &target.session_id,
-        &content,
-        crate::zeroclaw_ws::SendAckPolicy::OnAgentObservation,
+    // No registry — direct write to the dedicated session via the
+    // dedicated channel impl so the render stays consistent with the
+    // registry path (no separate `🔔 …` format drift).
+    let dedicated = crate::channels::DedicatedSessionChannel::new(
+        target.ws_config.clone(),
+        target.session_id.clone(),
+    );
+    let id = crate::channels::OperatorChannel::notify(
+        &dedicated,
+        &crate::channels::Recipient::Address(target.session_id.clone()),
+        &notification,
     )
     .await
     .map_err(|err| {
@@ -740,9 +778,10 @@ async fn dispatch_report_to_operator(
 
     Ok(structured_with_text(json!({
         "posted": true,
+        "destination_channel": "dedicated_session",
         "session_id": target.session_id,
-        "severity": severity,
-        "characters": content.chars().count(),
+        "severity": chosen_severity.as_str(),
+        "correlation_id": id.as_str(),
     })))
 }
 
@@ -1083,16 +1122,16 @@ mod tests {
 
     #[cfg(feature = "zeroclaw_session")]
     #[test]
-    fn report_to_operator_tool_listed_when_zeroclaw_session_feature_enabled() {
+    fn escalate_to_user_tool_listed_when_zeroclaw_session_feature_enabled() {
         let tools = build_tool_list();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         assert!(
-            names.contains(&"klodi_report_to_operator"),
-            "klodi_report_to_operator must appear when zeroclaw_session is on; got {names:?}",
+            names.contains(&"klodi_escalate_to_user"),
+            "klodi_escalate_to_user must appear when zeroclaw_session is on; got {names:?}",
         );
         let report_tool = tools
             .iter()
-            .find(|t| t.name.as_ref() == "klodi_report_to_operator")
+            .find(|t| t.name.as_ref() == "klodi_escalate_to_user")
             .expect("found above");
         // Schema shape — `summary` required, `severity` enum, `structured`
         // optional object.
@@ -1106,12 +1145,15 @@ mod tests {
     }
 
     /// Regression: canonical severity names must coerce to the matching
-    /// [`Severity`] variant so the registry's dispatch table receives
-    /// the level the agent asked for. The prior parser hard-coded only
-    /// `warn`/`error` and silently dropped every canonical name onto
-    /// `Severity::Operator`, which the dashboard and upstream channels
-    /// drop in turn — see
-    /// `docs/reports/2026-05-11-klodi-zeroclaw-0.2.9-operator-fanout-bugs.md`.
+    /// [`Severity`] variant so the registry's dispatch chain receives
+    /// the level the agent asked for. The parser also still accepts the
+    /// legacy `info`/`warn`/`error` aliases — 0.2.11 dropped them from
+    /// the published schema enum but agents in flight may still pass
+    /// them, so we keep silent acceptance on the parser side. Unknown
+    /// strings fall back to `OperatorImportant`: the tool is named for
+    /// reaching the user, and a typo shouldn't silently route back to
+    /// the dedicated session (the bug fixed in 0.2.11; see
+    /// `docs/plans/2026-05-11-klodi-zeroclaw-single-destination-routing.md`).
     #[cfg(feature = "zeroclaw_session")]
     #[test]
     fn parse_report_severity_recognises_canonical_and_legacy() {
@@ -1127,29 +1169,31 @@ mod tests {
             parse_report_severity("approval_request"),
             Severity::ApprovalRequest,
         );
-        // Legacy aliases keep the v0.2.x meaning.
+        // Legacy aliases keep their v0.2.x meaning on the parser side
+        // (schema enum no longer advertises them, but in-flight agents
+        // may still pass them).
         assert_eq!(parse_report_severity("info"), Severity::Operator);
         assert_eq!(parse_report_severity("warn"), Severity::OperatorImportant);
         assert_eq!(parse_report_severity("error"), Severity::OperatorImportant);
-        // Unknown strings — conservative fallback so a malformed
-        // agent call still posts to the dedicated session.
-        assert_eq!(parse_report_severity(""), Severity::Operator);
-        assert_eq!(parse_report_severity("urgent"), Severity::Operator);
+        // Unknown / malformed → OperatorImportant. Default lives up to
+        // the tool's name: the operator should see this.
+        assert_eq!(parse_report_severity(""), Severity::OperatorImportant);
+        assert_eq!(parse_report_severity("urgent"), Severity::OperatorImportant);
     }
 
-    /// Regression: the severity enum must advertise the canonical names
-    /// the registry recognises, so an agent that wants to reach the
-    /// dashboard can pass `operator_important` directly instead of
-    /// being limited to the legacy `warn`/`error` aliases (which the
-    /// schema's prior `["info","warn","error"]` enum forced).
+    /// Pin the published severity enum to the canonical names only. The
+    /// 0.2.11 cut tightens the schema as part of the same migration
+    /// that renamed `klodi_report_to_operator` → `klodi_escalate_to_user`
+    /// (one breaking change for both the tool name and the severity
+    /// vocabulary, not two staged releases).
     #[cfg(feature = "zeroclaw_session")]
     #[test]
-    fn report_to_operator_severity_enum_includes_canonical_names() {
+    fn escalate_to_user_severity_enum_is_canonical_only() {
         let tools = build_tool_list();
         let report_tool = tools
             .iter()
-            .find(|t| t.name.as_ref() == "klodi_report_to_operator")
-            .expect("klodi_report_to_operator listed");
+            .find(|t| t.name.as_ref() == "klodi_escalate_to_user")
+            .expect("klodi_escalate_to_user listed");
         let props = report_tool
             .input_schema
             .get("properties")
@@ -1175,11 +1219,10 @@ mod tests {
                 "severity enum must advertise canonical name `{canonical}`; got {allowed:?}",
             );
         }
-        // Legacy aliases must remain valid so existing callers don't break.
         for legacy in ["info", "warn", "error"] {
             assert!(
-                allowed.contains(&legacy),
-                "severity enum must keep legacy alias `{legacy}` for back-compat; got {allowed:?}",
+                !allowed.contains(&legacy),
+                "0.2.11 dropped legacy alias `{legacy}` from the schema; got {allowed:?}",
             );
         }
     }

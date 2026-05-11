@@ -6,17 +6,18 @@
 //!
 //! When `${KLODI_HOME}/zeroclaw.{token,session}` are present (added in
 //! 0.2.6), the binary plugs a `KlodiSessionTarget` into `McpConfig`
-//! so `klodi_report_to_operator` and the irreversible-tool approval
-//! gate can write into the persisted dedicated klodi session via
-//! WebSocket. 0.2.9 additionally builds a `ChannelRegistry` from
-//! `${KLODI_HOME}/klodi.toml`'s `[notifications]` block so the
-//! approval gate fans the prompt out across every configured surface
-//! (dashboard, dedicated session, upstream channels). When either
-//! on-disk file is missing the binary still starts cleanly — those
-//! features simply degrade (`klodi_report_to_operator` returns an
-//! actionable error if called; gated tools fall through without the
-//! gate; the registry stays `None` and the tools see a single-target
-//! path).
+//! so `klodi_escalate_to_user` and the irreversible-tool approval
+//! gate can fall back to a direct WS write into the persisted
+//! dedicated klodi session. 0.2.9 additionally builds a
+//! `ChannelRegistry` from `${KLODI_HOME}/klodi.toml`'s
+//! `[notifications]` block; the registry routes single-destination to
+//! one agent surface and falls through to lower-floor surfaces on Err
+//! (dashboard first, dedicated session as the natural backstop;
+//! upstream sinks fan alongside). When either on-disk file is missing
+//! the binary still starts cleanly — those features simply degrade
+//! (`klodi_escalate_to_user` returns an actionable error if called;
+//! gated tools fall through without the gate; the registry stays
+//! `None` and the tools use the dedicated-session direct WS path).
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -42,7 +43,7 @@ struct Cli {
     #[arg(long, env = "KLODI_HOME")]
     klodi_home: Option<PathBuf>,
     /// Local ZeroClaw `/webhook` URL — used to derive the WS endpoint
-    /// for `klodi_report_to_operator` and the approval gate. Matches the
+    /// for `klodi_escalate_to_user` and the approval gate. Matches the
     /// daemon's default so an MCP server spawned beside the daemon
     /// targets the same gateway out of the box.
     #[arg(

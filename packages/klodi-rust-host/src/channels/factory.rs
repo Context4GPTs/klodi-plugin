@@ -66,6 +66,9 @@ pub async fn build_channel_registry(
             binding.session_id.clone(),
         );
         let floor = cfg.dedicated_session_severity_floor();
+        // `agent_surface` is a property of the impl
+        // (`DedicatedSessionChannel::agent_surface() -> true`), not a
+        // per-registration switch.
         registered.push(RegisteredChannel {
             impl_: Arc::new(dedicated),
             recipient: Recipient::Address(binding.session_id.clone()),
@@ -120,6 +123,10 @@ pub async fn build_channel_registry(
         let upstream =
             UpstreamChannel::new(upstream_cfg.channel_id.clone(), invoker);
         let floor = upstream_cfg.resolve_severity_floor();
+        // `UpstreamChannel::agent_surface() -> false` (default): no
+        // server-side agent loop fires when delivering to Telegram /
+        // Slack / email, so it fans freely alongside the picked agent
+        // destination.
         registered.push(RegisteredChannel {
             impl_: Arc::new(upstream),
             recipient: Recipient::Address(upstream_cfg.recipient.clone()),
@@ -169,6 +176,9 @@ async fn build_dashboard_channel(
         other => Recipient::SessionId(other.to_string()),
     };
     let floor = cfg.dashboard_severity_floor();
+    // `DashboardChannel::agent_surface() -> true` — single-destination
+    // among other agent surfaces with fall-through to the dedicated
+    // session on Err. Encoded on the impl, not per-registration.
     Ok(RegisteredChannel {
         impl_: Arc::new(channel),
         recipient,

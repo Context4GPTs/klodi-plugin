@@ -48,11 +48,13 @@ mcp = ["dep:rmcp", "dep:toml_edit"]
 # client against `/ws/chat`), `zeroclaw_session` (operator-session-id
 # bootstrap + persistence under `${KLODI_HOME}/zeroclaw.session`),
 # `zeroclaw_bootstrap_note` (plugin-authored intro/heartbeat note), and
-# `zeroclaw_approval` (irreversible-tool gate). Adds `BodyShape::ZeroClawSession`
-# to the forwarder so wakes write into the operator's session via WS
-# instead of POSTing to `/webhook` (resolves the 30s `TimeoutLayer` 408).
-# Only the ZeroClaw adapter enables this — Moltis/IronClaw stay on
-# `BodyShape::Structured` against their async wake hooks.
+# `zeroclaw_approval` (irreversible-tool gate). Adds
+# `BodyShape::ZeroClawRegistry` to the forwarder so wakes route through
+# a `ChannelRegistry` to a single agent surface (dashboard or dedicated
+# klodi session) instead of POSTing to `/webhook` (resolves the 30s
+# `TimeoutLayer` 408). Only the ZeroClaw adapter enables this —
+# Moltis/IronClaw stay on `BodyShape::Structured` against their async
+# wake hooks.
 zeroclaw_session = ["dep:tokio-tungstenite", "dep:http", "dep:async-trait", "dep:toml"]
 
 [dependencies]

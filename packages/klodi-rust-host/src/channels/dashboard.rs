@@ -10,8 +10,9 @@
 //! - `notify()` — resolves a destination (T3 active-session heuristic
 //!   for `Recipient::AutoActiveSession`) and writes a
 //!   correlation-tagged payload via `zeroclaw_ws::send_session_message`.
-//! - A simple deque queue that holds notifications when no active
-//!   session is resolvable; the inbound-bridge poll drains it.
+//!   Single-destination per call: when T3 finds no operator-typed
+//!   session, returns `Err`. Callers (the forwarder + MCP)
+//!   fall back to a direct write into the dedicated session.
 //! - The created-sessions ledger (`channels::ledger`) excludes
 //!   klodi-owned sessions from the operator-primary candidate list.
 //! - `replies()` — a polling bridge against `GET /api/sessions/<id>/messages`
@@ -21,7 +22,7 @@
 //!   `GET /api/sessions` check, resurrection breadcrumb, ledger
 //!   update, T3 re-resolve.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
@@ -44,24 +45,12 @@ use super::session_health::{
     SessionHealth, check_session_alive, resurrection_breadcrumb,
 };
 use super::{
-    Notification, NotificationId, OperatorChannel, OperatorReply, Recipient, Severity,
+    Notification, NotificationId, OperatorChannel, OperatorReply, Recipient,
 };
 
-/// Maximum age of a queued notification before the dashboard channel
-/// drops it. Notifications older than this are stale enough that the
-/// operator probably won't find them useful — better to drop with a
-/// log line than to surface yesterday's offer.
-pub const QUEUE_TTL: Duration = Duration::from_secs(60 * 30);
-
-/// Maximum queue depth. Exceeding this drops oldest-with-warn rather
-/// than oldest-silently — the warn gives operators a signal to
-/// investigate "where did my notifications go" when the gateway has
-/// been unreachable for a long stretch.
-pub const QUEUE_MAX: usize = 100;
-
-/// Default poll cadence for the inbound reply bridge (Phase 2 will
-/// consume it). Surfaced here so the registry construction in
-/// `klodi-zeroclaw-daemon` can keep a single source of truth.
+/// Default poll cadence for the inbound reply bridge. Surfaced here
+/// so the registry construction in `klodi-zeroclaw-daemon` can keep a
+/// single source of truth.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(1500);
 
 /// Default REST timeout for `GET /api/sessions` calls. Bounded short:
@@ -97,29 +86,6 @@ pub const BARE_AFFIRMATION_TOKENS: &[&str] = &[
 ];
 pub const BARE_DENIAL_TOKENS: &[&str] =
     &["no", "n", "deny", "cancel", "stop", "refuse", "abort", "nope"];
-
-/// Queued notification awaiting destination resolution. The poll task
-/// (Phase 2) drains this on its next tick if T3 resolution still
-/// failed at `notify()` time.
-#[derive(Debug, Clone)]
-#[allow(dead_code)] // fields read by the Phase 2 drain task
-pub(crate) struct QueuedNotification {
-    /// Pre-rendered payload — already formatted per
-    /// [`render_payload`] so the queue drain doesn't have to rebuild
-    /// it. Saves one render per notification across the queue.
-    pub(crate) rendered: String,
-    /// The correlation token returned to the caller. Already shaped
-    /// by [`notify`]'s render step.
-    pub(crate) correlation_id: String,
-    /// Submission timestamp — used to drop entries older than
-    /// [`QUEUE_TTL`].
-    pub(crate) submitted_at: std::time::Instant,
-    /// Severity preserved so a future drain can honour the same
-    /// per-channel gating the live notify path uses.
-    pub(crate) severity: Severity,
-    /// Pinned destination, if any. `None` = T3 resolution at drain time.
-    pub(crate) pinned_session: Option<String>,
-}
 
 /// Single-session entry as returned by `GET /api/sessions`. Only the
 /// fields we consult are typed; everything else parses into the
@@ -173,9 +139,6 @@ struct Inner {
     /// dashboard sessions Phase 3 detects). Used by the T3 heuristic to
     /// avoid posting into our own session.
     ledger: Arc<CreatedSessionsLedger>,
-    /// Pending queue when T3 returns no candidates. Bounded by
-    /// [`QUEUE_MAX`]; drops oldest-with-warn on overflow.
-    queue: Mutex<VecDeque<QueuedNotification>>,
     /// Per-session cursor — last processed message index. Survives
     /// daemon restarts (`${KLODI_HOME}/zeroclaw.dispatcher_cursor.json`).
     cursor: Arc<DispatcherCursor>,
@@ -253,13 +216,20 @@ impl DashboardChannel {
             DispatcherCursor::open(cursor_path.clone())
                 .context("opening dispatcher cursor")?,
         );
+        tracing::info!(
+            channel_name = %name,
+            http_base = %ws_config.http_base,
+            ws_url = %ws_config.ws_url,
+            poll_interval_ms = poll_interval.as_millis() as u64,
+            cursor_path = %cursor_path.display(),
+            "klodi_zeroclaw_dashboard_channel_registered"
+        );
         Ok(Self {
             inner: Arc::new(Inner {
                 name,
                 ws_config,
                 http,
                 ledger,
-                queue: Mutex::new(VecDeque::with_capacity(QUEUE_MAX)),
                 cursor,
                 adjacency: Mutex::new(HashMap::new()),
                 last_user_seen: Mutex::new(HashMap::new()),
@@ -305,27 +275,51 @@ impl DashboardChannel {
 
     /// T3 heuristic — pick the most-recent `/api/sessions` entry whose
     /// latest message has `role=user`, skipping any session in the
-    /// created-sessions ledger.
+    /// created-sessions ledger. Used by [`Self::resolve_destination`]
+    /// for every `AutoActiveSession` recipient.
+    ///
+    /// Emits `klodi_zeroclaw_target_session_resolved` at info on each
+    /// successful pick and `klodi_zeroclaw_target_session_unresolved`
+    /// at info when no non-ledger session has operator activity (the
+    /// caller then falls back to the dedicated klodi session).
+    /// Grep-friendly for operators diagnosing "where did my
+    /// notification go?" reports.
     async fn resolve_auto(&self) -> Result<Option<String>> {
         let sessions = self.list_sessions().await?;
+        let total_listed = sessions.len();
+        let mut skipped_ledger = 0usize;
+        let mut skipped_empty = 0usize;
+        let mut skipped_no_user_message = 0usize;
         for session in sessions.iter() {
             if self.inner.ledger.contains(&session.id).await {
+                skipped_ledger += 1;
                 continue;
             }
             if session.message_count.unwrap_or(0) == 0 {
                 // Empty session — wouldn't have a user-typed message to
                 // satisfy the heuristic. Skip.
+                skipped_empty += 1;
                 continue;
             }
             match self.last_user_message(&session.id).await {
                 Ok(Some(_)) => {
-                    tracing::debug!(
-                        session_id = %session.id,
-                        "klodi_zeroclaw_dashboard_active_session_resolved"
+                    tracing::info!(
+                        target_id = %session.id,
+                        reason = "active",
+                        source = "dashboard",
+                        sessions_total = total_listed,
+                        sessions_skipped_ledger = skipped_ledger,
+                        sessions_skipped_empty = skipped_empty,
+                        last_activity = ?session.last_activity,
+                        message_count = ?session.message_count,
+                        "klodi_zeroclaw_target_session_resolved"
                     );
                     return Ok(Some(session.id.clone()));
                 }
-                Ok(None) => continue,
+                Ok(None) => {
+                    skipped_no_user_message += 1;
+                    continue;
+                }
                 Err(err) => {
                     tracing::warn!(
                         session_id = %session.id,
@@ -336,6 +330,14 @@ impl DashboardChannel {
                 }
             }
         }
+        tracing::info!(
+            source = "dashboard",
+            sessions_total = total_listed,
+            sessions_skipped_ledger = skipped_ledger,
+            sessions_skipped_empty = skipped_empty,
+            sessions_skipped_no_user_message = skipped_no_user_message,
+            "klodi_zeroclaw_target_session_unresolved"
+        );
         Ok(None)
     }
 
@@ -465,42 +467,6 @@ impl DashboardChannel {
             }
         }
         Ok(out)
-    }
-
-    async fn enqueue(&self, item: QueuedNotification) {
-        let mut q = self.inner.queue.lock().await;
-        if q.len() >= QUEUE_MAX {
-            let dropped = q.pop_front();
-            tracing::warn!(
-                queue_max = QUEUE_MAX,
-                dropped_correlation_id =
-                    dropped.as_ref().map(|d| d.correlation_id.as_str()),
-                "klodi_zeroclaw_dashboard_queue_overflow_drop_oldest"
-            );
-        }
-        q.push_back(item);
-    }
-
-    /// Pop entries past the queue TTL — called by the Phase 2 drain on
-    /// each poll tick. Exposed here so the dashboard channel keeps
-    /// ownership of queue invariants.
-    #[allow(dead_code)] // Phase 2 drain consumer
-    pub(crate) async fn reap_stale_queue(&self) -> usize {
-        let now = std::time::Instant::now();
-        let mut q = self.inner.queue.lock().await;
-        let before = q.len();
-        q.retain(|n| {
-            now.duration_since(n.submitted_at) <= QUEUE_TTL
-        });
-        before - q.len()
-    }
-
-    /// Snapshot of pending queue entries — used by the Phase 2 drain
-    /// loop. Doesn't pop; the drain decides per-entry whether T3 can
-    /// resolve now.
-    #[allow(dead_code)]
-    pub(crate) async fn queue_len(&self) -> usize {
-        self.inner.queue.lock().await.len()
     }
 
     /// Record a `(correlation_id, session_id, now)` adjacency entry —
@@ -964,6 +930,12 @@ impl OperatorChannel for DashboardChannel {
         &self.inner.name
     }
 
+    fn agent_surface(&self) -> bool {
+        // Writes go to `/ws/chat`; every write fires a server-side
+        // agent loop in the target dashboard session.
+        true
+    }
+
     async fn notify(
         &self,
         recipient: &Recipient,
@@ -976,12 +948,13 @@ impl OperatorChannel for DashboardChannel {
 
         let rendered = render_payload(payload, &correlation_id);
 
-        // T3 resolution. None = no live operator session — enqueue and
-        // return success. The drain task posts on the next tick.
-        let pinned_session = match recipient {
-            Recipient::SessionId(id) => Some(id.clone()),
-            _ => None,
-        };
+        // Single-destination: T3 picks one operator-typed session, or
+        // the pinned recipient is honoured directly. On no-destination
+        // we return Err — the caller (the registry's `route()`
+        // wrapper, the forwarder, MCP `klodi_escalate_to_user`)
+        // decides on the fallback path (typically: write to the
+        // dedicated klodi session). No queuing in the dashboard
+        // channel — the routing decision lives with the caller.
         let destination = self.resolve_destination(recipient).await?;
         let session_id = match destination {
             Some(id) => id,
@@ -989,17 +962,15 @@ impl OperatorChannel for DashboardChannel {
                 tracing::info!(
                     correlation_id = %correlation_id,
                     event_kind = %payload.event_kind,
-                    "klodi_zeroclaw_dashboard_queued_no_active_session"
+                    "klodi_zeroclaw_dashboard_no_active_session"
                 );
-                self.enqueue(QueuedNotification {
-                    rendered,
-                    correlation_id: correlation_id.clone(),
-                    submitted_at: std::time::Instant::now(),
-                    severity: payload.severity,
-                    pinned_session: pinned_session.clone(),
-                })
-                .await;
-                return Ok(NotificationId(correlation_id));
+                bail!(
+                    "DashboardChannel: T3 resolved no operator-typed session \
+                     (correlation_id={correlation_id}, event_kind={kind}); \
+                     caller is expected to fall back to the dedicated klodi \
+                     session.",
+                    kind = payload.event_kind,
+                );
             }
         };
 
@@ -1023,17 +994,11 @@ impl OperatorChannel for DashboardChannel {
         let session_id = match final_session {
             Some(id) => id,
             None => {
-                // Resurrection detected and re-resolution failed.
-                // Queue and let the poll task drain on the next tick.
-                self.enqueue(QueuedNotification {
-                    rendered,
-                    correlation_id: correlation_id.clone(),
-                    submitted_at: std::time::Instant::now(),
-                    severity: payload.severity,
-                    pinned_session: pinned_session.clone(),
-                })
-                .await;
-                return Ok(NotificationId(correlation_id));
+                bail!(
+                    "DashboardChannel: resurrection detected and re-resolve \
+                     found no replacement session (correlation_id={correlation_id}); \
+                     caller is expected to fall back to the dedicated klodi session."
+                );
             }
         };
 
@@ -1153,6 +1118,7 @@ fn short_type(v: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channels::Severity;
     use std::path::Path;
 
     fn ws_config() -> ZeroClawWsConfig {
@@ -1296,61 +1262,6 @@ mod tests {
         let t = short_token();
         assert_eq!(t.len(), 8);
         assert!(t.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
-    }
-
-    #[tokio::test]
-    async fn enqueue_drops_oldest_on_overflow() {
-        let dir = tempfile::tempdir().unwrap();
-        let ch = DashboardChannel::new(
-            ws_config(),
-            ledger(),
-            cursor_path(dir.path()),
-        )
-        .unwrap();
-        for i in 0..QUEUE_MAX + 5 {
-            ch.enqueue(QueuedNotification {
-                rendered: format!("msg-{i}"),
-                correlation_id: format!("tok-{i}"),
-                submitted_at: std::time::Instant::now(),
-                severity: Severity::Operator,
-                pinned_session: None,
-            })
-            .await;
-        }
-        assert_eq!(ch.queue_len().await, QUEUE_MAX);
-    }
-
-    #[tokio::test]
-    async fn reap_stale_queue_drops_entries_past_ttl() {
-        let dir = tempfile::tempdir().unwrap();
-        let ch = DashboardChannel::new(
-            ws_config(),
-            ledger(),
-            cursor_path(dir.path()),
-        )
-        .unwrap();
-        // Push one expired + one fresh entry.
-        let stale = QueuedNotification {
-            rendered: "stale".into(),
-            correlation_id: "stale".into(),
-            submitted_at: std::time::Instant::now()
-                .checked_sub(QUEUE_TTL + Duration::from_secs(1))
-                .unwrap(),
-            severity: Severity::Operator,
-            pinned_session: None,
-        };
-        let fresh = QueuedNotification {
-            rendered: "fresh".into(),
-            correlation_id: "fresh".into(),
-            submitted_at: std::time::Instant::now(),
-            severity: Severity::Operator,
-            pinned_session: None,
-        };
-        ch.enqueue(stale).await;
-        ch.enqueue(fresh).await;
-        let reaped = ch.reap_stale_queue().await;
-        assert_eq!(reaped, 1);
-        assert_eq!(ch.queue_len().await, 1);
     }
 
     #[tokio::test]

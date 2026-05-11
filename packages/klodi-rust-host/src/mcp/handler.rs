@@ -31,27 +31,22 @@ pub struct McpConfig {
     /// for the current host. Default: `"klodi-register"`.
     pub register_cli: String,
     /// Dedicated klodi-session binding. Set by the `klodi-zeroclaw-mcp`
-    /// binary so the `klodi_report_to_operator` tool and the approval
-    /// gate can write into the persisted dedicated klodi session.
-    /// Daemon-only adapters leave this `None`; in that case the
-    /// operator-channel surface is filtered out of the catalog and the
-    /// approval gate is a no-op (the host's own approval mechanism is
-    /// responsible).
-    ///
-    /// **Renamed from `operator_channel` in 0.2.9** — the new
-    /// `channels` module owns the operator-channel abstraction. This
-    /// field now names the specific surface (the dedicated klodi
-    /// session) it always was; the multi-surface fan-out happens
-    /// through `channel_registry` below.
+    /// binary so the `klodi_escalate_to_user` tool and the approval
+    /// gate can fall back to a direct WS write into the dedicated
+    /// session when no `channel_registry` is plumbed in. Daemon-only
+    /// adapters leave this `None`; in that case the escalate tool is
+    /// filtered out of the catalog and the approval gate is a no-op
+    /// (the host's own approval mechanism is authoritative).
     #[cfg(feature = "zeroclaw_session")]
     pub klodi_session_target: Option<KlodiSessionTarget>,
 
-    /// Multi-channel registry used by the approval gate +
-    /// `klodi_report_to_operator` to fan a single notification across
-    /// every operator-visible surface (dashboard + dedicated klodi
-    /// session + any upstream-delegated channels). `None` for
-    /// daemon-only adapters; daemons that plug a `Some` here get full
-    /// fan-out at the approval-gate path.
+    /// Channel registry used by the approval gate +
+    /// `klodi_escalate_to_user` to route a single notification through
+    /// the single-destination-with-fall-through chain (dashboard first,
+    /// dedicated session as backstop, upstream sinks fanning
+    /// alongside). `None` for daemon-only adapters or tests; the MCP
+    /// server then falls back to a direct WS write into
+    /// `klodi_session_target`.
     #[cfg(feature = "zeroclaw_session")]
     pub channel_registry: Option<crate::channels::ChannelRegistry>,
 }
@@ -108,11 +103,10 @@ impl KlodiMcpHandler {
     }
 
     /// `Some(registry)` iff the binary built a `ChannelRegistry` for
-    /// multi-surface fan-out. `None` falls back to the single-target
-    /// dedicated-klodi-session path (back-compat for old MCP server
-    /// drivers).
+    /// single-destination routing with fall-through. `None` falls back
+    /// to a direct WS write into the dedicated klodi session (used by
+    /// daemon-only adapters and tests).
     #[cfg(feature = "zeroclaw_session")]
-    #[allow(dead_code)] // wired up in Phase 5 (approval-gate re-routing)
     pub(super) fn channel_registry(
         &self,
     ) -> Option<&crate::channels::ChannelRegistry> {

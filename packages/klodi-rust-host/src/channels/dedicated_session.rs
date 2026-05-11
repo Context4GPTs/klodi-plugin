@@ -1,12 +1,14 @@
 //! `DedicatedSessionChannel` — adapter exposing the existing klodi
-//! dedicated-session write path as an `OperatorChannel`. Lets the
-//! registry fan a single `Notification` out to the dedicated session +
-//! the dashboard + any upstream channels using one trait call.
+//! dedicated-session write path as an `OperatorChannel`. The registry
+//! treats it as the lowest-floor agent surface (`Diagnostic`), so it is
+//! the natural backstop when the dashboard's T3 returns no
+//! operator-typed session: the route chain falls through here, the
+//! chronicle of record never disappears.
 //!
-//! The dedicated session is the chronicle of record (per
-//! `zeroclaw_bootstrap_note`) — it always sees everything. Severity
-//! filtering happens *upstream* of this channel in `ChannelRegistry`;
-//! the impl here just renders + writes.
+//! Severity filtering happens *upstream* of this channel in
+//! `ChannelRegistry`; the impl here just renders + writes (plus the
+//! stale-session resurrection probe that re-issues a breadcrumb when
+//! the gateway has silently re-created the session).
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -56,9 +58,10 @@ impl DedicatedSessionChannel {
         &self.session_id
     }
 
-    /// Underlying WS config — used by the daemon when wiring legacy
-    /// paths that still consume the `(ws_config, session_id)` tuple
-    /// directly (the forwarder's `BodyShape::ZeroClawSession`).
+    /// Underlying WS config — exposed for the fallback-registry build
+    /// path in `klodi-zeroclaw-daemon` (when `${KLODI_HOME}/klodi.toml`
+    /// parsing fails, the daemon still needs to wire a minimal
+    /// dedicated-only registry from a hand-built binding).
     pub fn ws_config(&self) -> &ZeroClawWsConfig {
         &self.ws_config
     }
@@ -68,6 +71,15 @@ impl DedicatedSessionChannel {
 impl OperatorChannel for DedicatedSessionChannel {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn agent_surface(&self) -> bool {
+        // Writes go to `/ws/chat`; every write fires the dedicated
+        // klodi session's autonomous agent loop. This is also the
+        // lowest-floor agent surface, so it's the natural backstop the
+        // registry falls through to when the dashboard's T3 returns no
+        // operator-typed session.
+        true
     }
 
     async fn notify(
@@ -171,11 +183,12 @@ impl OperatorChannel for DedicatedSessionChannel {
     }
 }
 
-/// Render a notification for the dedicated klodi session — preserves
-/// the existing `klodi_report_to_operator` shape (icon + bold headline
-/// + optional details + optional fenced JSON block). Different from the
-/// dashboard renderer because the dedicated session is the agent's own
-/// reasoning surface; a defensive `── klodi · req=…` delimiter is
+/// Render a notification for the dedicated klodi session: icon + bold
+/// headline + correlation id + event_kind + optional details + optional
+/// fenced JSON block. Different from the dashboard renderer because the
+/// dedicated session is the agent's own reasoning surface; the
+/// dashboard's `── klodi · req=… · <event_kind> ──` delimiter (used by
+/// the operator's dashboard agent to identify klodi-posted messages) is
 /// unnecessary noise here.
 pub fn render_payload(payload: &Notification, correlation_id: &str) -> String {
     let icon = match payload.severity {

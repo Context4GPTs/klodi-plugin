@@ -3,9 +3,11 @@
 //! Subscribes the [`KlodiClient`] to both consumers, then dispatches
 //! each delivered notification or channel message according to the
 //! adapter's body shape: HTTP POST to a local host wake URL for
-//! Moltis + IronClaw (`BodyShape::Structured`), or a WebSocket write
-//! into the operator's persisted ZeroClaw session for the ZeroClaw
-//! adapter (`BodyShape::ZeroClawSession`). Adapter-specific knobs:
+//! Moltis + IronClaw (`BodyShape::Structured`), or — for the ZeroClaw
+//! adapter — through a [`crate::channels::ChannelRegistry`] that picks
+//! one agent surface per wake and falls through to lower-floor
+//! surfaces on Err (`BodyShape::ZeroClawRegistry`). Adapter-specific
+//! knobs:
 //!
 //! - `wake_url`         where to POST (HTTP path); unused on the
 //!                      ZeroClaw WS path.
@@ -40,25 +42,72 @@ use std::time::Duration;
 /// Body shape the host's wake endpoint accepts. Picked per-adapter at
 /// daemon startup; the forwarder dispatches on it in [`forward`].
 ///
-/// `Structured` goes to the HTTP wake URL. `ZeroClawSession` is the
-/// The wake is written into the operator's persisted ZeroClaw session
-/// via WebSocket (`/ws/chat?session_id=…`), bypassing `/webhook` and
-/// the 30s `TimeoutLayer` entirely.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `Structured` goes to the HTTP wake URL. `ZeroClawRegistry` routes
+/// each wake through a single-destination channel registry that picks
+/// the highest-floor agent surface accepting the notification, falling
+/// through to lower-floor agent surfaces on Err (the dedicated session
+/// is the natural backstop; chronicle of record per plan §1). Replaces
+/// the 0.2.10 `ZeroClawSession` single-target variant that pinned
+/// every wake to the daemon's boot-time session id and left the
+/// dashboard tab silent during autonomous negotiations (see
+/// `docs/reports/2026-05-11-klodi-zeroclaw-0.2.10-session-routing-no-fanout.md`).
+#[derive(Clone)]
 pub enum BodyShape {
     /// Structured envelope: `{ channel, kind, event_id, user_id, payload }`.
     /// Moltis and IronClaw consume this directly via HTTP POST.
     Structured,
-    /// Write the wake into the operator's persisted ZeroClaw session via
-    /// WebSocket. The carried fields are the resolved session id and
-    /// WS / HTTP base / bearer at daemon-start time. Only the
-    /// `klodi-zeroclaw-daemon` builds this variant; the
+    /// Route the wake through the registered klodi channels. The
+    /// carried `ChannelRegistry` is shared with the daemon's
+    /// reply-attribution task and the MCP server's approval gate —
+    /// every klodi notification path runs through the same registry
+    /// shape so routing is consistent.
+    ///
+    /// The registry guarantees single-destination among agent surfaces
+    /// (dedicated session + dashboard); failures fall through to
+    /// lower-floor agent surfaces automatically. Only when **every**
+    /// accepting agent surface fails does the forwarder NAK so
+    /// JetStream redelivers. Upstream notification sinks fan
+    /// alongside; their failures are best-effort and don't gate the
+    /// NATS ack.
+    ///
+    /// Only the `klodi-zeroclaw-daemon` builds this variant; the
     /// `zeroclaw_session` Cargo feature gates the supporting modules.
     #[cfg(feature = "zeroclaw_session")]
-    ZeroClawSession {
-        ws_config: crate::zeroclaw_ws::ZeroClawWsConfig,
-        session_id: String,
+    ZeroClawRegistry {
+        registry: crate::channels::ChannelRegistry,
+        /// Dedicated klodi session UUID — surfaced in log fields so
+        /// `klodi_wake_forwarded_via_ws` stays grep-friendly when
+        /// diagnosing routing decisions. The registry's
+        /// [`crate::channels::DedicatedSessionChannel`] owns the actual
+        /// WS write; this field is informational only.
+        dedicated_session_id: String,
     },
+}
+
+#[cfg(feature = "zeroclaw_session")]
+impl std::fmt::Debug for BodyShape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Structured => f.debug_struct("Structured").finish(),
+            Self::ZeroClawRegistry {
+                dedicated_session_id,
+                ..
+            } => f
+                .debug_struct("ZeroClawRegistry")
+                .field("dedicated_session_id", dedicated_session_id)
+                .field("registry", &"<…>")
+                .finish(),
+        }
+    }
+}
+
+#[cfg(not(feature = "zeroclaw_session"))]
+impl std::fmt::Debug for BodyShape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Structured => f.debug_struct("Structured").finish(),
+        }
+    }
 }
 
 /// Daemon configuration. Per-adapter binaries build this from CLI/env.
@@ -70,8 +119,8 @@ pub struct ForwarderConfig {
     /// Local host wake URL (e.g. Moltis's
     /// `http://127.0.0.1:5000/agents/default/wake`, IronClaw's
     /// `/event-trigger`). Unused on the ZeroClaw path — the
-    /// `BodyShape::ZeroClawSession` variant carries its own WS URL on
-    /// the embedded `ws_config`.
+    /// `BodyShape::ZeroClawRegistry` variant routes through the
+    /// channel registry, which owns the per-channel WS configs.
     pub wake_url: String,
     /// Optional bearer token. P1-14 promotes this from Moltis-only to
     /// shared — IronClaw + ZeroClaw inherit the mechanism.
@@ -94,7 +143,7 @@ pub struct ForwarderConfig {
     /// ack on receipt and run the agent in the background (Moltis,
     /// IronClaw) want a small bound — seconds — so a stalled host
     /// surfaces fast and JetStream redelivers. Unused on the
-    /// `BodyShape::ZeroClawSession` path; ZeroClaw's daemon sets a
+    /// `BodyShape::ZeroClawRegistry` path; ZeroClaw's daemon sets a
     /// nominal value here that's never consulted.
     pub wake_post_timeout: Duration,
 }
@@ -157,9 +206,7 @@ pub async fn run_forwarder(config: ForwarderConfig) -> Result<()> {
         body_shape: config.body_shape,
         logger,
         #[cfg(feature = "zeroclaw_session")]
-        zeroclaw_session_lock: Arc::new(tokio::sync::Mutex::new(())),
-        #[cfg(feature = "zeroclaw_session")]
-        zeroclaw_failure_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        zeroclaw_dispatch_lock: Arc::new(tokio::sync::Mutex::new(())),
     });
 
     install_subscribers(&client, shared.clone()).await?;
@@ -222,29 +269,20 @@ struct SharedState {
     /// `tracing::warn!(body = %txt, ...)` which echoed the host's verbatim
     /// 4xx/5xx body — including any token the host echoed back.
     logger: KlodiLogger,
-    /// Per-session WS write lock. Only meaningful for
-    /// `BodyShape::ZeroClawSession`. Two independent forwarder tasks
-    /// (one per NATS consumer) write to the same operator session; we
-    /// acquire this mutex around the full WS lifecycle so writes land
-    /// in NATS-arrival order even if
-    /// the gateway's `SessionActorQueue` reordering is incomplete. The
-    /// lock is held for the duration of one WS connect → send → drain
-    /// cycle (typically <2s on an idle session, up to DRAIN_TIMEOUT in
-    /// the worst case), so per-session throughput is bounded by drain
-    /// time. Acceptable for the marketplace's expected wake volume;
-    /// revisit if measured throughput becomes the bottleneck.
+    /// Per-daemon dispatch lock. Only meaningful for
+    /// `BodyShape::ZeroClawRegistry`. Two independent forwarder tasks
+    /// (one per NATS consumer — notifications + channel.messages) may
+    /// call `registry.route_wake` concurrently; without this lock
+    /// their writes interleave at the WS level and operators see
+    /// notifications arrive out of NATS-arrival order. The lock is
+    /// held for the duration of one route call (the registry runs
+    /// per-channel WS writes sequentially inside); per-channel
+    /// reconnect storms are the registered channel's concern, not
+    /// the forwarder's — the channel impls track their own failure
+    /// state and apply WS-handshake backoff (see
+    /// [`crate::zeroclaw_ws::send_session_message`]).
     #[cfg(feature = "zeroclaw_session")]
-    zeroclaw_session_lock: Arc<tokio::sync::Mutex<()>>,
-    /// Consecutive WS-send failure count for the operator-session
-    /// path. Reset to zero on success. Used by the reconnect-backoff
-    /// guard to space out retries when the gateway is unreachable —
-    /// without this, every NATS redelivery hammers the gateway with a
-    /// fresh handshake the moment JetStream's redelivery cadence ticks
-    /// (which has its own jitter, but doesn't compound across retries
-    /// when the gateway is genuinely down). Mitigates the
-    /// "WebSocket reconnect storm after gateway restart" risk.
-    #[cfg(feature = "zeroclaw_session")]
-    zeroclaw_failure_count: Arc<std::sync::atomic::AtomicU32>,
+    zeroclaw_dispatch_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 async fn install_subscribers(
@@ -305,10 +343,10 @@ async fn forward<T: Serialize>(
     match &state.body_shape {
         BodyShape::Structured => forward_http(state, body, kind).await,
         #[cfg(feature = "zeroclaw_session")]
-        BodyShape::ZeroClawSession {
-            ws_config,
-            session_id,
-        } => forward_zeroclaw_session(state, body, kind, ws_config, session_id).await,
+        BodyShape::ZeroClawRegistry {
+            registry,
+            dedicated_session_id,
+        } => forward_zeroclaw_registry(state, body, kind, registry, dedicated_session_id).await,
     }
 }
 
@@ -324,12 +362,13 @@ async fn forward_http<T: Serialize>(
     request = match &state.body_shape {
         BodyShape::Structured => request.json(body),
         #[cfg(feature = "zeroclaw_session")]
-        BodyShape::ZeroClawSession { .. } => {
-            // Unreachable: `forward` dispatches `ZeroClawSession` to the
-            // WS path before calling here. Guarded so the compiler keeps
-            // the match exhaustive even when the feature is on.
+        BodyShape::ZeroClawRegistry { .. } => {
+            // Unreachable: `forward` dispatches `ZeroClawRegistry` to
+            // the registry path before calling here. Guarded so the
+            // compiler keeps the match exhaustive even when the feature
+            // is on.
             return Err(KlodiError::NatsPublish(
-                "forward_http called with ZeroClawSession body shape".into(),
+                "forward_http called with ZeroClawRegistry body shape".into(),
             ));
         }
     };
@@ -381,168 +420,100 @@ async fn forward_http<T: Serialize>(
 }
 
 #[cfg(feature = "zeroclaw_session")]
-async fn forward_zeroclaw_session<T: Serialize>(
+async fn forward_zeroclaw_registry<T: Serialize>(
     state: &SharedState,
     body: &T,
     kind: &str,
-    ws_config: &crate::zeroclaw_ws::ZeroClawWsConfig,
-    session_id: &str,
+    registry: &crate::channels::ChannelRegistry,
+    dedicated_session_id: &str,
 ) -> Result<(), KlodiError> {
-    // The wake message lands in the operator's chat. Render as a
-    // human-readable headline plus the original structured envelope in
-    // a fenced JSON block so the agent can still `JSON.parse` it.
+    // Serialise the wake envelope so the dedicated session's agent can
+    // still `JSON.parse` it; carried on the Notification's `structured`
+    // field, which every channel renderer keeps in a fenced JSON block.
     let envelope_value =
         serde_json::to_value(body).map_err(|err| {
-            KlodiError::NatsPublish(format!("wake WS body to_value: {err}"))
+            KlodiError::NatsPublish(format!("wake registry dispatch to_value: {err}"))
         })?;
-    let pretty = serde_json::to_string_pretty(&envelope_value).map_err(|err| {
-        KlodiError::NatsPublish(format!("wake WS body pretty-print: {err}"))
-    })?;
     let event_id = envelope_value
         .get("event_id")
         .and_then(|v| v.as_str())
-        .unwrap_or("?");
-    let content = format!(
-        "🔔 marketplace event — `{kind}` (event `{event_id}`)\n\n```json\n{pretty}\n```"
-    );
+        .unwrap_or("?")
+        .to_string();
+    let summary = format!("marketplace event — `{kind}` (event `{event_id}`)");
 
-    // Per-session serialisation. The two NATS subscriber tasks
+    // Compute severity from the event kind here, at the caller — the
+    // registry doesn't promote silently. Picking severity is the
+    // forwarder's responsibility (it knows wake events are marketplace
+    // events); the registry's only job is to route what it's handed.
+    let severity = crate::channels::default_severity_for_event(kind);
+
+    let notif = crate::channels::Notification {
+        event_kind: kind.to_string(),
+        summary,
+        details: None,
+        severity,
+        structured: Some(envelope_value),
+        correlation_id: Some(event_id.clone()),
+        reply_hint: None,
+    };
+
+    // Per-daemon dispatch serialisation. Two NATS subscriber tasks
     // (notifications + channel-messages) both call this function;
-    // without the lock their WS handshakes can race and the gateway
-    // would observe arrival order non-deterministically. See the
-    // SharedState field's docstring for the throughput trade-off.
-    let _guard = state.zeroclaw_session_lock.lock().await;
+    // without the lock their per-channel writes interleave and the
+    // operator sees notifications arrive out of NATS-arrival order.
+    let _guard = state.zeroclaw_dispatch_lock.lock().await;
 
-    // Reconnect backoff: if previous WS sends have been failing,
-    // sleep before trying this one. This keeps NATS redeliveries
-    // from hammering a gateway that's down or slow to recover
-    // (reconnect-storm risk). The lock is held throughout the
-    // sleep so other waiters also see the backoff — that's
-    // intentional: the failure is per-gateway, not per-message, and
-    // parallel retries would just amplify the load.
-    let prior_failures = state
-        .zeroclaw_failure_count
-        .load(std::sync::atomic::Ordering::Relaxed);
-    if prior_failures > 0 {
-        let delay = ws_backoff_for(prior_failures);
-        tracing::warn!(
+    // Single call — the registry tries the highest-floor agent surface
+    // first and falls through to lower-floor surfaces on Err (the
+    // dedicated session is the natural backstop). The forwarder no
+    // longer rolls its own fallback render: every render lives behind
+    // its channel impl, the dedicated channel's resurrection probe
+    // runs on every attempt, and there's exactly one format per
+    // surface.
+    let outcome = registry.route_wake(notif).await;
+
+    if outcome.posted {
+        tracing::info!(
             user_id = %state.user_id,
-            session_id = %session_id,
-            consecutive_failures = prior_failures,
-            backoff_ms = delay.as_millis() as u64,
+            kind = %kind,
+            severity = %severity.as_str(),
+            destination = ?outcome.destination_channel,
+            event_id = %event_id,
+            dedicated_session_id = %dedicated_session_id,
             prefix = %state.log_event_prefix,
-            "klodi_zeroclaw_ws_backoff_before_send"
+            "klodi_wake_forwarded_via_ws"
         );
-        tokio::time::sleep(delay).await;
+        return Ok(());
     }
 
-    match crate::zeroclaw_ws::send_session_message(
-        ws_config,
-        session_id,
-        &content,
-        crate::zeroclaw_ws::SendAckPolicy::OnAgentObservation,
-    )
-    .await
-    {
-        Ok(_) => {
-            // Reset the failure counter so the next send is unthrottled.
-            state
-                .zeroclaw_failure_count
-                .store(0, std::sync::atomic::Ordering::Relaxed);
-            tracing::info!(
-                user_id = %state.user_id,
-                kind = %kind,
-                session_id = %session_id,
-                prefix = %state.log_event_prefix,
-                "klodi_wake_forwarded_via_ws"
-            );
-            Ok(())
-        }
-        Err(err) => {
-            // Increment for the next send's backoff computation.
-            state
-                .zeroclaw_failure_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let mut fields: HashMap<String, Value> = HashMap::new();
-            fields.insert("user_id".into(), json!(state.user_id));
-            fields.insert("kind".into(), json!(kind));
-            fields.insert("session_id".into(), json!(session_id));
-            fields.insert("error".into(), json!(format!("{err:#}")));
-            fields.insert("prefix".into(), json!(state.log_event_prefix));
-            state.logger.warn(
-                "klodi_wake_forward_ws_error",
-                Some(fields),
-            );
-            Err(KlodiError::NatsPublish(format!(
-                "wake WS send error: {err:#}"
-            )))
-        }
-    }
+    // Every accepting agent surface failed (including the dedicated
+    // backstop). NAK so JetStream redelivers on the consumer's next
+    // poll — the daemon doesn't drop wakes.
+    let mut fields: HashMap<String, Value> = HashMap::new();
+    fields.insert("user_id".into(), json!(state.user_id));
+    fields.insert("kind".into(), json!(kind));
+    fields.insert("severity".into(), json!(severity.as_str()));
+    fields.insert("dedicated_session_id".into(), json!(dedicated_session_id));
+    fields.insert("event_id".into(), json!(event_id));
+    fields.insert(
+        "last_attempted_destination".into(),
+        json!(outcome.destination_channel),
+    );
+    fields.insert("prefix".into(), json!(state.log_event_prefix));
+    state.logger.warn(
+        "klodi_wake_forward_every_channel_failed",
+        Some(fields),
+    );
+    Err(KlodiError::NatsPublish(format!(
+        "wake forward exhausted every agent channel (last attempt: {:?}) \
+         — JetStream will redeliver",
+        outcome.destination_channel,
+    )))
 }
-
-/// Compute the backoff delay before the Nth WS retry. Built on top of
-/// `klodi_nats_client::backoff::compute_backoff` so we share its tested
-/// jitter semantics; we override only the `cap` (30s vs the NATS
-/// default 60s) so wake forwarding doesn't queue indefinitely behind a
-/// long-running backoff. JetStream's own redelivery cadence already
-/// adds spacing — this caps the *additional* wait per failure.
-///
-/// Uses `default_reconnect_delay` under a custom config so we don't
-/// have to plumb our own RNG. Tests that observe the exact value
-/// would need to inject a deterministic random_unit; for the
-/// integration-shaped behaviour we test (counter increments, delay
-/// non-zero after first failure) the production RNG is fine.
-#[cfg(feature = "zeroclaw_session")]
-fn ws_backoff_for(prior_failures: u32) -> std::time::Duration {
-    use klodi_nats_client::backoff::{BackoffConfig, compute_backoff};
-    let attempt = prior_failures.saturating_add(1).min(WS_BACKOFF_CAP_ATTEMPTS);
-    let mut cfg = BackoffConfig::default();
-    cfg.cap = std::time::Duration::from_secs(30);
-    // Use a fixed midpoint (0.5) for the random unit; the spread the
-    // jitter adds on top would be ±25% of the (capped) value, but we
-    // don't have an RNG dep here. The fixed midpoint is fine because
-    // the lock is held during sleep — other waiters can't race to
-    // pick a different bucket — and JetStream's redelivery cadence
-    // already adds the practical jitter we need across wakes.
-    compute_backoff(attempt, cfg, 0.5)
-}
-
-/// Maximum attempt index fed into `compute_backoff`. Bounded so
-/// `multiplier^attempt` doesn't overflow the f64 mantissa on
-/// pathological failure counts; the result is capped to `cap` long
-/// before this matters.
-#[cfg(feature = "zeroclaw_session")]
-const WS_BACKOFF_CAP_ATTEMPTS: u32 = 16;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(feature = "zeroclaw_session")]
-    #[test]
-    fn ws_backoff_zero_failures_is_unused() {
-        // The forwarder never calls ws_backoff_for(0) — that branch is
-        // skipped via the `if prior_failures > 0` guard. But asserting
-        // it returns the base delay anyway pins the math: attempt=1
-        // gives the BackoffConfig base (250ms) at random_unit 0.5
-        // (no jitter offset).
-        let d = ws_backoff_for(0);
-        assert_eq!(d, std::time::Duration::from_millis(250));
-    }
-
-    #[cfg(feature = "zeroclaw_session")]
-    #[test]
-    fn ws_backoff_grows_then_caps_at_30s() {
-        // With base=250ms, multiplier=2: 1→250, 2→500, 3→1000, 4→2000,
-        // 5→4000, 6→8000, 7→16000, 8→30000 (capped from 32000).
-        // We test a couple of points + the cap.
-        assert_eq!(ws_backoff_for(1), std::time::Duration::from_millis(500));
-        assert_eq!(ws_backoff_for(2), std::time::Duration::from_millis(1000));
-        // Anything past the cap clamps at 30s (no jitter offset since
-        // ws_backoff_for hardcodes 0.5).
-        assert_eq!(ws_backoff_for(20), std::time::Duration::from_secs(30));
-        assert_eq!(ws_backoff_for(u32::MAX), std::time::Duration::from_secs(30));
-    }
 
     #[test]
     fn wake_post_notification_serialises_with_channel_tag() {

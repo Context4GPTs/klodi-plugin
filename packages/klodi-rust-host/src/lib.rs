@@ -91,8 +91,8 @@ pub use channels::{
     ChannelInvoker, ChannelRegistry, CreatedSessionsLedger, DashboardChannel,
     DashboardChannelConfig, DedicatedSessionChannel, DispatcherCursor,
     Notification, NotificationId, NotificationsConfig, OperatorChannel,
-    OperatorReply, Recipient, RegisteredChannel, SessionBinding, Severity,
-    UpstreamChannel, UpstreamChannelConfig, build_channel_registry,
+    OperatorReply, Recipient, RegisteredChannel, RouteOutcome, SessionBinding,
+    Severity, UpstreamChannel, UpstreamChannelConfig, build_channel_registry,
     session_health::SessionHealth, session_health::check_session_alive,
     session_health::resurrection_breadcrumb,
 };

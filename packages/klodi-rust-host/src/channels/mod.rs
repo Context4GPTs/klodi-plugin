@@ -1,28 +1,32 @@
-//! Operator-notification channels — multi-surface fan-out for klodi
-//! events.
+//! Operator-notification channels — single-destination routing for
+//! klodi events, with passive fan-out to non-agent notification sinks.
 //!
 //! The shape is intentionally minimal: a single trait `OperatorChannel`
 //! that every notification target (the dashboard, the dedicated klodi
 //! session, any upstream-delegated channel) implements, plus a
-//! `ChannelRegistry` that fans an outbound `Notification` out across
-//! all configured channels and exposes a unified stream of inbound
-//! `OperatorReply`s back to the agent.
+//! `ChannelRegistry` that picks **one** agent surface per notification
+//! (the one with the highest `severity_floor` that still accepts it;
+//! falling through to lower-floor surfaces on Err), and exposes a
+//! unified stream of inbound `OperatorReply`s back to the agent. See
+//! `docs/plans/2026-05-11-klodi-zeroclaw-single-destination-routing.md`
+//! for the rationale (every `/ws/chat` write fires a server-side agent
+//! loop, so fanning to multiple agent surfaces creates duplicate turns
+//! on the same content).
 //!
-//! Why a trait. Three implementations land in 0.2.9 — `DashboardChannel`
-//! (klodi-owned WS transport against `/ws/chat`), `DedicatedSessionChannel`
-//! (adapter over the persisted klodi session the daemon already owns), and
-//! `UpstreamChannel` (delegating wrapper over `zeroclaw channel send`).
-//! A trait keeps the dispatch loop in `ChannelRegistry` polymorphic
-//! across all three without an enum match that has to grow on every
-//! new transport.
+//! Three implementations land in 0.2.9 — `DashboardChannel` (klodi-owned
+//! WS transport against `/ws/chat`), `DedicatedSessionChannel`
+//! (adapter over the persisted klodi session the daemon already owns),
+//! and `UpstreamChannel` (delegating wrapper over `zeroclaw channel
+//! send`). The first two are `agent_surface=true` (single-destination
+//! among them); upstream channels are `agent_surface=false` (fan freely).
 //!
 //! Notification shape mirrors upstream's `(channel_id, recipient, message)`
 //! `zeroclaw channel send` CLI: every notification carries a structured
 //! event + severity + render hints; each implementation renders the
 //! payload to whatever its medium expects (plain text for upstream
-//! channels, dashboard-safe markdown with a correlation header for the
-//! dashboard, the existing `klodi_report_to_operator` shape for the
-//! dedicated klodi session).
+//! channels, dashboard-safe markdown with a `── klodi · req=` correlation
+//! header for the dashboard, an icon-prefixed headline for the dedicated
+//! klodi session).
 
 use std::pin::Pin;
 
@@ -54,7 +58,7 @@ pub use dedicated_session::DedicatedSessionChannel;
 pub use factory::{SessionBinding, build_channel_registry};
 pub use invoker::ChannelInvoker;
 pub use ledger::CreatedSessionsLedger;
-pub use registry::{ChannelRegistry, RegisteredChannel};
+pub use registry::{ChannelRegistry, RegisteredChannel, RouteOutcome};
 pub use upstream::UpstreamChannel;
 
 /// Severity of an outbound notification. Each registered channel has a
@@ -69,8 +73,9 @@ pub enum Severity {
     Diagnostic,
     /// Routine activity (offer proposed, search match, listing update).
     Operator,
-    /// State changes the operator should know about within minutes —
-    /// offer accepted, transaction completed, channel opened.
+    /// Deal-closure state changes the operator should know about
+    /// within minutes — offer accepted, transaction completed,
+    /// transaction cancelled.
     OperatorImportant,
     /// Plugin-gated irreversible — fan out to every enabled channel
     /// (dashboard, upstream, dedicated). Bypasses batching.
@@ -233,6 +238,21 @@ pub trait OperatorChannel: Send + Sync {
     fn replies(&self) -> Pin<Box<dyn Stream<Item = OperatorReply> + Send + 'static>> {
         Box::pin(futures_util::stream::empty())
     }
+
+    /// `true` for channels that write into a ZeroClaw `/ws/chat` session
+    /// (every write fires a server-side agent loop). The registry's
+    /// `route()` picks **one** agent surface per notification — fanning
+    /// to multiple would fire duplicate agent turns on the same content
+    /// (the bug 0.2.11 rewinds). `false` channels (upstream notification
+    /// sinks: Telegram, Slack, email, …) fan freely alongside the picked
+    /// agent route.
+    ///
+    /// Default `false` so a new transport author can't silently break
+    /// the no-fan-out invariant; impls that ARE agent surfaces opt in
+    /// by overriding.
+    fn agent_surface(&self) -> bool {
+        false
+    }
 }
 
 /// Map a "wake kind" string (`listing.created`, `offer.accepted`, …)
@@ -251,11 +271,15 @@ pub fn default_severity_for_event(event_kind: &str) -> Severity {
             Severity::ApprovalRequest
         }
         // State changes the operator should know about within minutes.
+        // Limited to deal-closure events — these are the moments where
+        // the operator's dashboard agent has the right context to
+        // surface to the user (confirm tx, rate counterparty, cancel
+        // / dispute).
         "offer.accepted"
         | "transaction.completed"
-        | "transaction.cancelled"
-        | "channel.opened" => Severity::OperatorImportant,
-        // Routine marketplace activity.
+        | "transaction.cancelled" => Severity::OperatorImportant,
+        // Routine marketplace activity. Stays in the dedicated klodi
+        // session; the autonomous agent handles per SKILL.md §3.
         "search.match"
         | "offer.proposed"
         | "offer.created"
@@ -264,10 +288,14 @@ pub fn default_severity_for_event(event_kind: &str) -> Severity {
         | "listing.created"
         | "listing.matched"
         | "listing.updated" => Severity::Operator,
-        // Echoes, health, daemon-internal — keep them quiet on the
-        // dashboard. The dedicated klodi session still sees
-        // everything (severity floor = diagnostic by default).
-        "channel.message" => Severity::Diagnostic,
+        // Channel lifecycle + per-message traffic — autonomous-agent
+        // territory. `channel.opened` is the start of a negotiation
+        // thread the agent runs itself (seller: send the structured
+        // logistics opener; buyer: read against the buy file). No
+        // operator involvement until the agent escalates explicitly
+        // via `klodi_escalate_to_user`. Operator's dashboard agent
+        // would have no useful context to act on these.
+        "channel.message" | "channel.opened" | "channel.closed" => Severity::Diagnostic,
         _ => Severity::Operator,
     }
 }

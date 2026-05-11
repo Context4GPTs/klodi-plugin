@@ -3,14 +3,16 @@
 //!
 //! The daemon body lives in `klodi_rust_host::forwarder`; this binary
 //! binds CLI / env, resolves the bearer + operator session, posts the
-//! plugin-authored heartbeat + bootstrap note, and then hands a
-//! [`ForwarderConfig`] with `BodyShape::ZeroClawSession` to the shared
-//! runner so wakes write into the operator's ZeroClaw session via
-//! `/ws/chat`. The pre-0.2.6 `POST /webhook` delivery path was
-//! removed in 0.2.8 — every supported ZeroClaw build (≥ 0.7.4)
-//! exposes `/ws/chat`, and the legacy synchronous-prompt path was
-//! unusable on real klodi turns (30s gateway timeout vs. 60s+ agent
-//! turns).
+//! plugin-authored heartbeat + bootstrap note, builds the channel
+//! registry (dedicated klodi session + dashboard + any
+//! operator-configured upstream channels), and then hands a
+//! [`ForwarderConfig`] with `BodyShape::ZeroClawRegistry` to the shared
+//! runner so wakes route through the registry to a single agent
+//! surface (falling through to the dedicated session on Err). The
+//! pre-0.2.6 `POST /webhook` delivery path was removed in 0.2.8 —
+//! every supported ZeroClaw build (≥ 0.7.4) exposes `/ws/chat`, and
+//! the legacy synchronous-prompt path was unusable on real klodi turns
+//! (30s gateway timeout vs. 60s+ agent turns).
 //!
 //! Bearer pairing flow (as of 0.2.8): when no explicit env token, no
 //! cached `${KLODI_HOME}/zeroclaw.token`, and no sidecar
@@ -34,8 +36,9 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use klodi_rust_host::{
-    BodyShape, BrowserPairConfig, ForwarderConfig, MinterImpl,
-    SessionBinding, ShimConfig, ShimHandle, ZeroClawWsConfig, ZeroclawCliMinter,
+    BodyShape, BrowserPairConfig, ChannelRegistry, DedicatedSessionChannel,
+    ForwarderConfig, MinterImpl, Recipient, RegisteredChannel, SessionBinding,
+    Severity, ShimConfig, ShimHandle, ZeroClawWsConfig, ZeroclawCliMinter,
     adopt_session_id, channels::factory::build_channel_registry, paths,
     resolve_session_id, run_forwarder, send_session_message,
     zeroclaw_bootstrap_note,
@@ -47,7 +50,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 
 /// Nominal value for `ForwarderConfig::wake_post_timeout`. The
-/// `BodyShape::ZeroClawSession` path doesn't use reqwest for wake
+/// `BodyShape::ZeroClawRegistry` path doesn't use reqwest for wake
 /// delivery — the field is required by the shared `ForwarderConfig`
 /// struct but never consulted on this code path.
 const WAKE_POST_TIMEOUT_PLACEHOLDER: Duration = Duration::from_secs(60);
@@ -368,30 +371,45 @@ async fn main() -> Result<()> {
 
     // Channel-registry build comes BEFORE the bootstrap-note post so
     // the multi-surface copy can list every surface klodi will
-    // page the operator on.
-    let registry_outcome = match build_channel_registry(
+    // page the operator on. Wakes flow through this registry too
+    // (see `BodyShape::ZeroClawRegistry` below) — failure here
+    // would otherwise silently route every wake to a single pinned
+    // session, which is the exact bug the 0.2.11 session-routing
+    // rewrite addresses. So on `build_channel_registry` failure we
+    // construct a dedicated-session-only fallback registry so the
+    // chronicle-of-record path keeps working while operators fix
+    // their `klodi.toml`.
+    let binding = SessionBinding {
+        ws_config: ws_config.clone(),
+        session_id: resolved.session_id.clone(),
+    };
+    let (registry, registry_cfg) = match build_channel_registry(
         &klodi_home,
-        &SessionBinding {
-            ws_config: ws_config.clone(),
-            session_id: resolved.session_id.clone(),
-        },
+        &binding,
         &cli.zeroclaw_cli,
     )
     .await
     {
-        Ok((registry, cfg)) => Some((registry, cfg)),
+        Ok((r, cfg)) => (r, Some(cfg)),
         Err(err) => {
             tracing::warn!(
                 error = %format!("{err:#}"),
-                "klodi_zeroclaw_daemon_channel_registry_build_failed_continuing_single_surface"
+                "klodi_zeroclaw_daemon_channel_registry_build_failed_using_fallback"
             );
-            None
+            (build_fallback_registry(&binding)?, None)
         }
     };
-    let channel_names_owned: Vec<String> = registry_outcome
+    let dashboard_enabled = registry_cfg
         .as_ref()
-        .map(|(r, _)| r.channel_names())
-        .unwrap_or_default();
+        .map(|c| c.dashboard.enabled)
+        .unwrap_or(false);
+    let channel_names_owned: Vec<String> = registry.channel_names();
+    tracing::info!(
+        channels = ?channel_names_owned,
+        dashboard_enabled = dashboard_enabled,
+        dedicated_session_id = %resolved.session_id,
+        "klodi_zeroclaw_channel_registry_ready"
+    );
 
     // The atomic resolve path already wrote the heartbeat as the
     // session's first message on the freshly-minted path — skip the
@@ -471,16 +489,15 @@ async fn main() -> Result<()> {
     // for the MCP server's approval gate. Failures are non-fatal —
     // the dedicated klodi session path keeps working without the
     // dashboard surface.
-    if let Some((registry, cfg)) = registry_outcome {
-        if cfg.dashboard.enabled {
-            tokio::spawn(run_reply_attribution(klodi_home.clone(), registry));
-        } else {
-            tracing::info!(
-                "klodi_zeroclaw_reply_attribution_skipped_dashboard_disabled"
-            );
-        }
+    if dashboard_enabled {
+        tokio::spawn(run_reply_attribution(klodi_home.clone(), registry.clone()));
+    } else {
+        tracing::info!(
+            "klodi_zeroclaw_reply_attribution_skipped_dashboard_disabled"
+        );
     }
 
+    let dedicated_session_id = resolved.session_id;
     run_forwarder(ForwarderConfig {
         creds_path,
         config_path,
@@ -492,15 +509,43 @@ async fn main() -> Result<()> {
         ),
         log_event_prefix: "klodi_zeroclaw".into(),
         health_port: cli.health_port,
-        body_shape: BodyShape::ZeroClawSession {
-            ws_config,
-            session_id: resolved.session_id,
+        body_shape: BodyShape::ZeroClawRegistry {
+            registry,
+            dedicated_session_id,
         },
-        // Unused on the WS path — see WAKE_POST_TIMEOUT_PLACEHOLDER.
+        // Unused on the registry path — see WAKE_POST_TIMEOUT_PLACEHOLDER.
         wake_post_timeout: WAKE_POST_TIMEOUT_PLACEHOLDER,
     })
     .await
     .context("running klodi-zeroclaw-daemon")
+}
+
+/// Minimal channel registry containing just a `DedicatedSessionChannel`
+/// — used when [`build_channel_registry`] fails (malformed
+/// `${KLODI_HOME}/klodi.toml`, on-disk artifact creation failure,
+/// etc.). Without this, wake forwarding would have no destination at
+/// all when the operator's config file is broken — a strictly worse
+/// regression than 0.2.10's "wakes-go-to-pinned" behaviour, which is
+/// what the registry rewrite replaces.
+///
+/// The dedicated session is the chronicle of record; the fallback
+/// preserves that path so the agent loop keeps receiving wakes while
+/// the operator fixes their config. Dashboard + upstream channels are
+/// skipped — they require config to know where to write.
+fn build_fallback_registry(binding: &SessionBinding) -> Result<ChannelRegistry> {
+    let dedicated = DedicatedSessionChannel::new(
+        binding.ws_config.clone(),
+        binding.session_id.clone(),
+    );
+    // `agent_surface` is on the impl, not the registration — the
+    // dedicated channel returns `true` so the registry treats this as a
+    // single-destination agent route.
+    Ok(ChannelRegistry::new(vec![RegisteredChannel {
+        impl_: Arc::new(dedicated),
+        recipient: Recipient::Address(binding.session_id.clone()),
+        severity_floor: Severity::Diagnostic,
+        event_filter: vec![],
+    }]))
 }
 
 /// Reply attribution loop. Subscribes to `registry.replies()` —

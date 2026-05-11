@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.11] — 2026-05-11
+
+**klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.
+
+Session-routing rewrite. On 0.2.10, `klodi-zeroclaw-daemon` minted one dedicated session at boot and pinned every wake AND every `klodi_report_to_operator` call to that session for the life of the container — the dashboard tab the operator typed into got a different session id, the daemon never learned about it, and every klodi event after the operator's first reply went to the silent dedicated tab (see `docs/reports/2026-05-11-klodi-zeroclaw-0.2.10-session-routing-no-fanout.md`). 0.2.11 replaces the pinned-session model with **single-destination severity-based routing plus an agent-initiated escalation tool**. Each wake lands in exactly one session — no fan-out, no duplicate agent turns. The autonomous agent in the dedicated klodi session calls `klodi_escalate_to_user` (renamed from `klodi_report_to_operator`) when it can't proceed without the human; the tool writes a klodi-prefixed message into the operator's most recently active dashboard session. Design rationale + the gateway constraint that drove it: `docs/plans/2026-05-11-klodi-zeroclaw-single-destination-routing.md`.
+
+### Added (`klodi-zeroclaw` 0.2.11)
+
+- **Single-destination routing in `ChannelRegistry`.** New `route_wake(notif) -> RouteOutcome` + `notify(notif) -> RouteOutcome` on `klodi_rust_host::channels::ChannelRegistry`. Both pick the channel with the highest `severity_floor` that still accepts the notification (the channel "closest to the operator"), call it, and return `RouteOutcome { destination_channel, posted, correlation_id }`. Upstream channels (Telegram, Slack, email — `agent_surface=false`) fan alongside the picked agent route since they don't trigger server-side agent loops. `route_wake` unconditionally bypasses the registry's batching window; `notify` honours it (used by `klodi_escalate_to_user` and the approval gate, where noisy event kinds want coalescing).
+- **`RegisteredChannel.agent_surface: bool`** distinguishes ZeroClaw-session channels (dedicated, dashboard — `true`) from notification-only sinks (`false`). Single-destination routing applies only among `agent_surface=true` channels to avoid firing multiple server-side agent loops on the same payload.
+- **`klodi_escalate_to_user`** MCP tool. Renamed from `klodi_report_to_operator`. Sharper semantics ("escalate" = autonomous agent yielding to the user, "to_user" = workstation owner as trust anchor). Implementation: routes via `registry.notify` — the registry picks the highest-floor agent surface accepting the severity (the dashboard for `ApprovalRequest` / `OperatorImportant`) and falls through to lower-floor surfaces on Err, so the dedicated klodi session is the natural backstop when the dashboard's T3 returns no operator-typed session. Returns `{ posted, destination_channel, session_id, severity, correlation_id }`; `posted: false` only when every accepting agent surface failed, in which case the MCP tool surfaces an error rather than a structured response.
+- **`BodyShape::ZeroClawRegistry { registry, dedicated_session_id }`** in `klodi_rust_host::forwarder`. Replaces the 0.2.10 `BodyShape::ZeroClawSession { ws_config, session_id }` single-target variant. The forwarder calls `registry.route_wake(notif)` for each wake; the registry's descending-floor chain tries the dashboard first and falls through to the dedicated session (the lowest-floor agent surface) on Err. The forwarder NAKs only when every accepting agent surface failed — including the dedicated backstop — so JetStream redelivers.
+- **Dedicated-session-only fallback registry.** When `build_channel_registry` fails at daemon startup (malformed `klodi.toml`, on-disk artifact failure, …) the daemon constructs a minimal `ChannelRegistry` containing just the `DedicatedSessionChannel` so wake forwarding keeps working while the operator fixes their config.
+- **Routing-decision logs.** Grep-friendly tracing event names:
+  - `klodi_zeroclaw_target_session_resolved` (dashboard T3 picked a destination), `klodi_zeroclaw_target_session_unresolved` (no candidate; the registry falls through to the next-highest-floor agent surface — typically the dedicated session).
+  - `klodi_zeroclaw_dashboard_channel_registered` (fires once at construction with REST/WS endpoints + poll interval).
+  - `klodi_zeroclaw_channel_registry_ready` (fires once at daemon boot with the channel-name list + dashboard-enabled flag + dedicated-session id).
+  - `klodi_zeroclaw_no_accepting_agent_channel` (route fired but no agent-surface channel accepted the notification — typically a misconfigured `event_filter`).
+  - `klodi_zeroclaw_channel_notify_failed_falling_through` (per-step warn — one agent surface's `notify` returned Err; the registry tries the next-highest-floor surface).
+  - `klodi_zeroclaw_every_agent_channel_failed` (terminal warn — every accepting agent surface failed in turn; `posted=false` returned to the caller).
+  - `klodi_wake_forwarded_via_ws` carries `destination`, `severity`, `event_kind`, `event_id`, `dedicated_session_id`.
+  - `klodi_wake_forward_every_channel_failed` (warn — registry's chain was exhausted; forwarder NAKs so JetStream redelivers).
+
+### Fixed (`klodi-zeroclaw` 0.2.11)
+
+- **Wakes reach the right session without duplicate agent turns.** Wake routing is per-severity, single-destination:
+  - `Diagnostic` (`channel.message`, `channel.opened`, `channel.closed`) → dedicated klodi session. Channel-lifecycle is autonomous-agent territory: `channel.opened` starts the negotiation thread the klodi-session agent runs itself; the operator's dashboard agent has no context to act on a new channel.
+  - `Operator` (`listing.*`, `search.match`, `offer.proposed`, `offer.rejected`) → dedicated klodi session.
+  - `OperatorImportant` (`offer.accepted`, `transaction.completed`, `transaction.cancelled`) → operator's active dashboard session.
+  - `ApprovalRequest` (gated-tool prompts via the approval gate) → operator's active dashboard session.
+  - Fallback for the high-severity branches: when the dashboard's T3 finds no operator-typed session, fall back to the dedicated klodi session so headless / operator-offline deployments still surface the event to the autonomous agent.
+- **Approval prompts reach the operator on a single surface.** The 0.2.11-intermediate approval-fan-to-all-tabs path is gone — duplicate agent turns would race the approval-reply bridge. The gate now posts the prompt to the operator's active dashboard session (or dedicated as fallback) and the reply bridge releases the gate when the operator replies on that surface.
+- **`klodi_escalate_to_user` tool description matches actual routing.** Spells out the single-destination + agent-driven model and the `── klodi · req=…` prefix's role as a no-op signal for the operator's dashboard agent.
+- **Skill-bundle guidance for `klodi_escalate_to_user` deferred to the adapter-conditional-content plan.** The universal `skill/SKILL.md` and `skill/references/tool_inventory.md` ship to every adapter (OpenClaw, the Python adapters, every Rust host), so we deliberately do NOT carry zeroclaw-specific session-routing prose or the two-agent dashboard/dedicated split there in 0.2.11. The agent-facing how-to (when to call, severity meanings, the `── klodi · req=…` header conventions, the dashboard agent's no-op rule) lives in the `klodi_escalate_to_user` tool description itself (`packages/klodi-rust-host/src/mcp/tools.rs` — gated on `#[cfg(feature = "zeroclaw_session")]` so only zeroclaw agents see it). Moving the richer guidance into SKILL.md behind `<!--adapter:zeroclaw-->` markers is tracked in `docs/plans/2026-05-11-klodi-skill-adapter-conditional-content.md`, including the drafted §3 / §7a / tool-inventory text that will land in PR 2 of that plan.
+
+### Changed (`klodi-zeroclaw` 0.2.11)
+
+- **`BodyShape::ZeroClawSession { ws_config, session_id }` removed; `BodyShape::ZeroClawRegistry { registry, dedicated_session_id }` replaces it** (public API break since 0.2.10 for out-of-tree consumers of `klodi_rust_host`). In-tree callers updated. Out-of-tree consumers building a daemon must construct a `ChannelRegistry` via `build_channel_registry(...)` and pass it on `body_shape`. The `klodi-zeroclaw-daemon` source is the canonical example.
+- **`klodi_report_to_operator` renamed `klodi_escalate_to_user`.** Tool-name break for agents written against the prior name; they get `unknown klodi tool: klodi_report_to_operator` on call. SKILL.md §7a is the single source of truth for the rule the agents follow.
+- **`RegisteredChannel` requires a new `agent_surface: bool` field.** Out-of-tree consumers constructing custom `RegisteredChannel` values must set it explicitly. In-tree factory updated (dedicated + dashboard: `true`; upstream: `false`).
+- **Forwarder's WS-handshake backoff helpers removed.** 0.2.10's `ws_backoff_for` + `WS_BACKOFF_CAP_ATTEMPTS` + the per-daemon `AtomicU32` failure counter are gone — per-channel error handling takes over, and JetStream's redelivery cadence supplies the practical jitter. The `klodi_zeroclaw_ws_backoff_before_send` log is therefore gone too.
+- **Forwarder lock renamed `zeroclaw_session_lock` → `zeroclaw_dispatch_lock`.** Still per-daemon, still held across the dispatch cycle; now wraps `registry.route_wake` + fallback rather than a single WS handshake.
+
+### Migrating from 0.2.10 to 0.2.11 (klodi-zeroclaw operators only)
+
+Drop-in for the operator side. The daemon's behaviour change is strictly routing — no flag changes, no `${KLODI_HOME}` migration, no `klodi.toml` schema updates. Existing `klodi.toml` files continue to work; the new routing reads the same `[notifications.dashboard]` block 0.2.9 introduced.
+
+**For agents** (host runtimes that have klodi MCP tools available): rename `klodi_report_to_operator` calls to `klodi_escalate_to_user`. The argument schema is unchanged. The previous tool name is no longer registered — agents calling the old name get `unknown klodi tool`. If your skill bundle is loaded via the embedded resource path (`klodi://skill/SKILL.md`), the new §7a guidance + the renamed entry in `references/tool_inventory.md` is what the agent reads.
+
+**For out-of-tree consumers** of `klodi_rust_host` building a daemon: replace `BodyShape::ZeroClawSession` construction with `BodyShape::ZeroClawRegistry { registry, dedicated_session_id }` plus a `ChannelRegistry` built via `build_channel_registry`. Add `agent_surface: bool` to any `RegisteredChannel` you construct manually.
+
+### Out of scope (follow-ups tracked separately)
+
+- **ZeroClaw assistant-inject endpoint.** Today `/ws/chat` only accepts `{"type":"message",…}` which persists as `role=user` AND fires a server-side agent loop in the target session. Klodi's escalations into the operator's dashboard therefore fire that session's dashboard agent, which we mitigate via the `── klodi · req=…` prefix + the SKILL.md §7a no-op rule (cost: one wasted dashboard turn per escalation). A first-class `role=assistant` inject endpoint would replace the prefix workaround with proper gateway semantics. Tracked as a separate ZeroClaw repo plan.
+- **Persistent escalation queue when no operator session is active.** Today escalations fall back to the dedicated session when T3 finds nothing operator-typed. A persistent queue + drain-on-dashboard-open would let escalations wait passively for the operator. Defer until a real-use case shows up.
+- **Replay missing wakes to the dashboard agent when the operator opens a tab mid-stream.** An operator who opens the dashboard after several wakes have routed to the dedicated session misses those — the dashboard agent has no chat history to read. A "catch-up summary" the dashboard agent posts on its first turn would close the gap. Track separately.
+- **Per-instance routing for ambiguous wake kinds.** The static `default_severity_for_event` table makes `channel.message` always-diagnostic. A future refinement would let the autonomous agent flag a specific wake as "actually this one needs the operator" and re-route mid-flight. Today the agent uses `klodi_escalate_to_user` instead.
+
 ## [0.2.10] — 2026-05-11
 
 **klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.

@@ -28,7 +28,7 @@ pub struct BootstrapInputs<'a> {
     /// present, the heartbeat surfaces it so an operator who hasn't yet
     /// paired their browser has a clickable affordance in the chat.
     pub browser_pair_url: Option<&'a str>,
-    /// Channel names registered for fan-out — `["dashboard",
+    /// Channel names registered in the routing chain — `["dashboard",
     /// "dedicated_session", "upstream:telegram", …]`. Surfaced in the
     /// bootstrap note's multi-surface copy so the operator sees every
     /// surface klodi might page them on. Empty list = single-surface
@@ -121,15 +121,15 @@ pub fn bootstrap_note(inputs: &BootstrapInputs<'_>) -> String {
          - `klodi_search` / `klodi_watch` / `klodi_unwatch` — discovery\n\
          - `klodi_offer_create` / `klodi_offer_respond` — bidding (the agent decides whether to ask you, per your `negotiation_style.md`)\n\
          - `klodi_channel_message` — replies in open negotiations\n\
-         - `klodi_report_to_operator` — when the agent wants you to know something or ask\n\
+         - `klodi_escalate_to_user` — when the agent can't proceed autonomously and needs your input (posts a `── klodi · req=…` note in whichever dashboard tab you're typing in)\n\
          - `klodi_list_update` — listing edits (the agent decides whether to ask you)\n\
          - `klodi_tx_confirm` / `klodi_tx_cancel` / `klodi_list_withdraw` — **gated by the plugin: irreversible, the plugin always asks before executing**\n\n",
     );
 
     s.push_str(
-        "**Approval convention.** Two kinds of asks land in this chat:\n\
-         - 🔒 **Plugin-gated** (`tx_confirm`, `tx_cancel`, `list_withdraw`): the plugin posts the request and refuses to execute the tool until you reply. Reply `yes` (or `approve` / `ok` / `proceed`) to authorize, or `no` (or `deny` / `cancel` / `stop`) to refuse. The agent then retries the call on your behalf.\n\
-         - ℹ️ **Agent-discretion** (everything else): the agent reads your `negotiation_style.md` and on-disk strategy files (`buy/`, `sell/`) to decide whether to ask. When it asks, it'll use `klodi_report_to_operator` and wait for your reply in this chat — same vocabulary applies.\n\n",
+        "**Approval convention.** Two kinds of asks reach you:\n\
+         - 🔒 **Plugin-gated** (`tx_confirm`, `tx_cancel`, `list_withdraw`): the plugin posts the request to whichever dashboard tab you're typing in (or here, if no dashboard session is active) and refuses to execute the tool until you reply. Reply `yes` (or `approve` / `ok` / `proceed`) to authorize, or `no` (or `deny` / `cancel` / `stop`) to refuse. The agent then retries the call on your behalf.\n\
+         - ℹ️ **Agent-discretion** (everything else): the agent reads your `negotiation_style.md` and on-disk strategy files (`buy/`, `sell/`) to decide whether to ask. When it asks, it uses `klodi_escalate_to_user` — the message lands in your most-recently-active dashboard tab with a `── klodi · req=…` prefix, falling through to this session when no dashboard is open. Same affirmation vocabulary applies.\n\n",
     );
 
     s.push_str(&format!(
@@ -224,7 +224,7 @@ mod tests {
         assert!(note.contains("klodi_watch"));
         assert!(note.contains("klodi_offer_create"));
         assert!(note.contains("klodi_channel_message"));
-        assert!(note.contains("klodi_report_to_operator"));
+        assert!(note.contains("klodi_escalate_to_user"));
         assert!(note.contains("klodi_tx_confirm"));
         assert!(note.contains("klodi_list_withdraw"));
         // Approval convention — must explain BOTH the prompt shape the
