@@ -121,3 +121,7 @@ toml = { version = "=0.8.19", optional = true }
 [dev-dependencies]
 tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "test-util", "process"] }
 tempfile = "=3.14.0"
+# Mocks `GET /api/sessions` for the `zeroclaw_session::classify_cached_session`
+# tests. Only pulled in under `cargo test`; doesn't affect the published
+# crate or release-binary footprint.
+wiremock = "=0.6.2"

@@ -37,9 +37,12 @@ pub enum SessionHealth {
 
 /// Per-session entry as returned by `/api/sessions`. Mirror of
 /// `dashboard::DashboardSession` but kept local so this module doesn't
-/// depend on the dashboard surface.
+/// depend on the dashboard surface. The gateway returns `session_id`
+/// per the wake-routing redesign §6; `alias = "id"` is a defensive
+/// fallback in case a legacy/test shape sends `id`.
 #[derive(Debug, Deserialize)]
 struct HealthSession {
+    #[serde(rename = "session_id", alias = "id")]
     id: String,
     #[serde(default)]
     message_count: Option<u64>,
@@ -130,5 +133,33 @@ mod tests {
         let s = resurrection_breadcrumb();
         assert!(s.contains("klodi"));
         assert!(s.contains("recreated"));
+    }
+
+    /// Regression: gateway emits `session_id` (not `id`). A silent
+    /// decode failure here would have made `check_session_alive`
+    /// return `Missing` for every live session — causing every
+    /// `verify_or_reroute_destination` to mistake healthy sessions
+    /// for resurrected ones and rebootstrap noise.
+    #[test]
+    fn health_session_decodes_gateway_session_id_field() {
+        let entry = serde_json::json!({
+            "session_id": "abc-123",
+            "created_at": "2026-05-11T08:00:00Z",
+            "last_activity": "2026-05-11T09:00:00Z",
+            "message_count": 7,
+        });
+        let decoded: HealthSession = serde_json::from_value(entry).unwrap();
+        assert_eq!(decoded.id, "abc-123");
+        assert_eq!(decoded.message_count, Some(7));
+    }
+
+    #[test]
+    fn health_session_accepts_legacy_id_alias() {
+        let entry = serde_json::json!({
+            "id": "legacy-uuid",
+            "message_count": 2,
+        });
+        let decoded: HealthSession = serde_json::from_value(entry).unwrap();
+        assert_eq!(decoded.id, "legacy-uuid");
     }
 }

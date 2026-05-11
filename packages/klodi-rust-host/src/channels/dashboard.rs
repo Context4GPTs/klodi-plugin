@@ -123,11 +123,15 @@ pub(crate) struct QueuedNotification {
 
 /// Single-session entry as returned by `GET /api/sessions`. Only the
 /// fields we consult are typed; everything else parses into the
-/// catch-all and gets dropped. The probe report (§8) confirms the
-/// schema is `{id, last_activity, message_count, ...}` and sorted by
-/// `last_activity` descending.
+/// catch-all and gets dropped. Per the wake-routing redesign §6 the
+/// gateway returns `{session_id, created_at, last_activity, message_count}`
+/// sorted by `last_activity` descending — `session_id` is renamed
+/// onto `id` here so the rest of the dashboard channel can keep
+/// using the shorter local name. The `alias = "id"` keeps decode
+/// working against any legacy/test-only shape that still sends `id`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DashboardSession {
+    #[serde(rename = "session_id", alias = "id")]
     pub id: String,
     #[serde(default)]
     pub last_activity: Option<String>,
@@ -1175,6 +1179,55 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ch.name(), "dashboard");
+    }
+
+    /// Regression: the gateway returns `session_id` (not `id`) per the
+    /// wake-routing redesign §6. A naive `id: String` decode silently
+    /// drops every entry, leaves T3 with an empty candidate list, and
+    /// the dashboard never lights up (see
+    /// `docs/reports/2026-05-11-klodi-zeroclaw-0.2.9-operator-fanout-bugs.md`).
+    #[test]
+    fn dashboard_session_decodes_realistic_gateway_response() {
+        let body = serde_json::json!({
+            "sessions": [
+                {
+                    "session_id": "abc-123",
+                    "created_at": "2026-05-11T08:00:00Z",
+                    "last_activity": "2026-05-11T09:00:00Z",
+                    "message_count": 5,
+                },
+                {
+                    "session_id": "def-456",
+                    "created_at": "2026-05-11T07:00:00Z",
+                    "last_activity": "2026-05-11T08:00:00Z",
+                    "message_count": 0,
+                },
+            ]
+        });
+        let entries = body["sessions"].as_array().unwrap();
+        let decoded: Vec<DashboardSession> = entries
+            .iter()
+            .map(|e| serde_json::from_value(e.clone()).expect("decode session"))
+            .collect();
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].id, "abc-123");
+        assert_eq!(decoded[0].message_count, Some(5));
+        assert_eq!(decoded[0].last_activity.as_deref(), Some("2026-05-11T09:00:00Z"));
+        assert_eq!(decoded[1].id, "def-456");
+        assert_eq!(decoded[1].message_count, Some(0));
+    }
+
+    /// The `alias = "id"` keeps decode working against any legacy or
+    /// test-only response shape that still emits `id`.
+    #[test]
+    fn dashboard_session_accepts_legacy_id_alias() {
+        let entry = serde_json::json!({
+            "id": "legacy-uuid",
+            "last_activity": null,
+            "message_count": 1,
+        });
+        let decoded: DashboardSession = serde_json::from_value(entry).unwrap();
+        assert_eq!(decoded.id, "legacy-uuid");
     }
 
     #[test]

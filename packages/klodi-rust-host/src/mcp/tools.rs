@@ -239,8 +239,16 @@ fn build_tool_list() -> Vec<Tool> {
                 },
                 "severity": {
                     "type": "string",
-                    "enum": ["info", "warn", "error"],
-                    "description": "Visual cue for the headline. Default 'info'."
+                    "enum": [
+                        "diagnostic",
+                        "operator",
+                        "operator_important",
+                        "approval_request",
+                        "info",
+                        "warn",
+                        "error"
+                    ],
+                    "description": "Routing level. Use 'operator_important' for state changes the operator should see within minutes (offer accepted, transaction completed); 'operator' for routine activity; 'diagnostic' for daemon health / echo. Legacy aliases: 'info'→operator, 'warn'/'error'→operator_important. Default 'operator'."
                 },
                 "structured": {
                     "type": "object",
@@ -616,6 +624,33 @@ fn render_summary(tool: &str, args: &Value) -> String {
     format!("Tool: `{tool}`\n\nArgs:\n```json\n{pretty}\n```")
 }
 
+/// Map the `severity` string the agent supplies on
+/// `klodi_report_to_operator` to a [`crate::channels::Severity`].
+///
+/// Accepts both the canonical registry names (`diagnostic` /
+/// `operator` / `operator_important` / `approval_request`) and the
+/// legacy `info`/`warn`/`error` aliases the v0.2.x schema advertised.
+/// Unknown strings fall back to [`Severity::Operator`] — same
+/// conservative behaviour as the v0.2.x code path.
+///
+/// **Why the canonical-first match.** A prior version recognised only
+/// `warn`/`error`; every other value (including the canonical
+/// `operator_important`) silently coerced to `Severity::Operator`,
+/// which the registry's dispatch table drops on the dashboard and
+/// upstream channels. Agents following the canonical vocabulary then
+/// looked like they bypassed the operator entirely — see
+/// `docs/reports/2026-05-11-klodi-zeroclaw-0.2.9-operator-fanout-bugs.md`.
+#[cfg(feature = "zeroclaw_session")]
+fn parse_report_severity(severity: &str) -> crate::channels::Severity {
+    crate::channels::Severity::from_str_canonical(severity)
+        .or_else(|| match severity {
+            "warn" | "error" => Some(crate::channels::Severity::OperatorImportant),
+            "info" => Some(crate::channels::Severity::Operator),
+            _ => None,
+        })
+        .unwrap_or(crate::channels::Severity::Operator)
+}
+
 #[cfg(feature = "zeroclaw_session")]
 async fn dispatch_report_to_operator(
     handler: &KlodiMcpHandler,
@@ -648,11 +683,7 @@ async fn dispatch_report_to_operator(
     // When the channel registry is configured, fan the report
     // across every enabled surface. Otherwise preserve the v0.2.x
     // direct-write behaviour against the dedicated klodi session.
-    let chosen_severity = match severity {
-        "warn" => crate::channels::Severity::OperatorImportant,
-        "error" => crate::channels::Severity::OperatorImportant,
-        _ => crate::channels::Severity::Operator,
-    };
+    let chosen_severity = parse_report_severity(severity);
 
     if let Some(registry) = handler.channel_registry() {
         let notification = crate::channels::Notification {
@@ -1070,6 +1101,85 @@ mod tests {
         assert!(props.contains_key("summary"));
         assert!(props.contains_key("severity"));
         assert!(props.contains_key("details"));
+    }
+
+    /// Regression: canonical severity names must coerce to the matching
+    /// [`Severity`] variant so the registry's dispatch table receives
+    /// the level the agent asked for. The prior parser hard-coded only
+    /// `warn`/`error` and silently dropped every canonical name onto
+    /// `Severity::Operator`, which the dashboard and upstream channels
+    /// drop in turn — see
+    /// `docs/reports/2026-05-11-klodi-zeroclaw-0.2.9-operator-fanout-bugs.md`.
+    #[cfg(feature = "zeroclaw_session")]
+    #[test]
+    fn parse_report_severity_recognises_canonical_and_legacy() {
+        use crate::channels::Severity;
+        // Canonical names round-trip verbatim.
+        assert_eq!(parse_report_severity("diagnostic"), Severity::Diagnostic);
+        assert_eq!(parse_report_severity("operator"), Severity::Operator);
+        assert_eq!(
+            parse_report_severity("operator_important"),
+            Severity::OperatorImportant,
+        );
+        assert_eq!(
+            parse_report_severity("approval_request"),
+            Severity::ApprovalRequest,
+        );
+        // Legacy aliases keep the v0.2.x meaning.
+        assert_eq!(parse_report_severity("info"), Severity::Operator);
+        assert_eq!(parse_report_severity("warn"), Severity::OperatorImportant);
+        assert_eq!(parse_report_severity("error"), Severity::OperatorImportant);
+        // Unknown strings — conservative fallback so a malformed
+        // agent call still posts to the dedicated session.
+        assert_eq!(parse_report_severity(""), Severity::Operator);
+        assert_eq!(parse_report_severity("urgent"), Severity::Operator);
+    }
+
+    /// Regression: the severity enum must advertise the canonical names
+    /// the registry recognises, so an agent that wants to reach the
+    /// dashboard can pass `operator_important` directly instead of
+    /// being limited to the legacy `warn`/`error` aliases (which the
+    /// schema's prior `["info","warn","error"]` enum forced).
+    #[cfg(feature = "zeroclaw_session")]
+    #[test]
+    fn report_to_operator_severity_enum_includes_canonical_names() {
+        let tools = build_tool_list();
+        let report_tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == "klodi_report_to_operator")
+            .expect("klodi_report_to_operator listed");
+        let props = report_tool
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .unwrap();
+        let severity_enum = props
+            .get("severity")
+            .and_then(|v| v.get("enum"))
+            .and_then(Value::as_array)
+            .expect("severity property carries an enum");
+        let allowed: Vec<&str> = severity_enum
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        for canonical in [
+            "diagnostic",
+            "operator",
+            "operator_important",
+            "approval_request",
+        ] {
+            assert!(
+                allowed.contains(&canonical),
+                "severity enum must advertise canonical name `{canonical}`; got {allowed:?}",
+            );
+        }
+        // Legacy aliases must remain valid so existing callers don't break.
+        for legacy in ["info", "warn", "error"] {
+            assert!(
+                allowed.contains(&legacy),
+                "severity enum must keep legacy alias `{legacy}` for back-compat; got {allowed:?}",
+            );
+        }
     }
 
     #[test]
