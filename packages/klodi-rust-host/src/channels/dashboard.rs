@@ -1,22 +1,25 @@
 //! `DashboardChannel` — klodi-owned WebSocket transport against the
 //! ZeroClaw dashboard's `/ws/chat` surface.
 //!
-//! Implements I-2a of `docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md`.
 //! The dashboard is the one channel klodi *must* own end-to-end: no
-//! upstream primitive routes into a dashboard session, and every T1-T5
+//! upstream primitive routes into a dashboard session, and every
 //! probe constraint (every write triggers an agent loop, no SSE,
-//! polling-only inbound, silent re-creation on delete) applies.
+//! polling-only inbound, silent re-creation on delete) applies. This
+//! module covers:
 //!
-//! Phase 1 surface (this file):
-//! - `notify()` resolves a destination (T3 heuristic) and writes a
+//! - `notify()` — resolves a destination (T3 active-session heuristic
+//!   for `Recipient::AutoActiveSession`) and writes a
 //!   correlation-tagged payload via `zeroclaw_ws::send_session_message`.
-//! - A simple deque queue holds notifications when no active session is
-//!   resolvable; the inbound-bridge poll (Phase 2) drains it.
+//! - A simple deque queue that holds notifications when no active
+//!   session is resolvable; the inbound-bridge poll drains it.
 //! - The created-sessions ledger (`channels::ledger`) excludes
 //!   klodi-owned sessions from the operator-primary candidate list.
-//!
-//! Phase 2 will add the polling reply bridge via `replies()`. Phase 3
-//! will add stale-session detection.
+//! - `replies()` — a polling bridge against `GET /api/sessions/<id>/messages`
+//!   that classifies user messages into `OperatorReply`s using an
+//!   explicit `/klodi` prefix or a bare-affirmation adjacency window.
+//! - Stale-session detection (T5 silent re-creation) — pre-write
+//!   `GET /api/sessions` check, resurrection breadcrumb, ledger
+//!   update, T3 re-resolve.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -66,7 +69,7 @@ pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(1500);
 /// has its own loop cadence.
 pub const SESSIONS_REST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Adjacency window for the bare-affirmation reply path (plan §I-4).
+/// Adjacency window for the bare-affirmation reply path.
 /// A bare `yes / no / approve / deny / confirm / cancel` reply within
 /// this window of the most recent notification correlates to that
 /// notification.
@@ -180,7 +183,7 @@ struct Inner {
     /// Per-session timestamp of the most recent USER message the
     /// dispatcher has seen. Used by the cursor advance logic to avoid
     /// races where an agent reply lands between operator typing and
-    /// the dispatcher poll (plan §I-4 race-condition note).
+    /// the dispatcher poll (race-condition guard).
     last_user_seen: Mutex<HashMap<String, MessageMark>>,
     /// Poll cadence for the inbound reply bridge.
     poll_interval: Duration,
@@ -529,7 +532,8 @@ impl DashboardChannel {
         self.inner.adjacency.lock().await.len()
     }
 
-    /// I-5: probe `GET /api/sessions` for `session_id`. Returns:
+    /// Stale-session detection: probe `GET /api/sessions` for
+    /// `session_id`. Returns:
     ///
     /// - `Ok(Some(id))` — session is alive (or unknown). `id` may
     ///   differ from input when resurrection-driven re-resolution
@@ -994,7 +998,7 @@ impl OperatorChannel for DashboardChannel {
             }
         };
 
-        // I-5 pre-write check: list-membership AND message_count
+        // Stale-session pre-write check: list-membership AND message_count
         // verification. We picked the session because it had operator
         // activity. If the session is missing or has zero count, it's
         // deletion-in-progress (silent recreation per T5) — log,
@@ -1075,7 +1079,7 @@ impl OperatorChannel for DashboardChannel {
 }
 
 /// Render a [`Notification`] into the dashboard's safe-as-user-input
-/// format. Per plan §I-3a:
+/// format:
 ///
 /// ```text
 /// ── klodi · req=<id> · <event_kind> ──
@@ -1087,9 +1091,6 @@ impl OperatorChannel for DashboardChannel {
 /// The leading `── klodi ·` delimiter is the recognisable visual signal
 /// to the operator's general agent ("system notification, don't try to
 /// handle this"). The trailing `Reply:` line is operator-directed.
-///
-/// Phase 7 hardens this format based on real-use observation; Phase 1
-/// ships the starting shape so the dispatch path is end-to-end testable.
 pub fn render_payload(payload: &Notification, correlation_id: &str) -> String {
     let mut out = String::with_capacity(256);
     out.push_str("── klodi · req=");
@@ -1482,11 +1483,11 @@ mod tests {
         assert!(!matches_bare_vocab("maybe"));
         // `ok maybe later` matches via the bare `ok` token — that's
         // an acknowledged false-positive of the bare-affirmation
-        // approach the plan calls out (open question 1). It only
-        // matters when there's an open notification in the adjacency
-        // window AND `klodi.toml` allows bare-affirmation matching;
-        // the approval gate's stricter `evaluate_retry` then has the
-        // final say.
+        // approach (open question to refine on real-use feedback).
+        // It only matters when there's an open notification in the
+        // adjacency window AND `klodi.toml` allows bare-affirmation
+        // matching; the approval gate's stricter `evaluate_retry`
+        // then has the final say.
         assert!(matches_bare_vocab("ok maybe later"));
         // Multi-word token.
         assert!(matches_bare_vocab("do it"));

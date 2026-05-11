@@ -6,20 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added (`klodi-zeroclaw` 0.3.0)
+### Added (`klodi-zeroclaw` 0.2.9)
 
-> Targets `klodi-zeroclaw 0.3.0`. OpenClaw, the Python adapters
+> Targets `klodi-zeroclaw 0.2.9`. OpenClaw, the Python adapters
 > (klodi-hermes, klodi-nanobot), and the other Rust adapters
 > (klodi-moltis, klodi-ironclaw) are unaffected and not republished
 > at this version.
 
-Implements `docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md` — the operator-visibility follow-up to the wake-routing redesign that shipped in 0.2.6. Notifications and approval prompts now reach every surface the operator might be looking at (dashboard + dedicated klodi session + any operator-configured upstream channels like Telegram/Slack/email).
+The operator-visibility follow-up to the wake-routing changes that shipped in 0.2.6. Notifications and approval prompts now reach every surface the operator might be looking at (dashboard + dedicated klodi session + any operator-configured upstream channels like Telegram/Slack/email).
 
-- **`OperatorChannel` trait + `ChannelRegistry`** in `klodi_rust_host::channels`. Trait mirrors upstream's `(channel_id, recipient, message)` shape so a future host (Hermes, Moltis) can plug new channel types in without touching the dispatch loop. Three implementations land in 0.3.0:
+- **`OperatorChannel` trait + `ChannelRegistry`** in `klodi_rust_host::channels`. Trait mirrors upstream's `(channel_id, recipient, message)` shape so a future host (Hermes, Moltis) can plug new channel types in without touching the dispatch loop. Three implementations land in 0.2.9:
   - `DashboardChannel` — klodi-owned WebSocket transport against `/ws/chat`. Uses the T3 active-session heuristic (most-recent session in `/api/sessions` whose latest message has `role=user` and that isn't in the created-sessions ledger) to find where the operator is currently typing.
   - `DedicatedSessionChannel` — adapter exposing the existing dedicated klodi session as an `OperatorChannel` so registry-driven fan-out treats every surface uniformly.
   - `UpstreamChannel` — delegating wrapper over `zeroclaw channel send <message> --channel-id <id> --recipient <r>`. Klodi does NOT re-implement Telegram/Slack/Discord/etc. clients; upstream's `[reliability]` config owns retry/backoff per medium.
-- **`ChannelInvoker::Shell`** (`klodi_rust_host::channels::invoker`) — the transport `UpstreamChannel` wraps. 0.3.0 shells out to the `zeroclaw` CLI (same dependency as the pairing-helper auto-mint). Future variants (`Library`, `Rest`) land here when upstream exposes a stable Rust or REST surface.
+- **`ChannelInvoker::Shell`** (`klodi_rust_host::channels::invoker`) — the transport `UpstreamChannel` wraps. 0.2.9 shells out to the `zeroclaw` CLI (same dependency as the pairing-helper auto-mint). Future variants (`Library`, `Rest`) land here when upstream exposes a stable Rust or REST surface.
 - **`${KLODI_HOME}/klodi.toml` `[notifications]` block** — operator-side channel wiring. Missing file = defaults (dashboard auto-active-session enabled, dedicated session always-on, no upstream channels). Schema:
   ```toml
   [notifications]
@@ -40,11 +40,11 @@ Implements `docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md` —
   severity_floor = "approval_request"
   ```
   Upstream channel ids are validated against `GET /api/channels` at daemon startup — unknown ids surface as `klodi_zeroclaw_upstream_channel_unknown` warn logs and are skipped (operator runs `zeroclaw onboard channels` to register the channel, then restarts the daemon).
-- **Approval prompts fan out across every enabled channel.** Plugin-gated tools (`klodi_tx_confirm`, `klodi_tx_cancel`, `klodi_list_withdraw`) post the prompt to dashboard + dedicated session + every configured upstream channel. The operator can reply via the dashboard (`/klodi yes:<reqId>` or a bare `yes` within 60s) OR the dedicated klodi session — whichever reply lands first releases the gate. Upstream channels are notification-only in 0.3.0; an operator paged on Telegram must release the gate via dashboard or dedicated session.
+- **Approval prompts fan out across every enabled channel.** Plugin-gated tools (`klodi_tx_confirm`, `klodi_tx_cancel`, `klodi_list_withdraw`) post the prompt to dashboard + dedicated session + every configured upstream channel. The operator can reply via the dashboard (`/klodi yes:<reqId>` or a bare `yes` within 60s) OR the dedicated klodi session — whichever reply lands first releases the gate. Upstream channels are notification-only in 0.2.9; an operator paged on Telegram must release the gate via dashboard or dedicated session.
 - **`/klodi` dashboard reply prefix + bare-affirmation window.** The dashboard channel's polling reply bridge recognises:
   - `/klodi yes:<reqId>` / `/klodi no:<reqId>` — explicit verb + correlation. Both case-insensitive on the `/klodi` prefix.
-  - Bare `yes` / `no` / `approve` / `deny` / `confirm` / `cancel` within 60s of an open notification (open question 1 in the plan — refine on real-use feedback).
-- **`klodi_report_to_operator` routes through the registry** when one is configured. The tool now appears on every enabled surface, not just the dedicated session. Severity → channel mapping per the §I-7 table:
+  - Bare `yes` / `no` / `approve` / `deny` / `confirm` / `cancel` within 60s of an open notification (vocabulary refined via real-use feedback).
+- **`klodi_report_to_operator` routes through the registry** when one is configured. The tool now appears on every enabled surface, not just the dedicated session. Severity → channel mapping:
 
   | Severity | Dashboard | Dedicated session | Upstream |
   |----------|-----------|-------------------|----------|
@@ -57,14 +57,14 @@ Implements `docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md` —
   - `zeroclaw.dispatcher_cursor.json` — per-session last-processed-message index for the dashboard reply bridge. Survives daemon restarts.
   - `zeroclaw.created_sessions` — JSON list of session ids klodi has ever written to. Excluded from T3 candidates so klodi never picks its own session as "where the operator is."
   - `approvals/<request_id>.reply.json` — captured operator reply per approval. Written by the daemon's reply-attribution task; read by the MCP server's approval gate when the agent retries without explicit text.
-- **Severity-driven dispatch with per-channel filters + batching window** (§I-7 + §I-8). Each registered channel has a `severity_floor` and optional `event_filter`. The registry's batching window (default 5s, configurable via `klodi.toml`) drops subsequent notifications of the same `event_kind` within the window for the dashboard + upstream surfaces; `ApprovalRequest` bypasses batching unconditionally; the dedicated klodi session sees everything regardless (severity floor = `diagnostic` by default).
+- **Severity-driven dispatch with per-channel filters + batching window.** Each registered channel has a `severity_floor` and optional `event_filter`. The registry's batching window (default 5s, configurable via `klodi.toml`) drops subsequent notifications of the same `event_kind` within the window for the dashboard + upstream surfaces; `ApprovalRequest` bypasses batching unconditionally; the dedicated klodi session sees everything regardless (severity floor = `diagnostic` by default).
 
-### Changed (`klodi-zeroclaw` 0.3.0)
+### Changed (`klodi-zeroclaw` 0.2.9)
 
 - **`klodi_rust_host::mcp::handler::OperatorChannel` (struct) → `KlodiSessionTarget`** (public API break for out-of-tree consumers of `klodi_rust_host`). The name was reclaimed by the new `klodi_rust_host::channels::OperatorChannel` trait — the renamed struct names what it always was (the dedicated klodi session binding). Internal callers (zeroclaw bin, mcp tools) updated. Out-of-tree consumers should swap `use klodi_rust_host::mcp::OperatorChannel` → `use klodi_rust_host::mcp::KlodiSessionTarget`.
 - **Bootstrap-note copy** now lists the multi-surface model — heartbeat surfaces the count of configured channels; the bootstrap note explains that notifications appear in dashboard + dedicated session + each configured upstream channel.
 
-### Migrating from 0.2.8 to 0.3.0 (klodi-zeroclaw operators only)
+### Migrating from 0.2.8 to 0.2.9 (klodi-zeroclaw operators only)
 
 Drop-in for the default case. The dashboard channel layers on top of the existing dedicated session; default `klodi.toml` is "no file" = sensible defaults.
 
@@ -81,13 +81,13 @@ For operators who want to receive notifications on Telegram / Slack / email / et
    ```
 3. Restart `klodi-zeroclaw-daemon`. The daemon validates the channel id against `GET /api/channels` at startup — typos surface as `klodi_zeroclaw_upstream_channel_unknown` warn logs.
 
-Reply mechanism: the operator can release approval gates from the dashboard (`/klodi yes:<reqId>`) OR the dedicated klodi session (same as v0.2.8 — agent reads the reply inline). Upstream channels are outbound-only in 0.3.0; an operator paged on Telegram must release the gate via dashboard or dedicated session.
+Reply mechanism: the operator can release approval gates from the dashboard (`/klodi yes:<reqId>`) OR the dedicated klodi session (same as v0.2.8 — agent reads the reply inline). Upstream channels are outbound-only in 0.2.9; an operator paged on Telegram must release the gate via dashboard or dedicated session.
 
 ## [0.2.8] — 2026-05-10
 
 **klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.
 
-This release closes the dashboard pairing-friction gap (plan I-9 of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`). Operators on the canonical "cargo install + run daemon" deployment now go from `klodi-zeroclaw-register` straight to a working dashboard with a single ⌘V + Enter, without `docker exec` or hunting for the gateway's startup pairing code in container logs.
+This release closes the dashboard pairing-friction gap. Operators on the canonical "cargo install + run daemon" deployment now go from `klodi-zeroclaw-register` straight to a working dashboard with a single ⌘V + Enter, without `docker exec` or hunting for the gateway's startup pairing code in container logs.
 
 ### Added
 
@@ -98,7 +98,7 @@ This release closes the dashboard pairing-friction gap (plan I-9 of `docs/plans/
   - **Boxed stdout block** at daemon startup with the URL and a freshly-minted code (so even non-interactive deployments see it in logs).
   - **Auto-launch** of the operator's browser at the URL when stdout is a tty (override via `--open-browser={auto,always,never}` / `ZEROCLAW_OPEN_BROWSER`).
 
-  The shim's threat model: loopback bind only (hardcoded 127.0.0.1, never widened by CLI), `Host:` header validation against `127.0.0.1:<port>` / `localhost:<port>` literals (DNS-rebinding defense), `Cache-Control: no-store` + `Referrer-Policy: no-referrer` + `X-Content-Type-Options: nosniff` headers, HTML-safe JSON encoding inside the inline `<script>` (`<` / `>` / `&` rewritten as `\uXXXX` so a hostile dashboard URL can't break out of the script element). Per `docs/SECURITY.md` § Trust model the workstation owner is the trust anchor — local processes running as the operator are inside the boundary, so no PIN / CSRF token is added.
+  The shim's threat model: loopback bind only (hardcoded 127.0.0.1, never widened by CLI), `Host:` header validation against `127.0.0.1:<port>` / `localhost:<port>` literals (DNS-rebinding defense), `Cache-Control: no-store` + `Referrer-Policy: no-referrer` + `X-Content-Type-Options: nosniff` headers, HTML-safe JSON encoding inside the inline `<script>` (`<` / `>` / `&` rewritten as `\uXXXX` so a hostile dashboard URL can't break out of the script element). Per the repo's `SECURITY.md` trust model, the workstation owner is the trust anchor — local processes running as the operator are inside the boundary, so no PIN / CSRF token is added.
 
 - **New CLI flags on `klodi-zeroclaw-daemon`.** All env-var-backed:
   - `--zeroclaw-cli` (`ZEROCLAW_CLI`, default `zeroclaw`) — path to the gateway CLI used by auto-mint and the shim. When unreachable, both auto-disable and the daemon falls back to the 0.2.7 bearer-resolve flow.
@@ -139,7 +139,7 @@ Identical to the migration described in [0.2.6] below. There is no separate 0.2.
 
 **klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.
 
-This release replaces the `/webhook` wake-delivery path with a session-based path against ZeroClaw's `/ws/chat`, gives the operator visible heartbeat + bootstrap context the moment the daemon connects, and adds a plugin-side approval gate for irreversible klodi tools. Implements I-1, I-2, I-4, I-5, I-7, I-8 of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`. I-3 (per-message ack handshake) is documented as a known gap, deferred until wake volume requires it. I-6 (drop the 240s `/webhook` timeout band-aid) is achieved by default; the legacy path is still selectable via `--legacy-webhook`.
+This release replaces the `/webhook` wake-delivery path with a session-based path against ZeroClaw's `/ws/chat`, gives the operator visible heartbeat + bootstrap context the moment the daemon connects, and adds a plugin-side approval gate for irreversible klodi tools. Per-message ack handshake is a known gap (the gateway's `agent_start` frame doesn't carry per-message correlation), deferred until wake volume requires it. The 240s `/webhook` timeout band-aid is dropped by default; the legacy path is still selectable via `--legacy-webhook`.
 
 ### Changed
 
@@ -153,29 +153,29 @@ This release replaces the `/webhook` wake-delivery path with a session-based pat
 
 - **Plugin-authored heartbeat + bootstrap note.** On every daemon connect the operator's session receives a one-line `🟢 klodi daemon connected as @<handle>` heartbeat. On a freshly-minted session the daemon also posts a multi-line bootstrap note covering the wake event kinds, klodi-namespaced tools, and the approval-via-chat convention. Sessions with prior messages skip the bootstrap note so the operator's chat doesn't accumulate identical intros across restarts.
 
-- **`klodi_report_to_operator` MCP tool (I-4).** New tool the agent can call to write a structured note (severity + summary + optional details + optional structured payload) directly into the operator's session. Renders as `ℹ️`/`⚠️`/`🛑` headline + markdown body + fenced JSON block. Available only when `klodi-zeroclaw-mcp` finds both `${KLODI_HOME}/zeroclaw.token` and `${KLODI_HOME}/zeroclaw.session` populated (i.e. the daemon has run at least once).
+- **`klodi_report_to_operator` MCP tool.** New tool the agent can call to write a structured note (severity + summary + optional details + optional structured payload) directly into the operator's session. Renders as `ℹ️`/`⚠️`/`🛑` headline + markdown body + fenced JSON block. Available only when `klodi-zeroclaw-mcp` finds both `${KLODI_HOME}/zeroclaw.token` and `${KLODI_HOME}/zeroclaw.session` populated (i.e. the daemon has run at least once).
 
-- **Approval gate for irreversible klodi tools (I-5).** Hardcoded gated list: `klodi_tx_confirm`, `klodi_tx_cancel`, `klodi_list_withdraw`. First call posts a `🔒 Operator approval needed (request_id: …)` prompt to the operator session, persists pending state under `${KLODI_HOME}/approvals/<request_id>.json` (mode 0600, reaped after 24h), and returns `{ approval_required: true, request_id, instructions }` to the agent. The agent retries with `_klodi_approval_request_id` + `_klodi_approval_operator_text` set to the operator's verbatim chat reply; the plugin matches the args fingerprint, runs an affirmation/denial regex, and either opens the gate or returns a `denied` / `still_pending` response. Pending state is durable across MCP-server crashes.
+- **Approval gate for irreversible klodi tools.** Hardcoded gated list: `klodi_tx_confirm`, `klodi_tx_cancel`, `klodi_list_withdraw`. First call posts a `🔒 Operator approval needed (request_id: …)` prompt to the operator session, persists pending state under `${KLODI_HOME}/approvals/<request_id>.json` (mode 0600, reaped after 24h), and returns `{ approval_required: true, request_id, instructions }` to the agent. The agent retries with `_klodi_approval_request_id` + `_klodi_approval_operator_text` set to the operator's verbatim chat reply; the plugin matches the args fingerprint, runs an affirmation/denial regex, and either opens the gate or returns a `denied` / `still_pending` response. Pending state is durable across MCP-server crashes.
 
   **Scope deliberately narrow.** `klodi_offer_respond`, `klodi_list_update`, and other policy-shaped operations are NOT gated by the plugin — the agent reads the operator's `negotiation_style.md` + on-disk strategy files (`${KLODI_HOME}/{buy,sell}/`) and decides whether to call `klodi_report_to_operator` first. This is a deliberate choice: the plugin is mechanism, not policy; locking a "below-min" or "always-ask" pattern inside the plugin would prevent operators who want different workflows from defining them.
 
 - **`klodi-zeroclaw-mcp` operator-channel binding.** New CLI args `--zeroclaw-ws-url` / `--zeroclaw-http-base` (and matching `ZEROCLAW_WS_URL` / `ZEROCLAW_HTTP_BASE` env vars) override the WS endpoint derived from `--zeroclaw-webhook-url`. Useful when the gateway lives at a non-canonical path.
 
-- **`--adopt-session=<uuid>` operator opt-in (plan §5 I-2 collision case).** New CLI arg / `ZEROCLAW_ADOPT_SESSION` env var on `klodi-zeroclaw-daemon`. Default behaviour is unchanged (always mint a fresh dedicated klodi session); this flag is the explicit opt-in for operators who want klodi activity to land in an existing chat session. The daemon probes the gateway to confirm the id resumes; bails loudly on any failure so typos don't silently re-bootstrap.
+- **`--adopt-session=<uuid>` operator opt-in.** New CLI arg / `ZEROCLAW_ADOPT_SESSION` env var on `klodi-zeroclaw-daemon`. Default behaviour is unchanged (always mint a fresh dedicated klodi session); this flag is the explicit opt-in for operators who want klodi activity to land in an existing chat session. The daemon probes the gateway to confirm the id resumes; bails loudly on any failure so typos don't silently re-bootstrap.
 
-- **Atomic session bootstrap → first-write (plan §4 update).** Combined `bootstrap_session` + first heartbeat write into a single WS lifecycle (`bootstrap_session_with_first_message`) so a freshly-minted session always carries at least one durable user-role message before its WS closes. Closes the empty-session GC window flagged in the updated plan §4 (where the gateway's empty-session retention behaviour was unverified during research).
+- **Atomic session bootstrap → first-write.** Combined `bootstrap_session` + first heartbeat write into a single WS lifecycle (`bootstrap_session_with_first_message`) so a freshly-minted session always carries at least one durable user-role message before its WS closes. Closes the empty-session GC window observed against the gateway, where empty-session retention behaviour was unverified during research.
 
-- **Per-session write serialisation (plan §8.6).** Notifications + channel-message subscribers write into the same operator session from independent forwarder tasks. Added an `Arc<tokio::sync::Mutex<()>>` in `SharedState`, acquired around the full WS connect → send → drain cycle for `BodyShape::ZeroClawSession`, so writes land in NATS-arrival order even if the gateway's `SessionActorQueue` reordering is incomplete. Per-session throughput is bounded by drain time (typically <2s, capped at 180s).
+- **Per-session write serialisation.** Notifications + channel-message subscribers write into the same operator session from independent forwarder tasks. Added an `Arc<tokio::sync::Mutex<()>>` in `SharedState`, acquired around the full WS connect → send → drain cycle for `BodyShape::ZeroClawSession`, so writes land in NATS-arrival order even if the gateway's `SessionActorQueue` reordering is incomplete. Per-session throughput is bounded by drain time (typically <2s, capped at 180s).
 
-- **WS reconnect backoff (plan §9 reconnect-storm risk).** Added a per-session consecutive-failure counter; before each WS send, if prior sends have failed, sleep for an exponential backoff (250ms base, 2× multiplier, capped at 30s) under the per-session mutex. Reset on success. Keeps NATS redeliveries from hammering a flapping gateway with fresh handshakes — JetStream's redelivery cadence already adds spacing across wakes, this caps the *additional* per-failure wait. Reuses `klodi_nats_client::backoff::compute_backoff` for shared math.
+- **WS reconnect backoff.** Added a per-session consecutive-failure counter; before each WS send, if prior sends have failed, sleep for an exponential backoff (250ms base, 2× multiplier, capped at 30s) under the per-session mutex. Reset on success. Keeps NATS redeliveries from hammering a flapping gateway with fresh handshakes — JetStream's redelivery cadence already adds spacing across wakes, this caps the *additional* per-failure wait. Reuses `klodi_nats_client::backoff::compute_backoff` for shared math.
 
 ### Changed (internal)
 
-- **Drain protocol simplification (plan §4 update).** `zeroclaw_ws::send_session_message` now treats `agent_start` as the sole expected post-send ack frame. The `turn_complete` arm is dropped — per the updated plan §4 it was unobserved during live research, and `agent_start` already proves the gateway routed the message into the agent loop. `turn_complete` (and any other future frame) lands in `InboundFrame::Other` and is silently drained.
+- **Drain protocol simplification.** `zeroclaw_ws::send_session_message` now treats `agent_start` as the sole expected post-send ack frame. The `turn_complete` arm is dropped — it was unobserved during live research against the gateway, and `agent_start` already proves the gateway routed the message into the agent loop. `turn_complete` (and any other future frame) lands in `InboundFrame::Other` and is silently drained.
 
 ### Known gaps
 
-- **I-3 — no per-message WS ack.** `agent_start` and `turn_complete` aren't tied to the message that triggered them. For a low-volume marketplace this is fine (the wake count rarely outpaces the agent's serial processing); for high-volume marketplaces the daemon could ack a wake before the agent observes it. Acceptable for now; revisit when measured drop rates demand it.
+- **No per-message WS ack (known gap).** `agent_start` and `turn_complete` aren't tied to the message that triggered them. For a low-volume marketplace this is fine (the wake count rarely outpaces the agent's serial processing); for high-volume marketplaces the daemon could ack a wake before the agent observes it. Acceptable for now; revisit when measured drop rates demand it.
 
 ### Migrating from 0.2.5 to 0.2.6 (klodi-zeroclaw operators only)
 

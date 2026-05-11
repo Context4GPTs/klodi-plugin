@@ -39,7 +39,7 @@ pub struct SessionBinding {
 
 /// Construct a `ChannelRegistry` from `${KLODI_HOME}/klodi.toml` plus
 /// a dedicated klodi-session binding. Validates upstream channel ids
-/// against `GET /api/channels` per plan §I-11 — channels that aren't
+/// against `GET /api/channels` — channels that aren't
 /// registered upstream are dropped with a warn-level log, the daemon
 /// still boots.
 ///

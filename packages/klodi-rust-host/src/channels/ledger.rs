@@ -1,5 +1,6 @@
 //! `${KLODI_HOME}/zeroclaw.created_sessions` — JSON list of session ids
-//! the daemon has ever written to. Implements I-5 of the channels plan.
+//! the daemon has ever written to. Used by the stale-session
+//! detection path.
 //!
 //! The T3 active-session heuristic uses this to skip klodi-owned
 //! sessions (the dedicated klodi session, plus any sessions the

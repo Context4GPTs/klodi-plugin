@@ -1,15 +1,11 @@
-//! Per-event batching window for the channel registry. Implements plan
-//! §I-8.
+//! Per-event batching window for the channel registry.
 //!
 //! Within `window` seconds of a notification with event_kind X firing,
 //! subsequent notifications of the same kind coalesce instead of
 //! dispatching individually. `ApprovalRequest`-severity notifications
-//! bypass batching entirely (per registry code).
-//!
-//! Phase 6 wires this on; Phase 1 / Phase 5 use the
-//! `ChannelRegistry::new` path with batching disabled. The data
-//! structure is small and self-contained so adding it now keeps the
-//! registry code stable when Phase 6 lands.
+//! bypass batching entirely (handled in `registry::ChannelRegistry::notify`).
+//! `ChannelRegistry::new` constructs a registry with batching disabled;
+//! `new_with_batching` wires this on with the configured window.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

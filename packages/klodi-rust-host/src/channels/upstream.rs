@@ -1,5 +1,5 @@
 //! `UpstreamChannel` — delegate-to-upstream wrapper that routes every
-//! notification through `zeroclaw channel send`. Implements plan §I-2b.
+//! notification through `zeroclaw channel send`.
 //!
 //! Klodi does NOT re-implement Telegram/Slack/Discord/etc. clients.
 //! `zeroclaw channel list` enumerates 24 channel ids that
@@ -27,7 +27,7 @@ use super::{Notification, NotificationId, OperatorChannel, Recipient};
 const CHANNELS_REST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// `GET /api/channels` response entry — only the channel id matters
-/// for I-11 validation; other fields drain into the catch-all.
+/// for validation; other fields drain into the catch-all.
 #[derive(Debug, Deserialize)]
 struct ChannelListEntry {
     #[serde(default)]
@@ -51,9 +51,8 @@ impl ChannelListEntry {
 /// channel ids the operator has registered upstream. The daemon uses
 /// this to validate `klodi.toml` `[[notifications.upstream]]` channel
 /// ids — referencing one that isn't on the upstream listing is a typo
-/// or config drift and we surface it as a warn (per plan §I-11 +
-/// risks "Operator's klodi.toml references an upstream channel that
-/// isn't configured").
+/// or config drift and we surface it as a warn so notifications don't
+/// silently drop for that channel.
 pub async fn fetch_configured_channel_ids(
     ws_config: &ZeroClawWsConfig,
 ) -> Result<Vec<String>> {
@@ -170,10 +169,9 @@ impl OperatorChannel for UpstreamChannel {
 }
 
 /// Render a notification for upstream delivery — plain text with the
-/// correlation header per plan §I-3b. Per-channel rendering happens at
-/// the upstream layer (Slack mrkdwn, Telegram MarkdownV2, plain SMS,
-/// voice-call TTS, …); we keep the payload boring so it survives any
-/// medium.
+/// correlation header. Per-channel rendering happens at the upstream
+/// layer (Slack mrkdwn, Telegram MarkdownV2, plain SMS, voice-call
+/// TTS, …); we keep the payload boring so it survives any medium.
 pub fn render_payload(payload: &Notification, correlation_id: &str) -> String {
     let mut out = format!(
         "[klodi req={correlation_id}] {event}: {summary}",

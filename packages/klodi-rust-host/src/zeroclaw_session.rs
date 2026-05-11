@@ -1,7 +1,6 @@
 //! Persisted ZeroClaw operator-session id under `${KLODI_HOME}/zeroclaw.session`.
 //!
-//! Implements I-2 of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`:
-//! the plugin owns one operator session per persona and writes every
+//! The plugin owns one operator session per persona and writes every
 //! wake / report / approval prompt into it.
 //!
 //! Lifecycle:
@@ -34,7 +33,7 @@ pub fn session_path(klodi_home: &Path) -> PathBuf {
 
 /// Outcome of a [`resolve_session_id`] call. Carries whether we minted a
 /// fresh session this boot — the daemon uses this to decide whether to
-/// post the bootstrap note (I-7) or skip it on a steady-state restart.
+/// post the bootstrap note or skip it on a steady-state restart.
 #[derive(Debug, Clone)]
 pub struct ResolvedSession {
     pub session_id: String,
@@ -62,8 +61,8 @@ pub struct ResolvedSession {
 /// - If the file is missing, mints a new session **and atomically
 ///   writes `bootstrap_message` as the session's first user-role
 ///   message** (`freshly_minted: true`). Closes the empty-session GC
-///   window noted in the updated plan §4 — a session with at least one
-///   durable write survives the gateway's cleanup pass.
+///   window observed against the gateway — a session with at least
+///   one durable write survives the gateway's cleanup pass.
 /// - If the file exists but the probe fails in a way that suggests the
 ///   session is gone server-side (any error response from the WS
 ///   handshake/handshake-frame stream), mints a new session via the
@@ -160,8 +159,8 @@ pub async fn resolve_session_id(
 /// bootstrap (that'd defeat the purpose of the explicit adopt).
 ///
 /// Used by the `klodi-zeroclaw-daemon --adopt-session=<uuid>` /
-/// `ZEROCLAW_ADOPT_SESSION=<uuid>` operator opt-in described in plan
-/// §5 I-2 (pre-existing-session collision).
+/// `ZEROCLAW_ADOPT_SESSION=<uuid>` operator opt-in for the
+/// pre-existing-session-collision case.
 pub async fn adopt_session_id(
     klodi_home: &Path,
     cfg: &ZeroClawWsConfig,

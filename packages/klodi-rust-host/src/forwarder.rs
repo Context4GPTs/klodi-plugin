@@ -41,9 +41,9 @@ use std::time::Duration;
 /// daemon startup; the forwarder dispatches on it in [`forward`].
 ///
 /// `Structured` goes to the HTTP wake URL. `ZeroClawSession` is the
-/// I-1 redesign path — the wake is written into the operator's
-/// persisted ZeroClaw session via WebSocket (`/ws/chat?session_id=…`),
-/// bypassing `/webhook` and the 30s `TimeoutLayer` entirely.
+/// The wake is written into the operator's persisted ZeroClaw session
+/// via WebSocket (`/ws/chat?session_id=…`), bypassing `/webhook` and
+/// the 30s `TimeoutLayer` entirely.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyShape {
     /// Structured envelope: `{ channel, kind, event_id, user_id, payload }`.
@@ -223,10 +223,10 @@ struct SharedState {
     /// 4xx/5xx body — including any token the host echoed back.
     logger: KlodiLogger,
     /// Per-session WS write lock. Only meaningful for
-    /// `BodyShape::ZeroClawSession`. Per the updated plan §8.6, two
-    /// independent forwarder tasks (one per NATS consumer) write to
-    /// the same operator session; we acquire this mutex around the
-    /// full WS lifecycle so writes land in NATS-arrival order even if
+    /// `BodyShape::ZeroClawSession`. Two independent forwarder tasks
+    /// (one per NATS consumer) write to the same operator session; we
+    /// acquire this mutex around the full WS lifecycle so writes land
+    /// in NATS-arrival order even if
     /// the gateway's `SessionActorQueue` reordering is incomplete. The
     /// lock is held for the duration of one WS connect → send → drain
     /// cycle (typically <2s on an idle session, up to DRAIN_TIMEOUT in
@@ -241,8 +241,8 @@ struct SharedState {
     /// without this, every NATS redelivery hammers the gateway with a
     /// fresh handshake the moment JetStream's redelivery cadence ticks
     /// (which has its own jitter, but doesn't compound across retries
-    /// when the gateway is genuinely down). Plan §9 risks row:
-    /// "WebSocket reconnect storms after gateway restart".
+    /// when the gateway is genuinely down). Mitigates the
+    /// "WebSocket reconnect storm after gateway restart" risk.
     #[cfg(feature = "zeroclaw_session")]
     zeroclaw_failure_count: Arc<std::sync::atomic::AtomicU32>,
 }
@@ -415,8 +415,8 @@ async fn forward_zeroclaw_session<T: Serialize>(
 
     // Reconnect backoff: if previous WS sends have been failing,
     // sleep before trying this one. This keeps NATS redeliveries
-    // from hammering a gateway that's down or slow to recover (plan
-    // §9 reconnect-storm risk). The lock is held throughout the
+    // from hammering a gateway that's down or slow to recover
+    // (reconnect-storm risk). The lock is held throughout the
     // sleep so other waiters also see the backoff — that's
     // intentional: the failure is per-gateway, not per-message, and
     // parallel retries would just amplify the load.

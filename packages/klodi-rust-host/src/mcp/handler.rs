@@ -31,14 +31,14 @@ pub struct McpConfig {
     /// for the current host. Default: `"klodi-register"`.
     pub register_cli: String,
     /// Dedicated klodi-session binding. Set by the `klodi-zeroclaw-mcp`
-    /// binary so the I-4 (`klodi_report_to_operator`) and I-5 (approval
-    /// gate) tools can write into the persisted dedicated klodi session.
+    /// binary so the `klodi_report_to_operator` tool and the approval
+    /// gate can write into the persisted dedicated klodi session.
     /// Daemon-only adapters leave this `None`; in that case the
     /// operator-channel surface is filtered out of the catalog and the
     /// approval gate is a no-op (the host's own approval mechanism is
     /// responsible).
     ///
-    /// **Renamed from `operator_channel` in 0.3.0** — the new
+    /// **Renamed from `operator_channel` in 0.2.9** — the new
     /// `channels` module owns the operator-channel abstraction. This
     /// field now names the specific surface (the dedicated klodi
     /// session) it always was; the multi-surface fan-out happens
@@ -49,10 +49,9 @@ pub struct McpConfig {
     /// Multi-channel registry used by the approval gate +
     /// `klodi_report_to_operator` to fan a single notification across
     /// every operator-visible surface (dashboard + dedicated klodi
-    /// session + any upstream-delegated channels) per
-    /// `docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md`.
-    /// `None` for daemon-only adapters; daemons that plug a `Some`
-    /// here get full fan-out at the approval-gate path (Phase 5).
+    /// session + any upstream-delegated channels). `None` for
+    /// daemon-only adapters; daemons that plug a `Some` here get full
+    /// fan-out at the approval-gate path.
     #[cfg(feature = "zeroclaw_session")]
     pub channel_registry: Option<crate::channels::ChannelRegistry>,
 }
@@ -62,7 +61,7 @@ pub struct McpConfig {
 /// + the gateway URL on process start. Represents the **dedicated klodi
 /// session** — the agent's reasoning surface + chronicle of record.
 ///
-/// **Renamed from `OperatorChannel` in 0.3.0** to reduce confusion with
+/// **Renamed from `OperatorChannel` in 0.2.9** to reduce confusion with
 /// the new `channels::OperatorChannel` trait. The new trait abstracts
 /// over every operator-visible surface; this struct only knows about
 /// the one dedicated klodi session.

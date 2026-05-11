@@ -27,8 +27,9 @@
 //! - `next_action` — single recommended step the agent / operator should
 //!   take next, or `None` when phase is `Ready`
 //!
-//! Closes P2-7 ("Rust adapter specs admit `klodi_setup_status` doesn't
-//! exist") and `docs/plans/0014-rust-mcp-parity.md` (policy awareness).
+//! Reports policy awareness in addition to creds/config presence so
+//! agents can ask the operator to fill `negotiation_style.md` before
+//! responding to wakes.
 
 use crate::policy_seed;
 use serde::Serialize;
@@ -129,9 +130,9 @@ pub struct SetupStatus {
     /// glance whether the pair-dance has run.
     pub zeroclaw_token_present: bool,
     /// `${KLODI_HOME}/zeroclaw.session` exists with a non-empty body —
-    /// the persisted operator-session UUID the I-2 redesign relies on.
-    /// Same caveat as `zeroclaw_token_present`: always present, only
-    /// meaningful for ZeroClaw.
+    /// the persisted operator-session UUID the WS wake-delivery path
+    /// relies on. Same caveat as `zeroclaw_token_present`: always
+    /// present, only meaningful for ZeroClaw.
     pub zeroclaw_session_present: bool,
     /// Stable issue codes the agent / operator should surface. Order is
     /// significance-first (registration before perms before policy);

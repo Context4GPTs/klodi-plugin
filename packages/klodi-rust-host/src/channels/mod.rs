@@ -1,8 +1,6 @@
 //! Operator-notification channels — multi-surface fan-out for klodi
 //! events.
 //!
-//! This module implements the design in
-//! `docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md`.
 //! The shape is intentionally minimal: a single trait `OperatorChannel`
 //! that every notification target (the dashboard, the dedicated klodi
 //! session, any upstream-delegated channel) implements, plus a
@@ -10,7 +8,7 @@
 //! all configured channels and exposes a unified stream of inbound
 //! `OperatorReply`s back to the agent.
 //!
-//! Why a trait. Three implementations land in 0.3.0 — `DashboardChannel`
+//! Why a trait. Three implementations land in 0.2.9 — `DashboardChannel`
 //! (klodi-owned WS transport against `/ws/chat`), `DedicatedSessionChannel`
 //! (adapter over the persisted klodi session the daemon already owns), and
 //! `UpstreamChannel` (delegating wrapper over `zeroclaw channel send`).
@@ -25,15 +23,6 @@
 //! channels, dashboard-safe markdown with a correlation header for the
 //! dashboard, the existing `klodi_report_to_operator` shape for the
 //! dedicated klodi session).
-//!
-//! Per the plan's phasing: phase 1 lands the trait + registry +
-//! `DashboardChannel` notify path. Phase 2 wires the polling reply
-//! bridge into the dashboard's `replies()` stream. Phase 3 layers
-//! stale-session detection onto the dashboard channel. Phase 4 adds
-//! `UpstreamChannel` + `ChannelInvoker`. Phase 5 re-routes the
-//! approval gate through `ChannelRegistry::notify`. Phase 6 layers
-//! severity gates + batching. Phase 7 hardens the notification
-//! format.
 
 use std::pin::Pin;
 
@@ -145,7 +134,7 @@ pub enum Recipient {
 pub struct Notification {
     /// Free-form event identifier — `offer.accepted`,
     /// `transaction.completed`, `klodi_tx_confirm.approval`, …
-    /// Used for per-channel event filtering (I-7) and for the
+    /// Used for per-channel event filtering and for the
     /// correlation header in the rendered payload.
     pub event_kind: String,
     /// One-line headline operator sees first. Plain text — channel-side
@@ -153,7 +142,7 @@ pub struct Notification {
     pub summary: String,
     /// Optional multi-line body.
     pub details: Option<String>,
-    /// Severity for the dispatch gates (I-7).
+    /// Severity for the dispatch gates.
     pub severity: Severity,
     /// Optional structured payload (JSON tree) — rendered into a fenced
     /// JSON block by impls that support it (DashboardChannel,
@@ -176,7 +165,7 @@ pub struct Notification {
 /// notifications this is the `req=` token the operator sees in the
 /// rendered headline. Upstream channels return the same value so the
 /// caller can match approval replies (Phase 4 won't accept replies on
-/// upstream channels in 0.3.0 — outbound only — but the token is
+/// upstream channels in 0.2.9 — outbound only — but the token is
 /// preserved end-to-end so the operator's eye can scan for it across
 /// surfaces).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,7 +227,7 @@ pub trait OperatorChannel: Send + Sync {
     ) -> Result<NotificationId>;
 
     /// Stream of inbound operator replies. The default returns an empty
-    /// stream — outbound-only channels (`UpstreamChannel` in 0.3.0)
+    /// stream — outbound-only channels (`UpstreamChannel` in 0.2.9)
     /// don't need to override. The dashboard channel overrides with its
     /// polling bridge in Phase 2.
     fn replies(&self) -> Pin<Box<dyn Stream<Item = OperatorReply> + Send + 'static>> {
@@ -247,7 +236,7 @@ pub trait OperatorChannel: Send + Sync {
 }
 
 /// Map a "wake kind" string (`listing.created`, `offer.accepted`, …)
-/// to its default [`Severity`] per plan §I-7 table. Daemon uses this on
+/// to its default [`Severity`]. Daemon uses this on
 /// the forwarder path so wake events get a sensible default that
 /// `klodi.toml` can override.
 pub fn default_severity_for_event(event_kind: &str) -> Severity {
@@ -276,8 +265,8 @@ pub fn default_severity_for_event(event_kind: &str) -> Severity {
         | "listing.matched"
         | "listing.updated" => Severity::Operator,
         // Echoes, health, daemon-internal — keep them quiet on the
-        // dashboard. The dedicated klodi session still sees everything
-        // per plan §I-7.
+        // dashboard. The dedicated klodi session still sees
+        // everything (severity floor = diagnostic by default).
         "channel.message" => Severity::Diagnostic,
         _ => Severity::Operator,
     }

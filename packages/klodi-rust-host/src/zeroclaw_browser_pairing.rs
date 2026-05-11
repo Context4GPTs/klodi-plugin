@@ -2,13 +2,13 @@
 //!
 //! ZeroClaw's gateway prints a single one-time pairing code to its
 //! stdout at boot. The klodi daemon consumes that code (`POST /pair`
-//! with `X-Pairing-Code:`) to mint its own `zc_<hex>` bearer — used as
-//! `Authorization: Bearer` on the `WS /ws/chat` wake path (since 0.2.6
-//! / plan I-1). That single boot-time code is consumed by the daemon,
-//! leaving the operator's browser without a code to enter at the
-//! dashboard's "PAIRING REQUIRED" prompt. This module mints a *second*
-//! pairing code on demand by invoking the gateway's existing
-//! `zeroclaw gateway get-paircode --new` CLI.
+//! with `X-Pairing-Code:`) to mint its own `zc_<hex>` bearer — used
+//! as `Authorization: Bearer` on the `WS /ws/chat` wake path (the
+//! delivery path adopted in 0.2.6). That single boot-time code is
+//! consumed by the daemon, leaving the operator's browser without a
+//! code to enter at the dashboard's "PAIRING REQUIRED" prompt. This
+//! module mints a *second* pairing code on demand by invoking the
+//! gateway's existing `zeroclaw gateway get-paircode --new` CLI.
 //!
 //! The minter is shared by two consumers in the daemon:
 //!
@@ -19,9 +19,6 @@
 //! 2. [`crate::zeroclaw_pairing_shim`] — the loopback HTTP server hits
 //!    this minter on every page render so the code displayed in the
 //!    operator's browser is always fresh (codes expire ~60s).
-//!
-//! Implements I-9 of
-//! `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`.
 
 use std::path::PathBuf;
 use std::process::ExitStatus;

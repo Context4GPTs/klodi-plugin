@@ -1,12 +1,11 @@
 //! Plugin-authored bootstrap + heartbeat notes for the operator session.
 //!
-//! Implements I-7 + I-8 of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`.
 //! These are the strings the daemon writes into the operator's ZeroClaw
 //! session at startup so:
 //!
-//! - The operator can tell the daemon is alive (I-8 — "klodi daemon
+//! - The operator can tell the daemon is alive ("klodi daemon
 //!   connected as @… NATS: …").
-//! - The agent has a baseline of plugin-bundled context (I-7 — handle,
+//! - The agent has a baseline of plugin-bundled context (handle,
 //!   user_id, wake event kinds, klodi-namespaced tools, the
 //!   approval-via-chat convention) without the operator having to author
 //!   any policy file.
@@ -28,13 +27,12 @@ pub struct BootstrapInputs<'a> {
     /// disabled (`--no-browser-pair-shim`) or failed to bind. When
     /// present, the heartbeat surfaces it so an operator who hasn't yet
     /// paired their browser has a clickable affordance in the chat.
-    /// Per plan I-9.
     pub browser_pair_url: Option<&'a str>,
     /// Channel names registered for fan-out — `["dashboard",
     /// "dedicated_session", "upstream:telegram", …]`. Surfaced in the
-    /// bootstrap note (plan §I-9 multi-surface copy) so the operator
-    /// sees every surface klodi might page them on. Empty list =
-    /// v0.2.x single-surface behaviour.
+    /// bootstrap note's multi-surface copy so the operator sees every
+    /// surface klodi might page them on. Empty list = single-surface
+    /// behaviour (dedicated klodi session only).
     pub channel_names: &'a [String],
 }
 
@@ -80,7 +78,7 @@ pub fn bootstrap_note(inputs: &BootstrapInputs<'_>) -> String {
          with chat at any time, or approve / deny gated actions when it asks you to.\n\n",
     );
 
-    // I-9: multi-surface model. List the other surfaces klodi is
+    // Multi-surface model: list the other surfaces klodi is
     // configured to page the operator on, so the operator never has
     // to wonder "where will klodi find me?"
     let other_surfaces: Vec<&String> = inputs
@@ -106,7 +104,7 @@ pub fn bootstrap_note(inputs: &BootstrapInputs<'_>) -> String {
             "\nReply with `/klodi yes:<reqId>` in the dashboard, or just type your answer \
              in this session. Approvals released on either surface release the gate — the \
              first matching reply wins. Upstream channels (Telegram/Slack/etc.) are \
-             notification-only in 0.3.0; release approvals via dashboard or this session.\n\n",
+             notification-only in 0.2.9; release approvals via dashboard or this session.\n\n",
         );
     }
 
@@ -244,8 +242,8 @@ mod tests {
     fn bootstrap_note_marks_gated_tools_explicitly() {
         // Agents reading the note rely on the "gated" annotation to know
         // which tools will trigger an approval prompt. Removing the
-        // marker silently would re-introduce the misalignment risk
-        // I-5 is meant to close.
+        // marker silently would re-introduce the misalignment risk the
+        // approval gate is meant to close.
         let note = bootstrap_note(&fixture());
         assert!(note.contains("gated"), "must mention gated tools: {note}");
         // Every plugin-gated tool must appear in the same hardcoded
@@ -282,7 +280,7 @@ mod tests {
 
     #[test]
     fn bootstrap_note_lists_dashboard_and_upstream_surfaces() {
-        // I-9 multi-surface model: when channels include dashboard +
+        // Multi-surface model: when channels include dashboard +
         // upstream:telegram, the note explains where else klodi will
         // page the operator.
         let names = vec![
@@ -294,7 +292,7 @@ mod tests {
             handle: "alice",
             user_id: "u_alice_123",
             nats_url: "wss://nats.klodi.4gpts.com:4222",
-            daemon_version: "0.3.0",
+            daemon_version: "0.2.9",
             browser_pair_url: None,
             channel_names: &names,
         };
@@ -317,7 +315,7 @@ mod tests {
             handle: "alice",
             user_id: "u_alice_123",
             nats_url: "wss://nats.klodi.4gpts.com:4222",
-            daemon_version: "0.3.0",
+            daemon_version: "0.2.9",
             browser_pair_url: None,
             channel_names: &names,
         };

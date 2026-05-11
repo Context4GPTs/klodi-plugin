@@ -1,6 +1,5 @@
-//! Session-health probe for the silent-recreation case (T5).
+//! Session-health probe for the silent-recreation case.
 //!
-//! Implements plan §I-5. The probe report documents that
 //! `WS /ws/chat?session_id=<id>` against a deleted id silently
 //! re-creates the session with the same id and fresh history — no HTTP
 //! 404 surfaces. The mitigation is: before writing, check

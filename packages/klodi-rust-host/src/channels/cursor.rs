@@ -1,6 +1,6 @@
 //! `${KLODI_HOME}/zeroclaw.dispatcher_cursor.json` — last-processed
 //! message index per dashboard session. Implements the persistence
-//! half of plan §I-4.
+//! half of the dashboard reply bridge.
 //!
 //! The Phase 2 reply bridge polls `/api/sessions/<id>/messages` past
 //! the per-session cursor at a 1.5s cadence, advancing the cursor for

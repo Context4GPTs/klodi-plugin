@@ -1,20 +1,19 @@
 //! `klodi-zeroclaw-daemon` — long-running NATS-native wake forwarder
 //! for ZeroClaw.
 //!
-//! Per **D § D8** the daemon body lives in `klodi_rust_host::forwarder`;
-//! this binary binds CLI / env, resolves the bearer + operator session,
-//! posts the plugin-authored heartbeat + bootstrap note (I-7 / I-8 of
-//! `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`), and
-//! then hands a [`ForwarderConfig`] with `BodyShape::ZeroClawSession`
-//! (I-1) to the shared runner so wakes write into the operator's
-//! ZeroClaw session via `/ws/chat`. The pre-0.2.6 `POST /webhook`
-//! delivery path was removed in 0.2.8 — every supported ZeroClaw build
-//! (≥ 0.7.4) exposes `/ws/chat`, and the legacy synchronous-prompt
-//! path was unusable on real klodi turns (30s gateway timeout vs. 60s+
-//! agent turns).
+//! The daemon body lives in `klodi_rust_host::forwarder`; this binary
+//! binds CLI / env, resolves the bearer + operator session, posts the
+//! plugin-authored heartbeat + bootstrap note, and then hands a
+//! [`ForwarderConfig`] with `BodyShape::ZeroClawSession` to the shared
+//! runner so wakes write into the operator's ZeroClaw session via
+//! `/ws/chat`. The pre-0.2.6 `POST /webhook` delivery path was
+//! removed in 0.2.8 — every supported ZeroClaw build (≥ 0.7.4)
+//! exposes `/ws/chat`, and the legacy synchronous-prompt path was
+//! unusable on real klodi turns (30s gateway timeout vs. 60s+ agent
+//! turns).
 //!
-//! Bearer pairing flow as of 0.2.8 (plan I-9): when no explicit env
-//! token, no cached `${KLODI_HOME}/zeroclaw.token`, and no sidecar
+//! Bearer pairing flow (as of 0.2.8): when no explicit env token, no
+//! cached `${KLODI_HOME}/zeroclaw.token`, and no sidecar
 //! `${KLODI_HOME}/zeroclaw.pairing-code` exist, the daemon auto-mints
 //! its own pairing code via the gateway's
 //! `zeroclaw gateway get-paircode --new` CLI and pairs itself —
@@ -27,6 +26,10 @@
 //! shim hands the operator a fresh pairing code on every page hit,
 //! pre-copies it to clipboard, and redirects to the dashboard — so
 //! the dashboard's "PAIRING REQUIRED" prompt is a single ⌘V + Enter.
+//!
+//! 0.2.9 adds the channel registry (built before bootstrap-note post)
+//! and the reply-attribution task that captures dashboard replies for
+//! the MCP server's approval gate.
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -126,11 +129,10 @@ struct Cli {
     #[arg(long, env = "ZEROCLAW_HEALTH_PORT")]
     health_port: Option<u16>,
     /// Adopt an existing ZeroClaw session id for klodi instead of
-    /// minting a new one. Per plan §5 I-2, the default is to always
-    /// create a new dedicated session (operators with a pre-existing
-    /// chat keep both unmixed); this flag is the explicit opt-in when
-    /// the operator wants their klodi activity to land in an existing
-    /// session.
+    /// minting a new one. The default is to always create a new
+    /// dedicated session (operators with a pre-existing chat keep both
+    /// unmixed); this flag is the explicit opt-in when the operator
+    /// wants their klodi activity to land in an existing session.
     ///
     /// The daemon probes the gateway to confirm the id resumes
     /// successfully, then persists it to `${KLODI_HOME}/zeroclaw.session`
@@ -140,7 +142,7 @@ struct Cli {
     #[arg(long, env = "ZEROCLAW_ADOPT_SESSION")]
     adopt_session: Option<String>,
     /// Path to the `zeroclaw` CLI used to mint a fresh pairing code on
-    /// demand (per plan I-9). Default `"zeroclaw"`, resolved on PATH.
+    /// demand. Default `"zeroclaw"`, resolved on PATH.
     /// Override when the gateway lives at a non-canonical path or when
     /// the daemon runs on a different host. If the binary is not
     /// reachable, the daemon falls back to the env / cached token /
@@ -345,7 +347,7 @@ async fn main() -> Result<()> {
     );
 
     // Channel-registry build comes BEFORE the bootstrap-note post so
-    // the §I-9 multi-surface copy can list every surface klodi will
+    // the multi-surface copy can list every surface klodi will
     // page the operator on.
     let registry_outcome = match build_channel_registry(
         &klodi_home,
@@ -422,7 +424,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    // I-6: hand the same registry to the reply-attribution task so
+    // Hand the same registry to the reply-attribution task so
     // dashboard replies land in `${KLODI_HOME}/approvals/<rid>.reply.json`
     // for the MCP server's approval gate. Failures are non-fatal —
     // the dedicated klodi session path keeps working without the
@@ -459,7 +461,7 @@ async fn main() -> Result<()> {
     .context("running klodi-zeroclaw-daemon")
 }
 
-/// I-6 reply attribution loop. Subscribes to `registry.replies()` —
+/// Reply attribution loop. Subscribes to `registry.replies()` —
 /// emitted by `DashboardChannel`'s polling bridge — and persists each
 /// matched reply to `${KLODI_HOME}/approvals/<rid>.reply.json` so a
 /// freshly-spawned MCP server's approval gate can pick it up on the
@@ -627,8 +629,8 @@ async fn post_startup_notes(
 
 /// Pair-bootstrap helpers — derive the `/pair` URL, consume a sidecar
 /// pairing-code, cache the minted bearer, fall back to the cache, and
-/// (since 0.2.8 / plan I-9) auto-mint via the gateway CLI as a final
-/// fallback so first-boot is zero-touch.
+/// (since 0.2.8) auto-mint via the gateway CLI as a final fallback so
+/// first-boot is zero-touch.
 mod pair {
     use anyhow::{Context, Result, bail};
     use klodi_nats_client::klodi_secret_write;
@@ -750,11 +752,11 @@ mod pair {
             return Ok(token);
         }
 
-        // 4. Auto-mint via the gateway CLI when nothing else is set
-        // (plan I-9). First-boot convenience — operators on the
-        // canonical deployment no longer need to find the gateway's
-        // startup pairing code and write it to disk. A failure here
-        // falls through to the bail message so the operator still gets
+        // 4. Auto-mint via the gateway CLI when nothing else is set.
+        // First-boot convenience — operators on the canonical
+        // deployment no longer need to find the gateway's startup
+        // pairing code and write it to disk. A failure here falls
+        // through to the bail message so the operator still gets
         // the actionable hint about ZEROCLAW_AGENT_TOKEN / the sidecar
         // file.
         if let Some(m) = minter {

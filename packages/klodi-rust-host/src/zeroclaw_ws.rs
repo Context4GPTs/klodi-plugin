@@ -1,6 +1,6 @@
 //! Minimal WebSocket client for the ZeroClaw `/ws/chat` surface.
 //!
-//! Per **§4** of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`:
+//! Gateway contract (observed against ZeroClaw ≥ 0.7.4):
 //!
 //! - `WS /ws/chat` with no `session_id` query → server emits a
 //!   `session_start` frame with a fresh UUID. Used to bootstrap a session.
@@ -13,7 +13,7 @@
 //!   not apply here — frame writes return as soon as the gateway
 //!   acknowledges the WS message, independent of how long the agent
 //!   takes to reason about it. This is the architectural primitive that
-//!   I-1 of the redesign relies on.
+//!   the wake-delivery path relies on.
 //!
 //! Connection lifecycle in this module is **short-lived**: every public
 //! function opens its own connection, performs one round-trip, and closes.
@@ -93,7 +93,7 @@ fn http_base_to_ws(http_base: &str, ws_path: &str) -> Result<String> {
 /// subset this client cares about; everything else parses into `Other`
 /// so unknown server-side additions don't break us.
 ///
-/// Per the updated plan §4 (2026-05-10): only `session_start`,
+/// Observed against the gateway (2026-05-10): only `session_start`,
 /// `agent_start`, and `error` were observed during research. A
 /// `turn_complete` frame is referenced in upstream source but was not
 /// captured during the live probe — we deliberately don't depend on it.
@@ -103,7 +103,7 @@ pub enum InboundFrame {
     /// Sent immediately after a successful WS upgrade. Carries the
     /// session UUID (whether freshly minted or resumed).
     ///
-    /// Per the updated plan §4: `resumed` is `true` only when the
+    /// Observed against the gateway: `resumed` is `true` only when the
     /// resumed session has `message_count > 0`. Empty (zero-message)
     /// sessions resume with `resumed: false` despite the id matching.
     /// Treat the echoed `session_id` as the source of truth for "did
@@ -116,9 +116,10 @@ pub enum InboundFrame {
         message_count: Option<u64>,
     },
     /// Per-frame agent-loop signal that *some* turn started. Not
-    /// necessarily *our* turn — see I-3 in the redesign plan; this
-    /// client treats it as a "your message landed and processing has
-    /// begun" hint, sufficient for forwarder ack semantics. The
+    /// necessarily *our* turn — the gateway doesn't carry a
+    /// per-message ack today (known gap); this client treats it as a
+    /// "your message landed and processing has begun" hint, sufficient
+    /// for forwarder ack semantics. The
     /// gateway carries `provider` + `model` here; we drain them as
     /// `Other` fields rather than parse since they're only useful for
     /// human debugging.
@@ -175,7 +176,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Deadline for waiting on a post-send acknowledgement frame
-/// (`agent_start`). Per the updated plan §4 the gateway emits this as
+/// (`agent_start`). Observed against the gateway the gateway emits this as
 /// soon as the agent loop picks our message up, so on an idle session
 /// it lands within a second; on a busy session it lands after the
 /// in-flight turn finishes (30–90s typical, 60s+ for agentic wakes per
@@ -188,8 +189,8 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// session even if the agent loop hasn't visibly picked it up yet.
 ///
 /// We deliberately do NOT depend on `turn_complete` (the "turn ended
-/// cleanly" frame): per the updated plan §4 it was unobserved during
-/// research, and `agent_start` already proves the gateway routed the
+/// cleanly" frame): it was unobserved during research against the
+/// gateway, and `agent_start` already proves the gateway routed the
 /// message into the loop.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -203,7 +204,7 @@ const SESSION_START_TIMEOUT: Duration = Duration::from_secs(15);
 /// session id the gateway minted. Closes the connection cleanly before
 /// returning.
 ///
-/// **Caution.** Per the updated plan §4, ZeroClaw's empty-session GC
+/// **Caution.** Observed against the gateway, ZeroClaw's empty-session GC
 /// behaviour is unverified — a session created and then immediately
 /// closed without any user-role messages may or may not survive the
 /// gateway's next cleanup pass. Prefer
@@ -225,7 +226,8 @@ pub async fn bootstrap_session(cfg: &ZeroClawWsConfig) -> Result<SessionOutcome>
 /// Atomic "create a session AND write its first message in one
 /// connection." Used by the daemon's startup path so a freshly-minted
 /// session always carries at least the heartbeat before the WS closes
-/// — closing the empty-session GC window noted in the updated plan §4.
+/// — closing the empty-session GC window the gateway has been
+/// observed to apply to zero-message sessions.
 ///
 /// Behaviour:
 /// 1. Open WS without `session_id` → wait for `session_start`.
@@ -258,11 +260,11 @@ pub async fn bootstrap_session_with_first_message(
 /// failure.
 ///
 /// The forwarder treats a `Ok(())` return as "wake delivered, ack the
-/// NATS message". Per I-3 in the redesign, this isn't a per-message
-/// correlation guarantee — multiple wakes arriving in quick succession
-/// share the agent's serial processing and the gateway doesn't carry a
-/// per-message ack today. Acceptable for the demo / low-volume case;
-/// the README documents the gap.
+/// NATS message". This isn't a per-message correlation guarantee —
+/// multiple wakes arriving in quick succession share the agent's
+/// serial processing and the gateway doesn't carry a per-message ack
+/// today. Acceptable for the demo / low-volume case; the README
+/// documents the gap.
 pub async fn send_session_message(
     cfg: &ZeroClawWsConfig,
     session_id: &str,
@@ -589,7 +591,7 @@ mod tests {
 
     #[test]
     fn parse_inbound_error_picks_up_component_when_present() {
-        // Per the updated plan §4, error frames now carry an optional
+        // Observed against the gateway, error frames now carry an optional
         // `component` field on top of `code` + `message`.
         let txt = r#"{"type":"error","code":"BAD","message":"nope","component":"llm"}"#;
         match parse_inbound(txt) {
@@ -602,7 +604,7 @@ mod tests {
 
     #[test]
     fn parse_inbound_turn_complete_falls_through_to_other() {
-        // Per the updated plan §4, turn_complete was unobserved during
+        // Observed against the gateway, turn_complete was unobserved during
         // research. We deliberately don't have a typed variant for it
         // — it lands in Other and the drain logic ignores it. Encoding
         // that as a regression check.

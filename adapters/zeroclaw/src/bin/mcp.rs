@@ -4,19 +4,19 @@
 //! ZeroClaw spawns one subprocess per agent session per its
 //! `[[mcp.servers]]` config; the body lives in `klodi_rust_host::mcp`.
 //!
-//! 0.2.6 (rev 0.3.0): when `${KLODI_HOME}/zeroclaw.{token,session}` are
-//! present, the binary plugs a `KlodiSessionTarget` into `McpConfig`
-//! so the `klodi_report_to_operator` tool (I-4) and the
-//! irreversible-tool approval gate (I-5) can write into the persisted
-//! dedicated klodi session via WebSocket. 0.3.0 additionally builds a
-//! `ChannelRegistry` from `${KLODI_HOME}/klodi.toml`'s
-//! `[notifications]` block so the approval gate fans the prompt out
-//! across every configured surface (dashboard, dedicated session,
-//! upstream channels). When either on-disk file is missing the binary
-//! still starts cleanly — those features simply degrade
-//! (`klodi_report_to_operator` returns an actionable error if called;
-//! gated tools fall through without the gate; the registry stays
-//! `None` and the tools see a single-target path).
+//! When `${KLODI_HOME}/zeroclaw.{token,session}` are present (added in
+//! 0.2.6), the binary plugs a `KlodiSessionTarget` into `McpConfig`
+//! so `klodi_report_to_operator` and the irreversible-tool approval
+//! gate can write into the persisted dedicated klodi session via
+//! WebSocket. 0.2.9 additionally builds a `ChannelRegistry` from
+//! `${KLODI_HOME}/klodi.toml`'s `[notifications]` block so the
+//! approval gate fans the prompt out across every configured surface
+//! (dashboard, dedicated session, upstream channels). When either
+//! on-disk file is missing the binary still starts cleanly — those
+//! features simply degrade (`klodi_report_to_operator` returns an
+//! actionable error if called; gated tools fall through without the
+//! gate; the registry stays `None` and the tools see a single-target
+//! path).
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;

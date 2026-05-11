@@ -1,7 +1,7 @@
 //! `ChannelInvoker` — abstraction over the transport that talks to
-//! upstream channels. Implements plan §I-2c.
+//! upstream channels.
 //!
-//! In 0.3.0 the only variant is `Shell`, which spawns
+//! In 0.2.9 the only variant is `Shell`, which spawns
 //! `zeroclaw channel send <message> --channel-id <id> --recipient <r>`.
 //! Long-term, when upstream exposes a library or REST surface, new
 //! variants land here without touching `UpstreamChannel`.
@@ -32,7 +32,7 @@ pub const DEFAULT_CLI: &str = "zeroclaw";
 /// Enum (not trait) because the variant set is closed and small. A
 /// future `Library` variant lands here without touching call sites.
 pub enum ChannelInvoker {
-    /// Shell out to `zeroclaw channel send`. The 0.3.0 default.
+    /// Shell out to `zeroclaw channel send`. The 0.2.9 default.
     Shell {
         /// Path of the `zeroclaw` CLI. Defaults to `"zeroclaw"`
         /// resolved through `PATH`.

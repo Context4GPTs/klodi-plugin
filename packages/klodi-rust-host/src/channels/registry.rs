@@ -1,11 +1,12 @@
 //! `ChannelRegistry` — fans an outbound notification across every
 //! registered channel and exposes a unified inbound `OperatorReply`
-//! stream. Implements the dispatch half of plan §I-1 + §I-7.
+//! stream.
 //!
 //! Channel registration carries a `severity_floor` and an optional
-//! `event_filter` per plan §I-7. The registry drops notifications that
-//! don't clear a channel's gates before invoking `notify()`. Phase 6
-//! adds the batching window (5s) on top.
+//! `event_filter`. The registry drops notifications that don't clear
+//! a channel's gates before invoking `notify()`. A 5s default batching
+//! window coalesces same-event-kind bursts (configurable via
+//! `klodi.toml`).
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -77,7 +78,7 @@ impl ChannelRegistry {
 
     /// Construct with batching enabled. `window` controls the per-event
     /// coalesce window; `ApprovalRequest`-severity notifications
-    /// bypass batching per plan §I-8.
+    /// bypass batching.
     pub fn new_with_batching(
         channels: Vec<RegisteredChannel>,
         window: Duration,
@@ -120,7 +121,7 @@ impl ChannelRegistry {
         // floor when the caller left severity unset by convention
         // (default-Operator). This keeps wake-forwarder callers from
         // having to spell out severity on every wake — they get
-        // sensible defaults per plan §I-7.
+        // sensible defaults from `default_severity_for_event`.
         if notif.severity == Severity::Operator {
             notif.severity = default_severity_for_event(&notif.event_kind);
         }
@@ -483,9 +484,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn registry_plan_severity_matrix_locks_defaults() {
-        // Lock the §I-7 default-dispatch table against accidental drift.
-        // The matrix the plan calls out:
+    async fn registry_severity_matrix_locks_defaults() {
+        // Lock the default-dispatch table against accidental drift:
         //
         // | Severity          | Dashboard | Dedicated  | Upstream |
         // | ApprovalRequest   | dispatch  | dispatch   | dispatch |

@@ -2,7 +2,8 @@
 //! codes on demand and renders an HTML page that pre-populates the
 //! operator's clipboard, then redirects to the dashboard.
 //!
-//! Implements the operator-facing half of plan I-9. The minter
+//! Implements the operator-facing half of the browser-pairing flow.
+//! The minter
 //! ([`crate::zeroclaw_browser_pairing`]) is the data-side half; this
 //! module is the loopback HTTP wrapper around it.
 //!
@@ -20,10 +21,10 @@
 //!   `127.0.0.1:<port>` / `localhost:<port>` literals only; anything
 //!   else (e.g. a malicious site whose A-record was rebound to
 //!   127.0.0.1) gets a 421 with no mint side-effect.
-//! - **No PIN / CSRF token.** Per the workstation-trust-anchor model
-//!   (`docs/SECURITY.md`, `docs/THREAT_MODEL.md`), local processes
-//!   running as the operator are inside the trust boundary. Pairing
-//!   codes are short-lived (≈60s) and single-use; leakage is bounded.
+//! - **No PIN / CSRF token.** Per the workstation-trust-anchor model,
+//!   local processes running as the operator are inside the trust
+//!   boundary. Pairing codes are short-lived (≈60s) and single-use;
+//!   leakage is bounded.
 //!
 //! ## What the rendered page does
 //!

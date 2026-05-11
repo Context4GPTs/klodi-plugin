@@ -105,13 +105,13 @@ If you'd rather control pairing yourself — for instance, when the daemon runs 
 - **Sidecar pairing-code file.** Drop the gateway's one-time pairing code (printed to its stdout) into `${KLODI_HOME}/zeroclaw.pairing-code` and start the daemon. The daemon POSTs `/pair`, caches the bearer at `${KLODI_HOME}/zeroclaw.token` (mode 0600), and consumes the code file. This path always wins over the cache + auto-mint, so refreshing the file rotates the bearer.
 - **Pre-paired bearer.** Call `POST /pair` yourself and export the resulting `zc_<hex>` token as `ZEROCLAW_AGENT_TOKEN`.
 
-### Operator visibility + approval (0.3.0 multi-surface)
+### Operator visibility + approval (0.2.9 multi-surface)
 
-As of 0.3.0 (`docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md`), notifications and approval prompts reach the operator wherever they're looking — not just the dedicated klodi session. Three surfaces are wired by default; upstream channels (Telegram, Slack, email, …) opt in via `${KLODI_HOME}/klodi.toml`.
+As of 0.2.9, notifications and approval prompts reach the operator wherever they're looking — not just the dedicated klodi session. Three surfaces are wired by default; upstream channels (Telegram, Slack, email, …) opt in via `${KLODI_HOME}/klodi.toml`.
 
 - **Dedicated klodi session** — the chronicle of record. Same behaviour as 0.2.x: every wake, every tool call, every reply interleaves here. The agent's reasoning lives here.
 - **Active dashboard session** — wherever the operator is currently typing. The daemon's reply bridge polls `GET /api/sessions/<id>/messages` at 1.5s cadence and bridges any `/klodi yes:<reqId>` (or bare `yes` / `no` / `approve` / `deny` / `confirm` / `cancel` within a 60s adjacency window) back through the channel registry.
-- **Upstream channels** — Telegram, Slack, Discord, email, WhatsApp, Signal, Matrix, etc. Delegated to upstream's `zeroclaw channel send` — klodi does NOT re-implement these clients. Operator runs `zeroclaw onboard channels` to register the channel upstream, then adds a `[[notifications.upstream]]` block to `klodi.toml`. Upstream channels are notification-only in 0.3.0; release approvals via dashboard or dedicated session.
+- **Upstream channels** — Telegram, Slack, Discord, email, WhatsApp, Signal, Matrix, etc. Delegated to upstream's `zeroclaw channel send` — klodi does NOT re-implement these clients. Operator runs `zeroclaw onboard channels` to register the channel upstream, then adds a `[[notifications.upstream]]` block to `klodi.toml`. Upstream channels are notification-only in 0.2.9; release approvals via dashboard or dedicated session.
 
 **Notification format (dashboard).** Every klodi notification on the dashboard is prefixed with a recognisable visual delimiter so the operator's general agent leaves them alone:
 
@@ -125,7 +125,7 @@ Reply: /klodi yes:abc12345  to confirm   /klodi no:abc12345  to cancel
 
 Every other tool (`klodi_offer_respond`, `klodi_list_update`, `klodi_channel_message`, etc.) is the agent's call. Whether it asks you first is governed by your `negotiation_style.md` and the on-disk strategy files under `${KLODI_HOME}/{buy,sell}/` — not by plugin-side enforcement. The agent uses `klodi_report_to_operator` to ask; the same vocabulary applies.
 
-**Severity defaults (per channel, per plan §I-7).** Override via `klodi.toml`:
+**Severity defaults (per channel).** Override via `klodi.toml`:
 
 | Severity | Dashboard | Dedicated session | Upstream |
 |----------|-----------|-------------------|----------|
@@ -174,9 +174,9 @@ The dashboard reply bridge recognises two shapes:
 1. **Explicit (preferred).** `/klodi yes:<reqId>` / `/klodi no:<reqId>` — explicit verb plus correlation id. Both case-insensitive on the `/klodi` prefix.
 2. **Bare affirmation/denial.** When a single approval is open within the last 60s (the adjacency window), a bare `yes` / `no` / `approve` / `deny` / `confirm` / `cancel` correlates to that approval. If multiple approvals are open, the bridge emits one candidate per open id and lets the approval gate's persisted state pick the right one.
 
-> **Known gap (I-3 of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`).** ZeroClaw's `/ws/chat` doesn't carry a per-message ack today — the gateway's `agent_start` frame applies to whatever turn the agent loop is currently driving, not necessarily to the wake we just sent. For a low-volume marketplace this is fine; for high-volume marketplaces a wake could be acked-by-write before the agent observes it. Acceptable for the demo / per-operator case; revisit when measured drop rates demand a per-message handshake.
+> **Known gap (per-message ack).** ZeroClaw's `/ws/chat` doesn't carry a per-message ack today — the gateway's `agent_start` frame applies to whatever turn the agent loop is currently driving, not necessarily to the wake we just sent. For a low-volume marketplace this is fine; for high-volume marketplaces a wake could be acked-by-write before the agent observes it. Acceptable for the demo / per-operator case; revisit when measured drop rates demand a per-message handshake.
 
-> **Known gap (T5 silent re-creation).** If you delete a session from the ZeroClaw dashboard mid-conversation, the next WS write to the same id silently re-creates it with fresh history. The 0.3.0 channel layer detects this via `GET /api/sessions` membership + `message_count` checks (see `klodi_zeroclaw_session_resurrection_detected` warn log) and posts a "🔁 klodi notice — this session was recreated" breadcrumb in the resurrected session. The created-sessions ledger at `${KLODI_HOME}/zeroclaw.created_sessions` records these so the T3 active-session heuristic doesn't re-pick them.
+> **Known gap (T5 silent re-creation).** If you delete a session from the ZeroClaw dashboard mid-conversation, the next WS write to the same id silently re-creates it with fresh history. The 0.2.9 channel layer detects this via `GET /api/sessions` membership + `message_count` checks (see `klodi_zeroclaw_session_resurrection_detected` warn log) and posts a "🔁 klodi notice — this session was recreated" breadcrumb in the resurrected session. The created-sessions ledger at `${KLODI_HOME}/zeroclaw.created_sessions` records these so the T3 active-session heuristic doesn't re-pick them.
 
 ### Operator session id (`zeroclaw.session`) and the `--adopt-session` flag
 
@@ -186,7 +186,7 @@ If you'd rather merge — let klodi write into a session you've already been usi
 
 ### Per-session write ordering
 
-Both NATS subscribers (`klodi-notifications-{user_id}` for marketplace events and `klodi-channels-{user_id}` for in-channel chat) write into the same operator session via independent forwarder tasks. The daemon serialises these writes client-side with a per-session mutex so frames land in NATS-arrival order even if the gateway's `SessionActorQueue` reordering proves incomplete (the gateway is presumed to serialise turns correctly per session, but plan §8.6 flags this as unverified under load). Per-session throughput is bounded by the WS drain time per write — typically <2s on an idle session, capped at the 180s drain timeout in the worst case. If your marketplace volume exceeds that, raise an issue.
+Both NATS subscribers (`klodi-notifications-{user_id}` for marketplace events and `klodi-channels-{user_id}` for in-channel chat) write into the same operator session via independent forwarder tasks. The daemon serialises these writes client-side with a per-session mutex so frames land in NATS-arrival order even if the gateway's `SessionActorQueue` reordering proves incomplete (the gateway is presumed to serialise turns correctly per session — unverified under load). Per-session throughput is bounded by the WS drain time per write — typically <2s on an idle session, capped at the 180s drain timeout in the worst case. If your marketplace volume exceeds that, raise an issue.
 
 ### Why direct WS instead of `sessions_send`?
 
@@ -209,15 +209,15 @@ Until you do, `klodi_setup_status` reports phase `needs_policy` and the agent wi
 ${KLODI_HOME}/
 ├── config.json                              # mode 0600 — backend URL, user_id, handle
 ├── nats.creds                               # mode 0600 — NKey signer
-├── klodi.toml                               # (0.3.0+) optional — `[notifications]` block; missing = defaults
+├── klodi.toml                               # (0.2.9+) optional — `[notifications]` block; missing = defaults
 ├── zeroclaw.pairing-code                    # one-time code (operator-written, daemon-consumed)
 ├── zeroclaw.token                           # mode 0600 — cached `zc_<hex>` bearer
 ├── zeroclaw.session                         # mode 0600 — persisted operator-session UUID (0.2.6+)
-├── zeroclaw.created_sessions                # (0.3.0+) mode 0600 — JSON list of klodi-owned session ids
-├── zeroclaw.dispatcher_cursor.json          # (0.3.0+) mode 0600 — per-session reply-bridge cursor
+├── zeroclaw.created_sessions                # (0.2.9+) mode 0600 — JSON list of klodi-owned session ids
+├── zeroclaw.dispatcher_cursor.json          # (0.2.9+) mode 0600 — per-session reply-bridge cursor
 ├── approvals/
 │   ├── <request_id>.json                    # mode 0600 — pending approvals (0.2.6+; 24h reap)
-│   └── <request_id>.reply.json              # (0.3.0+) mode 0600 — captured dashboard replies
+│   └── <request_id>.reply.json              # (0.2.9+) mode 0600 — captured dashboard replies
 ├── policies/
 │   ├── negotiation_style.md                 # seeded from template; you fill the placeholders
 │   └── security.md                          # static hard rules; rarely edited

@@ -1,7 +1,6 @@
 //! Plugin-side approval gate for irreversible klodi tool calls.
 //!
-//! Implements I-5 of `docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`:
-//! the agent's call to a destructive tool can't go through until the
+//! The agent's call to a destructive tool can't go through until the
 //! operator types an affirmation in their ZeroClaw session. The
 //! plugin's role here is structural — it persists pending state, posts
 //! the prompt to the session, and ratchets the gate open *only* after
@@ -17,8 +16,7 @@
 //! executes.
 //!
 //! State is persisted under `${KLODI_HOME}/approvals/<request_id>.json`
-//! so a crashed MCP server can recover the pending list on restart —
-//! per **Risks** row "leaks state across crashes" in the redesign plan.
+//! so a crashed MCP server can recover the pending list on restart.
 
 use anyhow::{Context, Result, bail};
 use klodi_nats_client::klodi_secret_write;

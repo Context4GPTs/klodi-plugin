@@ -21,7 +21,7 @@ use super::session_health::{
 };
 use super::{Notification, NotificationId, OperatorChannel, Recipient, Severity};
 
-/// Per-call HTTP timeout for the I-5 health probe. Bounded short
+/// Per-call HTTP timeout for the stale-session health probe. Bounded short
 /// because the probe runs in the hot path of every notification — a
 /// slow gateway shouldn't stall the operator's chat.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -94,7 +94,7 @@ impl OperatorChannel for DedicatedSessionChannel {
             .unwrap_or_else(|| short_token());
         let rendered = render_payload(payload, &correlation_id);
 
-        // I-5: pre-write check. If the dedicated session is missing
+        // Stale-session pre-write check. If the dedicated session is missing
         // or has zero `message_count`, the gateway has silently
         // recreated it since we bootstrapped (T5). Log loudly, write a
         // breadcrumb so the operator sees the resurrected session

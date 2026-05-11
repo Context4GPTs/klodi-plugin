@@ -1,6 +1,6 @@
 //! Persist inbound operator replies so the approval gate can read
 //! them across MCP-server invocations. Implements the cross-process
-//! reply attribution half of plan §I-6.
+//! reply attribution half of the approval gate.
 //!
 //! The daemon subscribes to the channel registry's reply stream and
 //! writes one `.reply.json` file per matched `correlation_id`. The

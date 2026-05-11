@@ -1,5 +1,5 @@
 //! `${KLODI_HOME}/klodi.toml` `[notifications]` block — operator-side
-//! channel wiring. Implements plan §I-11.
+//! channel wiring.
 //!
 //! Missing file = defaults. Missing `[notifications]` table = defaults.
 //! Per-channel field omissions = field defaults. The point is that an
@@ -18,7 +18,7 @@ use super::Severity;
 /// channel impl agree on the literal value.
 pub const RECIPIENT_AUTO_ACTIVE: &str = "auto";
 
-/// Top-level on-disk schema. Only `[notifications]` lands in 0.3.0;
+/// Top-level on-disk schema. Only `[notifications]` lands in 0.2.9;
 /// future tables can land here without touching the channel surface.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
@@ -38,7 +38,7 @@ pub struct NotificationsConfig {
     /// because its severity floor + filter are independent. Default
     /// = "fan everything out", which preserves the v0.2.7 behaviour.
     pub dedicated_session: DedicatedSessionConfig,
-    /// I-8 batching window — when more than one notification of the
+    /// Batching window — when more than one notification of the
     /// same `event_kind` lands within this window, subsequent ones
     /// are dropped on the dashboard + upstream surfaces. The
     /// dedicated klodi session still sees every event (its floor is
@@ -70,7 +70,7 @@ pub struct DashboardChannelConfig {
     /// treated as a pinned session UUID.
     pub recipient: String,
     /// Severity floor for the dashboard channel. Defaults to
-    /// `operator_important` per plan §I-7 — routine activity stays in
+    /// `operator_important` — routine activity stays in
     /// the dedicated session.
     pub severity_floor: String,
     /// Optional event-kind allowlist. Empty = "all events at the

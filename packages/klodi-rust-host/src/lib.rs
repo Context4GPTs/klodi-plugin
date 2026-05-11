@@ -51,17 +51,14 @@ pub mod host_mcp_config;
 pub mod mcp;
 
 // `zeroclaw_session` feature only — see Cargo.toml. These modules carry
-// the I-1/I-2/I-4/I-5/I-7/I-8 changes from the
-// 2026-05-10-klodi-zeroclaw-wake-routing-redesign plan: WS client,
-// persisted session id, plugin-authored bootstrap note, and the
-// approval gate. Other adapters (Moltis, IronClaw) don't enable this
-// feature and never compile this code in.
+// the WS client, persisted session id, plugin-authored bootstrap note,
+// and the approval gate. Other adapters (Moltis, IronClaw) don't
+// enable this feature and never compile this code in.
 //
-// `channels` lands in 0.3.0 per
-// `docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md` —
-// `OperatorChannel` trait + `ChannelRegistry` + `DashboardChannel` +
-// `DedicatedSessionChannel` + `UpstreamChannel` + `ChannelInvoker`,
-// plus on-disk support (cursor, ledger, `klodi.toml` parser).
+// `channels` (added in 0.2.9): `OperatorChannel` trait + `ChannelRegistry`
+// + `DashboardChannel` + `DedicatedSessionChannel` + `UpstreamChannel`
+// + `ChannelInvoker`, plus on-disk support (cursor, ledger, `klodi.toml`
+// parser).
 #[cfg(feature = "zeroclaw_session")]
 pub mod channels;
 #[cfg(feature = "zeroclaw_session")]

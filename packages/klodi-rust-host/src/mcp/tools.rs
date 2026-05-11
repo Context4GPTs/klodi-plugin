@@ -39,7 +39,7 @@ const LOCAL_TOOL_CHANNEL_MESSAGE: &str = "klodi_channel_message";
 const LOCAL_TOOL_WATCH: &str = "klodi_watch";
 const LOCAL_TOOL_UNWATCH: &str = "klodi_unwatch";
 
-/// I-4: post a structured note into the operator's dedicated klodi
+/// Post a structured note into the operator's dedicated klodi
 /// session. Only registered + dispatched when the `zeroclaw_session`
 /// feature is on AND `McpConfig::klodi_session_target` is `Some`.
 /// Daemon-only adapters don't expose this tool.
@@ -273,7 +273,7 @@ fn make_tool(name: &str, description: &str, schema: &Value) -> Tool {
 /// Dispatch a `tools/call` request. Branches on the tool name into
 /// either a NATS passthrough or one of the local handlers.
 ///
-/// I-5: any call (passthrough or local) goes through the approval gate
+/// Any call (passthrough or local) goes through the approval gate
 /// first when the tool is in the gated list AND the MCP server has an
 /// operator channel configured. Gated tools without operator-channel
 /// support fall through (the host's own approval mechanism is
@@ -401,7 +401,7 @@ async fn approval_gate(
                     format!("persisting approval state: {err}"),
                     None,
                 ))?;
-            // I-6: fan the prompt out across every enabled channel
+            // Fan the prompt out across every enabled channel
             // when a registry is configured; fall back to the
             // dedicated session direct write when not (preserves the
             // v0.2.x single-surface behaviour).
@@ -645,7 +645,7 @@ async fn dispatch_report_to_operator(
         .unwrap_or("info");
     let structured = args.get("structured");
 
-    // I-6: when the channel registry is configured, fan the report
+    // When the channel registry is configured, fan the report
     // across every enabled surface. Otherwise preserve the v0.2.x
     // direct-write behaviour against the dedicated klodi session.
     let chosen_severity = match severity {
