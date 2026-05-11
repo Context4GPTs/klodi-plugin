@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.10] — 2026-05-11
+
+**klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.
+
+Cold-start latency fix. On 0.2.9, the daemon took ~360s (cold) / ~180s (warm) from `klodi_zeroclaw_paired_from_sidecar` to `klodi_daemon_connected` because two bootstrap WS writes (heartbeat + intro note) sat serially on the startup critical path, each waiting up to 180s for an `agent_start` frame that never arrives at session-mint time (no agent loop is attached yet). 0.2.10 brings cold to ~5s and warm to ~0s by separating bootstrap-write semantics from wake-delivery semantics and moving the bootstrap writes off the critical path.
+
+### Added (`klodi-zeroclaw` 0.2.10)
+
+- **`SendAckPolicy` enum** in `klodi_rust_host::zeroclaw_ws`. Public API addition. Threads through `send_session_message` and `bootstrap_session_with_first_message` so each call site declares its operational regime:
+  - `OnGatewayWrite` — bootstrap regime, no agent expected. After the WS frame flushes, reads inbound frames for `SEND_ERROR_GRACE` (5s) strictly to surface gateway `error` frames (auth, schema mismatch, session-not-found). Window elapsing or a clean WS close is the success signal. Does NOT wait for `agent_start`; the constant is sized for protocol latency, not agent-turn duration. Used by `resolve_session_id`'s atomic first-write and by `post_startup_notes`.
+  - `OnAgentObservation` — wake-delivery regime, agent expected to be live. Existing behaviour: waits up to `DRAIN_TIMEOUT` (180s) for `agent_start` as a positive visibility signal, falls back to ack-on-write on timeout with a warn log. Used by the forwarder, the MCP `klodi_report_to_operator` tool, and every `OperatorChannel` implementation (dedicated session, dashboard).
+
+### Fixed (`klodi-zeroclaw` 0.2.10)
+
+- **Cold-start gap (`paired_from_sidecar` → `klodi_daemon_connected`) collapses ~360s → ~5s.** The atomic bootstrap-write inside `resolve_session_id` now uses `OnGatewayWrite`, returning in ~5s instead of 180s when the freshly-minted session has no agent attached. Separately, `post_startup_notes` is now `tokio::spawn`'d off the critical path so the daemon's NATS dial, reply-attribution task, and operator-facing pair block proceed as soon as the session resolves — the heartbeat and intro-note WS writes are bootstrap breadcrumbs, nothing downstream waits on them landing.
+- **Warm-restart gap collapses ~180s → ~0s.** On a warm restart (`freshly_minted=false`, persisted `zeroclaw.session`), the surviving heartbeat WS write in `post_startup_notes` was the sole remaining drain on the critical path. With `OnGatewayWrite` + spawn'd execution, warm-restart `klodi_daemon_connected` lands within seconds of pairing.
+- **Pairing-helper URL operator-usable from `t=0`.** `ShimHandle::serve(minter)` is now spawned immediately after `ShimHandle::bind`, before any WS writes. Previously the accept loop ran AFTER the bootstrap drains — meaning `klodi_zeroclaw_shim_bound url=…` was logged at boot but the URL refused connections (then stalled on accept) for the entire 6-minute cold-start window. Operators reading the helper URL from the logs no longer get a connection-refused / silent-timeout staircase.
+- **`klodi_zeroclaw_ws_drain_timeout_after_send` no longer fires on startup.** The 180s drain was a wake-regime guard-rail that was incorrectly engaged by bootstrap writes. Bootstrap writes that previously logged this warning at `+180s` and `+360s` now log `klodi_zeroclaw_ws_send_error_grace_elapsed` at `debug` after ~5s — a non-event, not a warn-worthy ack-on-write fallback.
+
+### Changed (`klodi-zeroclaw` 0.2.10)
+
+- **`send_session_message` and `bootstrap_session_with_first_message` signatures take a new `SendAckPolicy` parameter** (public API break for out-of-tree consumers of `klodi_rust_host`). All in-tree callers updated. Out-of-tree consumers pick `OnAgentObservation` for wake-style writes (agent expected to observe) and `OnGatewayWrite` for bootstrap-style writes (no agent attached at write time). See the `SendAckPolicy` docstring in `klodi_rust_host::zeroclaw_ws` for the decision tree.
+- **`post_startup_notes` (internal to `klodi-zeroclaw-daemon`)** now takes a pre-composed `Option<&str>` bootstrap-note body instead of a `BootstrapInputs<'_>` reference, so the spawned task carries owned strings rather than borrows into the main task's stack.
+
+### Migrating from 0.2.9 to 0.2.10 (klodi-zeroclaw operators only)
+
+Drop-in for the operator. The daemon's behaviour change is strictly latency — no flag changes, no `${KLODI_HOME}` migration, no `klodi.toml` schema updates.
+
+Out-of-tree consumers of `klodi_rust_host` who call `send_session_message` or `bootstrap_session_with_first_message` directly must add a `SendAckPolicy` argument at every call site. The right pick is almost always `SendAckPolicy::OnAgentObservation` unless the write is happening before any agent loop is attached.
+
 ## [0.2.9] — 2026-05-11
 
 ### Added (`klodi-zeroclaw` 0.2.9)
