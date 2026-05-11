@@ -56,6 +56,14 @@ pub mod mcp;
 // persisted session id, plugin-authored bootstrap note, and the
 // approval gate. Other adapters (Moltis, IronClaw) don't enable this
 // feature and never compile this code in.
+//
+// `channels` lands in 0.3.0 per
+// `docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md` —
+// `OperatorChannel` trait + `ChannelRegistry` + `DashboardChannel` +
+// `DedicatedSessionChannel` + `UpstreamChannel` + `ChannelInvoker`,
+// plus on-disk support (cursor, ledger, `klodi.toml` parser).
+#[cfg(feature = "zeroclaw_session")]
+pub mod channels;
 #[cfg(feature = "zeroclaw_session")]
 pub mod zeroclaw_approval;
 #[cfg(feature = "zeroclaw_session")]
@@ -81,6 +89,16 @@ pub use host_mcp_config::{HostMcpEntry, apply_host_mcp_entry, default_host_confi
 #[cfg(feature = "mcp")]
 pub use mcp::{McpConfig, run_mcp_server};
 
+#[cfg(feature = "zeroclaw_session")]
+pub use channels::{
+    ChannelInvoker, ChannelRegistry, CreatedSessionsLedger, DashboardChannel,
+    DashboardChannelConfig, DedicatedSessionChannel, DispatcherCursor,
+    Notification, NotificationId, NotificationsConfig, OperatorChannel,
+    OperatorReply, Recipient, RegisteredChannel, SessionBinding, Severity,
+    UpstreamChannel, UpstreamChannelConfig, build_channel_registry,
+    session_health::SessionHealth, session_health::check_session_alive,
+    session_health::resurrection_breadcrumb,
+};
 #[cfg(feature = "zeroclaw_session")]
 pub use zeroclaw_browser_pairing::{
     BrowserPairConfig, BrowserPairError, MinterImpl, ZeroclawCliMinter,

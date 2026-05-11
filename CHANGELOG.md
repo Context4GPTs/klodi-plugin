@@ -6,6 +6,83 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added (`klodi-zeroclaw` 0.3.0)
+
+> Targets `klodi-zeroclaw 0.3.0`. OpenClaw, the Python adapters
+> (klodi-hermes, klodi-nanobot), and the other Rust adapters
+> (klodi-moltis, klodi-ironclaw) are unaffected and not republished
+> at this version.
+
+Implements `docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md` — the operator-visibility follow-up to the wake-routing redesign that shipped in 0.2.6. Notifications and approval prompts now reach every surface the operator might be looking at (dashboard + dedicated klodi session + any operator-configured upstream channels like Telegram/Slack/email).
+
+- **`OperatorChannel` trait + `ChannelRegistry`** in `klodi_rust_host::channels`. Trait mirrors upstream's `(channel_id, recipient, message)` shape so a future host (Hermes, Moltis) can plug new channel types in without touching the dispatch loop. Three implementations land in 0.3.0:
+  - `DashboardChannel` — klodi-owned WebSocket transport against `/ws/chat`. Uses the T3 active-session heuristic (most-recent session in `/api/sessions` whose latest message has `role=user` and that isn't in the created-sessions ledger) to find where the operator is currently typing.
+  - `DedicatedSessionChannel` — adapter exposing the existing dedicated klodi session as an `OperatorChannel` so registry-driven fan-out treats every surface uniformly.
+  - `UpstreamChannel` — delegating wrapper over `zeroclaw channel send <message> --channel-id <id> --recipient <r>`. Klodi does NOT re-implement Telegram/Slack/Discord/etc. clients; upstream's `[reliability]` config owns retry/backoff per medium.
+- **`ChannelInvoker::Shell`** (`klodi_rust_host::channels::invoker`) — the transport `UpstreamChannel` wraps. 0.3.0 shells out to the `zeroclaw` CLI (same dependency as the pairing-helper auto-mint). Future variants (`Library`, `Rest`) land here when upstream exposes a stable Rust or REST surface.
+- **`${KLODI_HOME}/klodi.toml` `[notifications]` block** — operator-side channel wiring. Missing file = defaults (dashboard auto-active-session enabled, dedicated session always-on, no upstream channels). Schema:
+  ```toml
+  [notifications]
+  batch_window_seconds = 5
+
+  [notifications.dashboard]
+  enabled = true
+  recipient = "auto"            # T3 active-session
+  severity_floor = "operator_important"
+
+  [notifications.dedicated_session]
+  enabled = true
+  severity_floor = "diagnostic" # see everything
+
+  [[notifications.upstream]]
+  channel_id = "telegram"       # MUST be in `zeroclaw channel list`
+  recipient = "123456789"
+  severity_floor = "approval_request"
+  ```
+  Upstream channel ids are validated against `GET /api/channels` at daemon startup — unknown ids surface as `klodi_zeroclaw_upstream_channel_unknown` warn logs and are skipped (operator runs `zeroclaw onboard channels` to register the channel, then restarts the daemon).
+- **Approval prompts fan out across every enabled channel.** Plugin-gated tools (`klodi_tx_confirm`, `klodi_tx_cancel`, `klodi_list_withdraw`) post the prompt to dashboard + dedicated session + every configured upstream channel. The operator can reply via the dashboard (`/klodi yes:<reqId>` or a bare `yes` within 60s) OR the dedicated klodi session — whichever reply lands first releases the gate. Upstream channels are notification-only in 0.3.0; an operator paged on Telegram must release the gate via dashboard or dedicated session.
+- **`/klodi` dashboard reply prefix + bare-affirmation window.** The dashboard channel's polling reply bridge recognises:
+  - `/klodi yes:<reqId>` / `/klodi no:<reqId>` — explicit verb + correlation. Both case-insensitive on the `/klodi` prefix.
+  - Bare `yes` / `no` / `approve` / `deny` / `confirm` / `cancel` within 60s of an open notification (open question 1 in the plan — refine on real-use feedback).
+- **`klodi_report_to_operator` routes through the registry** when one is configured. The tool now appears on every enabled surface, not just the dedicated session. Severity → channel mapping per the §I-7 table:
+
+  | Severity | Dashboard | Dedicated session | Upstream |
+  |----------|-----------|-------------------|----------|
+  | ApprovalRequest | dispatch | dispatch | dispatch |
+  | OperatorImportant | dispatch | dispatch | dispatch |
+  | Operator | drop | dispatch | drop |
+  | Diagnostic | drop | dispatch | drop |
+- **Stale-session detection (T5).** Before writing to a destination the channel expects non-empty, `GET /api/sessions` verifies membership AND `message_count > 0`. On detection: log `klodi_zeroclaw_session_resurrection_detected`, record the old id in the created-sessions ledger, post a one-line "🔁 klodi notice — this dashboard session was recreated" breadcrumb in the resurrected session, re-resolve via T3.
+- **New artifacts under `${KLODI_HOME}`** (all mode 0600):
+  - `zeroclaw.dispatcher_cursor.json` — per-session last-processed-message index for the dashboard reply bridge. Survives daemon restarts.
+  - `zeroclaw.created_sessions` — JSON list of session ids klodi has ever written to. Excluded from T3 candidates so klodi never picks its own session as "where the operator is."
+  - `approvals/<request_id>.reply.json` — captured operator reply per approval. Written by the daemon's reply-attribution task; read by the MCP server's approval gate when the agent retries without explicit text.
+- **Severity-driven dispatch with per-channel filters + batching window** (§I-7 + §I-8). Each registered channel has a `severity_floor` and optional `event_filter`. The registry's batching window (default 5s, configurable via `klodi.toml`) drops subsequent notifications of the same `event_kind` within the window for the dashboard + upstream surfaces; `ApprovalRequest` bypasses batching unconditionally; the dedicated klodi session sees everything regardless (severity floor = `diagnostic` by default).
+
+### Changed (`klodi-zeroclaw` 0.3.0)
+
+- **`klodi_rust_host::mcp::handler::OperatorChannel` (struct) → `KlodiSessionTarget`** (public API break for out-of-tree consumers of `klodi_rust_host`). The name was reclaimed by the new `klodi_rust_host::channels::OperatorChannel` trait — the renamed struct names what it always was (the dedicated klodi session binding). Internal callers (zeroclaw bin, mcp tools) updated. Out-of-tree consumers should swap `use klodi_rust_host::mcp::OperatorChannel` → `use klodi_rust_host::mcp::KlodiSessionTarget`.
+- **Bootstrap-note copy** now lists the multi-surface model — heartbeat surfaces the count of configured channels; the bootstrap note explains that notifications appear in dashboard + dedicated session + each configured upstream channel.
+
+### Migrating from 0.2.8 to 0.3.0 (klodi-zeroclaw operators only)
+
+Drop-in for the default case. The dashboard channel layers on top of the existing dedicated session; default `klodi.toml` is "no file" = sensible defaults.
+
+For operators who want the v0.2.8 single-surface behaviour (dedicated session only): set `notifications.dashboard.enabled = false` in `${KLODI_HOME}/klodi.toml` (file may not yet exist — create it).
+
+For operators who want to receive notifications on Telegram / Slack / email / etc.:
+1. Run `zeroclaw onboard channels` (interactive upstream tooling) to register the channel.
+2. Add a `[[notifications.upstream]]` block to `${KLODI_HOME}/klodi.toml`:
+   ```toml
+   [[notifications.upstream]]
+   channel_id = "telegram"
+   recipient = "123456789"
+   severity_floor = "approval_request"  # only approvals
+   ```
+3. Restart `klodi-zeroclaw-daemon`. The daemon validates the channel id against `GET /api/channels` at startup — typos surface as `klodi_zeroclaw_upstream_channel_unknown` warn logs.
+
+Reply mechanism: the operator can release approval gates from the dashboard (`/klodi yes:<reqId>`) OR the dedicated klodi session (same as v0.2.8 — agent reads the reply inline). Upstream channels are outbound-only in 0.3.0; an operator paged on Telegram must release the gate via dashboard or dedicated session.
+
 ## [0.2.8] — 2026-05-10
 
 **klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.

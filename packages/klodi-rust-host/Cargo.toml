@@ -53,7 +53,7 @@ mcp = ["dep:rmcp", "dep:toml_edit"]
 # instead of POSTing to `/webhook` (resolves the 30s `TimeoutLayer` 408).
 # Only the ZeroClaw adapter enables this — Moltis/IronClaw stay on
 # `BodyShape::Structured` against their async wake hooks.
-zeroclaw_session = ["dep:tokio-tungstenite", "dep:http"]
+zeroclaw_session = ["dep:tokio-tungstenite", "dep:http", "dep:async-trait", "dep:toml"]
 
 [dependencies]
 klodi-nats-client = { path = "../nats-client-rs" }
@@ -107,6 +107,16 @@ tokio-tungstenite = { version = "=0.24.0", default-features = false, features = 
 # Tungstenite 0.24 uses `http` 1 too; both crates re-export the parts we
 # touch so the runtime contract stays the same across patch bumps.
 http = { version = "1", optional = true }
+# `async-trait` is the simplest way to make `dyn OperatorChannel`
+# work — native `async fn` in traits is stable but `dyn` compatibility
+# still requires boxed-future spelling. async-trait handles that
+# rewrite mechanically.
+async-trait = { version = "=0.1.89", optional = true }
+# `toml` for parsing `${KLODI_HOME}/klodi.toml` `[notifications]` —
+# read-only. `toml_edit` is already pulled for `mcp` so we keep its
+# stricter parser available, but the channels config wants a plain
+# deserialize and `toml` is the canonical lightweight choice.
+toml = { version = "=0.8.19", optional = true }
 
 [dev-dependencies]
 tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "test-util", "process"] }

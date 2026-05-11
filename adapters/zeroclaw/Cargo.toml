@@ -6,7 +6,7 @@
 
 [package]
 name = "klodi-zeroclaw"
-version = "0.2.8"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -58,6 +58,9 @@ tracing-subscriber = { version = "=0.3.19", features = ["env-filter", "fmt"] }
 # `pair` bootstrap calls `POST /pair` over HTTP. Match the workspace pin
 # used by klodi-rust-host's forwarder.
 reqwest = { version = "=0.12.9", default-features = false, features = ["json", "rustls-tls"] }
+# `futures_util::StreamExt` for the reply-attribution task that
+# consumes `ChannelRegistry::replies()`. Matches the host crate's pin.
+futures-util = "=0.3.31"
 
 [dev-dependencies]
 tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "process", "test-util"] }

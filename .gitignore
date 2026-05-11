@@ -173,6 +173,7 @@ adapters/*/.publish-stage/
 # docs/decisions/ (ADRs), docs/specs/hosts/ (per-host adapter specs),
 # SECURITY.md, and docs/THREAT_MODEL.md.
 docs/plans/
+docs/reports/
 
 # E2E agent test artifacts (generated per run)
 tests/e2e/homes/

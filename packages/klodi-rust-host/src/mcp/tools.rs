@@ -39,10 +39,10 @@ const LOCAL_TOOL_CHANNEL_MESSAGE: &str = "klodi_channel_message";
 const LOCAL_TOOL_WATCH: &str = "klodi_watch";
 const LOCAL_TOOL_UNWATCH: &str = "klodi_unwatch";
 
-/// I-4: post a structured note into the operator's ZeroClaw session.
-/// Only registered + dispatched when the `zeroclaw_session` feature is
-/// on AND `McpConfig::operator_channel` is `Some`. Daemon-only adapters
-/// don't expose this tool.
+/// I-4: post a structured note into the operator's dedicated klodi
+/// session. Only registered + dispatched when the `zeroclaw_session`
+/// feature is on AND `McpConfig::klodi_session_target` is `Some`.
+/// Daemon-only adapters don't expose this tool.
 #[cfg(feature = "zeroclaw_session")]
 const LOCAL_TOOL_REPORT_TO_OPERATOR: &str = "klodi_report_to_operator";
 
@@ -354,7 +354,7 @@ async fn approval_gate(
     // — without it, we can't post the prompt to the operator's session
     // and there's nothing to retry against. Bail out cleanly so
     // daemon-only adapters keep working.
-    let channel = match handler.operator_channel() {
+    let target = match handler.klodi_session_target() {
         Some(c) => c.clone(),
         None => return Ok(None),
     };
@@ -394,11 +394,6 @@ async fn approval_gate(
                 &args_for_decision,
                 summary.clone(),
             );
-            let prompt = crate::zeroclaw_approval::format_prompt(
-                name,
-                &pending.request_id,
-                &summary,
-            );
             // Persist BEFORE posting so a crash mid-post doesn't leave
             // an unresolvable approval id on the operator's chat.
             crate::zeroclaw_approval::persist(handler.klodi_home(), &pending)
@@ -406,40 +401,74 @@ async fn approval_gate(
                     format!("persisting approval state: {err}"),
                     None,
                 ))?;
-            crate::zeroclaw_ws::send_session_message(
-                &channel.ws_config,
-                &channel.session_id,
-                &prompt,
-            )
-            .await
-            .map_err(|err| {
-                // Drop the pending entry so the agent can retry the gate
-                // from scratch instead of hitting a "request_id missing"
-                // dead-end. Best-effort.
+            // I-6: fan the prompt out across every enabled channel
+            // when a registry is configured; fall back to the
+            // dedicated session direct write when not (preserves the
+            // v0.2.x single-surface behaviour).
+            let posted = match handler.channel_registry() {
+                Some(registry) => {
+                    let notification = crate::channels::Notification {
+                        event_kind: format!("{name}.approval"),
+                        summary: summary.clone(),
+                        details: Some(format_approval_body(name, &pending.request_id, &summary)),
+                        severity: crate::channels::Severity::ApprovalRequest,
+                        structured: None,
+                        correlation_id: Some(pending.request_id.clone()),
+                        reply_hint: Some(format!(
+                            "Reply: /klodi yes:{rid}  to confirm   /klodi no:{rid}  to cancel",
+                            rid = pending.request_id,
+                        )),
+                    };
+                    let ids = registry.notify(notification).await;
+                    !ids.is_empty()
+                }
+                None => {
+                    let prompt = crate::zeroclaw_approval::format_prompt(
+                        name,
+                        &pending.request_id,
+                        &summary,
+                    );
+                    crate::zeroclaw_ws::send_session_message(
+                        &target.ws_config,
+                        &target.session_id,
+                        &prompt,
+                    )
+                    .await
+                    .is_ok()
+                }
+            };
+            if !posted {
+                // Every channel in the registry failed to post (or the
+                // direct write failed). Drop the pending entry so the
+                // agent can retry the gate from scratch.
                 let _ = crate::zeroclaw_approval::clear(
                     handler.klodi_home(),
                     &pending.request_id,
                 );
-                McpError::internal_error(
-                    format!("posting approval prompt to operator session: {err:#}"),
+                return Err(McpError::internal_error(
+                    "posting approval prompt: every configured channel rejected the write"
+                        .to_string(),
                     None,
-                )
-            })?;
+                ));
+            }
             Ok(Some(structured_with_text(json!({
                 "approval_required": true,
                 "request_id": pending.request_id,
                 "tool": name,
                 "summary": summary,
                 "instructions": format!(
-                    "Wait for the operator's reply in their ZeroClaw chat session. \
-                     When they answer, retry this same tool call with the same args \
-                     plus '{APPROVAL_REQUEST_ID_FIELD}' set to '{}' and \
-                     '{APPROVAL_TEXT_FIELD}' set to the operator's verbatim reply text.",
+                    "Wait for the operator's reply in any of their klodi-visible chats \
+                     (dedicated klodi session OR active dashboard session). When they answer, \
+                     retry this same tool call with the same args plus \
+                     '{APPROVAL_REQUEST_ID_FIELD}' set to '{}' and (optionally) \
+                     '{APPROVAL_TEXT_FIELD}' set to the operator's verbatim reply text. If \
+                     the reply landed in the dashboard, omit '{APPROVAL_TEXT_FIELD}' — the \
+                     plugin reads the captured reply from disk.",
                     pending.request_id,
                 ),
             }))))
         }
-        (Some(rid), Some(text)) => {
+        (Some(rid), explicit_text) => {
             let pending = match crate::zeroclaw_approval::load(
                 handler.klodi_home(),
                 &rid,
@@ -476,18 +505,70 @@ async fn approval_gate(
                     ),
                 }))));
             }
+
+            // Source the reply text: prefer the agent-provided
+            // verbatim text (existing dedicated-session path); fall
+            // back to the captured `.reply.json` written by the
+            // daemon's reply-attribution task (dashboard channel
+            // path).
+            let (text, channel_origin) = match explicit_text {
+                Some(t) => (t, None),
+                None => match crate::channels::reply_capture::load_reply(
+                    handler.klodi_home(),
+                    &rid,
+                ) {
+                    Ok(Some(reply)) => {
+                        let origin = format!("{}:{}", reply.channel_name, reply.origin);
+                        (reply.text, Some(origin))
+                    }
+                    Ok(None) => {
+                        return Ok(Some(structured_with_text(json!({
+                            "approval_required": true,
+                            "request_id": rid,
+                            "still_pending": true,
+                            "reason": format!(
+                                "no operator reply captured for request_id {rid} yet — \
+                                 retry once the operator has answered, or supply \
+                                 '{APPROVAL_TEXT_FIELD}' directly with their verbatim text",
+                            ),
+                        }))));
+                    }
+                    Err(err) => {
+                        return Err(McpError::internal_error(
+                            format!("loading captured reply: {err}"),
+                            None,
+                        ));
+                    }
+                },
+            };
+
             match crate::zeroclaw_approval::evaluate_retry(&pending, &text, &args_for_decision) {
                 crate::zeroclaw_approval::ApprovalDecision::Approved => {
                     let _ = crate::zeroclaw_approval::clear(
                         handler.klodi_home(),
                         &rid,
                     );
+                    let _ = crate::channels::reply_capture::clear_reply(
+                        handler.klodi_home(),
+                        &rid,
+                    );
+                    if let Some(origin) = channel_origin {
+                        tracing::info!(
+                            request_id = %rid,
+                            origin = %origin,
+                            "klodi_approval_released_via_captured_reply"
+                        );
+                    }
                     // Open the gate — let the call fall through to the
                     // normal dispatcher.
                     Ok(None)
                 }
                 crate::zeroclaw_approval::ApprovalDecision::Denied => {
                     let _ = crate::zeroclaw_approval::clear(
+                        handler.klodi_home(),
+                        &rid,
+                    );
+                    let _ = crate::channels::reply_capture::clear_reply(
                         handler.klodi_home(),
                         &rid,
                     );
@@ -508,16 +589,21 @@ async fn approval_gate(
                 }
             }
         }
-        (Some(rid), None) => Ok(Some(structured_with_text(json!({
-            "approval_required": true,
-            "request_id": rid,
-            "still_pending": true,
-            "reason": format!(
-                "request_id {rid} present but '{APPROVAL_TEXT_FIELD}' missing — \
-                 retry the call with the operator's verbatim chat reply",
-            ),
-        })))),
     }
+}
+
+/// Multi-line approval body — used as `Notification.details` when the
+/// approval prompt fans out via the channel registry. The dashboard
+/// channel's renderer wraps this in the `── klodi · req=… ──`
+/// envelope; the dedicated klodi session adds the existing icon /
+/// formatting; upstream channels pass it through as plain text.
+#[cfg(feature = "zeroclaw_session")]
+fn format_approval_body(tool: &str, request_id: &str, summary: &str) -> String {
+    format!(
+        "🔒 **Operator approval needed** (request_id `{request_id}`)\n\n\
+         The agent wants to call `{tool}`:\n\n\
+         {summary}",
+    )
 }
 
 /// Compact, operator-readable summary of the about-to-be-gated call.
@@ -535,7 +621,7 @@ async fn dispatch_report_to_operator(
     handler: &KlodiMcpHandler,
     args: JsonObject,
 ) -> Result<CallToolResult, McpError> {
-    let channel = handler.operator_channel().ok_or_else(|| {
+    let target = handler.klodi_session_target().ok_or_else(|| {
         McpError::invalid_request(
             "klodi_report_to_operator: this MCP server has no ZeroClaw operator session bound. \
              Run klodi-zeroclaw-daemon first so ${KLODI_HOME}/zeroclaw.session is populated."
@@ -559,6 +645,35 @@ async fn dispatch_report_to_operator(
         .unwrap_or("info");
     let structured = args.get("structured");
 
+    // I-6: when the channel registry is configured, fan the report
+    // across every enabled surface. Otherwise preserve the v0.2.x
+    // direct-write behaviour against the dedicated klodi session.
+    let chosen_severity = match severity {
+        "warn" => crate::channels::Severity::OperatorImportant,
+        "error" => crate::channels::Severity::OperatorImportant,
+        _ => crate::channels::Severity::Operator,
+    };
+
+    if let Some(registry) = handler.channel_registry() {
+        let notification = crate::channels::Notification {
+            event_kind: "klodi_report_to_operator".into(),
+            summary: summary.to_string(),
+            details: details.map(str::to_string),
+            severity: chosen_severity,
+            structured: structured.cloned(),
+            correlation_id: None,
+            reply_hint: None,
+        };
+        let ids = registry.notify(notification).await;
+        return Ok(structured_with_text(json!({
+            "posted": !ids.is_empty(),
+            "session_id": target.session_id,
+            "severity": severity,
+            "channels": registry.channel_names(),
+            "notification_ids": ids.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        })));
+    }
+
     let icon = match severity {
         "warn" => "⚠️",
         "error" => "🛑",
@@ -578,8 +693,8 @@ async fn dispatch_report_to_operator(
     }
 
     crate::zeroclaw_ws::send_session_message(
-        &channel.ws_config,
-        &channel.session_id,
+        &target.ws_config,
+        &target.session_id,
         &content,
     )
     .await
@@ -592,7 +707,7 @@ async fn dispatch_report_to_operator(
 
     Ok(structured_with_text(json!({
         "posted": true,
-        "session_id": channel.session_id,
+        "session_id": target.session_id,
         "severity": severity,
         "characters": content.chars().count(),
     })))

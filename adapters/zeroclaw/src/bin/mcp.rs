@@ -4,20 +4,27 @@
 //! ZeroClaw spawns one subprocess per agent session per its
 //! `[[mcp.servers]]` config; the body lives in `klodi_rust_host::mcp`.
 //!
-//! 0.2.6: when `${KLODI_HOME}/zeroclaw.{token,session}` are present, the
-//! binary plugs an `OperatorChannel` into `McpConfig` so the
-//! `klodi_report_to_operator` tool (I-4) and the irreversible-tool
-//! approval gate (I-5) can write into the persisted operator session
-//! via WebSocket. When either file is missing the binary still starts
-//! cleanly — those features simply degrade (`klodi_report_to_operator`
-//! returns an actionable error if called; gated tools fall through
-//! without the gate).
+//! 0.2.6 (rev 0.3.0): when `${KLODI_HOME}/zeroclaw.{token,session}` are
+//! present, the binary plugs a `KlodiSessionTarget` into `McpConfig`
+//! so the `klodi_report_to_operator` tool (I-4) and the
+//! irreversible-tool approval gate (I-5) can write into the persisted
+//! dedicated klodi session via WebSocket. 0.3.0 additionally builds a
+//! `ChannelRegistry` from `${KLODI_HOME}/klodi.toml`'s
+//! `[notifications]` block so the approval gate fans the prompt out
+//! across every configured surface (dashboard, dedicated session,
+//! upstream channels). When either on-disk file is missing the binary
+//! still starts cleanly — those features simply degrade
+//! (`klodi_report_to_operator` returns an actionable error if called;
+//! gated tools fall through without the gate; the registry stays
+//! `None` and the tools see a single-target path).
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use klodi_rust_host::{
-    McpConfig, ZeroClawWsConfig, paths, run_mcp_server, session_path,
-    mcp::OperatorChannel,
+    McpConfig, SessionBinding, ZeroClawWsConfig,
+    channels::factory::build_channel_registry,
+    paths, run_mcp_server, session_path,
+    mcp::KlodiSessionTarget,
 };
 use std::path::PathBuf;
 
@@ -85,12 +92,37 @@ async fn main() -> Result<()> {
         );
     }
 
-    let operator_channel = build_operator_channel(
+    let klodi_session_target = build_klodi_session_target(
         &klodi_home,
         &cli.zeroclaw_webhook_url,
         cli.zeroclaw_ws_url.as_deref(),
         cli.zeroclaw_http_base.as_deref(),
     );
+
+    // Channel registry — only constructible when the dedicated session
+    // target resolved (we need the WS config + the dedicated session id
+    // for the ledger + the dedicated-session channel adapter). When
+    // `None`, the MCP server falls back to the single-target path
+    // (klodi_session_target writes directly).
+    let channel_registry = match klodi_session_target.as_ref() {
+        Some(target) => {
+            let binding = SessionBinding {
+                ws_config: target.ws_config.clone(),
+                session_id: target.session_id.clone(),
+            };
+            match build_channel_registry(&klodi_home, &binding).await {
+                Ok((registry, _cfg)) => Some(registry),
+                Err(err) => {
+                    tracing::warn!(
+                        error = %format!("{err:#}"),
+                        "klodi_zeroclaw_mcp_channel_registry_build_failed_falling_back_to_single_target"
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
 
     run_mcp_server(McpConfig {
         creds_path,
@@ -99,22 +131,23 @@ async fn main() -> Result<()> {
         server_name: "klodi-zeroclaw-mcp".to_owned(),
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
         register_cli: "klodi-zeroclaw-register".to_owned(),
-        operator_channel,
+        klodi_session_target,
+        channel_registry,
     })
     .await
     .context("running klodi-zeroclaw-mcp")
 }
 
-/// Best-effort: build an [`OperatorChannel`] from the on-disk
+/// Best-effort: build a [`KlodiSessionTarget`] from the on-disk
 /// `${KLODI_HOME}/zeroclaw.{token,session}` files. Missing files / empty
 /// values degrade to `None` — the MCP server still starts and the
 /// affected tools return actionable errors when called.
-fn build_operator_channel(
+fn build_klodi_session_target(
     klodi_home: &std::path::Path,
     webhook_url: &str,
     ws_override: Option<&str>,
     http_base_override: Option<&str>,
-) -> Option<OperatorChannel> {
+) -> Option<KlodiSessionTarget> {
     let token_path = klodi_home.join("zeroclaw.token");
     let session_path_buf = session_path(klodi_home);
 
@@ -173,7 +206,7 @@ fn build_operator_channel(
         }
     };
 
-    Some(OperatorChannel {
+    Some(KlodiSessionTarget {
         ws_config,
         session_id,
     })

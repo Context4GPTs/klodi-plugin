@@ -30,6 +30,12 @@ pub struct BootstrapInputs<'a> {
     /// paired their browser has a clickable affordance in the chat.
     /// Per plan I-9.
     pub browser_pair_url: Option<&'a str>,
+    /// Channel names registered for fan-out — `["dashboard",
+    /// "dedicated_session", "upstream:telegram", …]`. Surfaced in the
+    /// bootstrap note (plan §I-9 multi-surface copy) so the operator
+    /// sees every surface klodi might page them on. Empty list =
+    /// v0.2.x single-surface behaviour.
+    pub channel_names: &'a [String],
 }
 
 /// One-line heartbeat written on every daemon (re)start. Always-on
@@ -74,6 +80,36 @@ pub fn bootstrap_note(inputs: &BootstrapInputs<'_>) -> String {
          with chat at any time, or approve / deny gated actions when it asks you to.\n\n",
     );
 
+    // I-9: multi-surface model. List the other surfaces klodi is
+    // configured to page the operator on, so the operator never has
+    // to wonder "where will klodi find me?"
+    let other_surfaces: Vec<&String> = inputs
+        .channel_names
+        .iter()
+        .filter(|n| n.as_str() != "dedicated_session")
+        .collect();
+    if !other_surfaces.is_empty() {
+        s.push_str("**Other surfaces klodi will page you on:**\n");
+        for name in &other_surfaces {
+            let pretty = match name.as_str() {
+                "dashboard" => "whichever dashboard session you're actively typing in",
+                other if other.starts_with("upstream:") => {
+                    let id = &other["upstream:".len()..];
+                    s.push_str(&format!("- {id} (via `zeroclaw channel send`)\n"));
+                    continue;
+                }
+                other => other,
+            };
+            s.push_str(&format!("- {pretty}\n"));
+        }
+        s.push_str(
+            "\nReply with `/klodi yes:<reqId>` in the dashboard, or just type your answer \
+             in this session. Approvals released on either surface release the gate — the \
+             first matching reply wins. Upstream channels (Telegram/Slack/etc.) are \
+             notification-only in 0.3.0; release approvals via dashboard or this session.\n\n",
+        );
+    }
+
     s.push_str("**Wake event kinds you'll see:**\n");
     s.push_str("- `listing.created` — your listing was published\n");
     s.push_str("- `listing.matched` — a counterparty's search matched your listing\n");
@@ -112,12 +148,16 @@ mod tests {
     use super::*;
 
     fn fixture<'a>() -> BootstrapInputs<'a> {
+        // Static empty slice so we can hand it out by reference from a
+        // function that returns BootstrapInputs<'static>.
+        static EMPTY: &[String] = &[];
         BootstrapInputs {
             handle: "alice",
             user_id: "u_alice_123",
             nats_url: "wss://nats.klodi.4gpts.com:4222",
             daemon_version: "0.2.6",
             browser_pair_url: None,
+            channel_names: EMPTY,
         }
     }
 
@@ -238,5 +278,50 @@ mod tests {
         let a = bootstrap_note(&fixture());
         let b = bootstrap_note(&fixture());
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn bootstrap_note_lists_dashboard_and_upstream_surfaces() {
+        // I-9 multi-surface model: when channels include dashboard +
+        // upstream:telegram, the note explains where else klodi will
+        // page the operator.
+        let names = vec![
+            "dedicated_session".to_string(),
+            "dashboard".to_string(),
+            "upstream:telegram".to_string(),
+        ];
+        let inputs = BootstrapInputs {
+            handle: "alice",
+            user_id: "u_alice_123",
+            nats_url: "wss://nats.klodi.4gpts.com:4222",
+            daemon_version: "0.3.0",
+            browser_pair_url: None,
+            channel_names: &names,
+        };
+        let note = bootstrap_note(&inputs);
+        assert!(note.contains("Other surfaces"));
+        assert!(note.contains("dashboard session"));
+        assert!(note.contains("telegram"));
+        // Approval-reply convention must reach the operator on this
+        // surface.
+        assert!(note.contains("/klodi yes:"));
+        assert!(note.contains("Upstream channels"));
+    }
+
+    #[test]
+    fn bootstrap_note_omits_multi_surface_section_when_only_dedicated_session() {
+        // Operator hasn't enabled dashboard / upstream channels →
+        // single-surface behaviour, no multi-surface section.
+        let names = vec!["dedicated_session".to_string()];
+        let inputs = BootstrapInputs {
+            handle: "alice",
+            user_id: "u_alice_123",
+            nats_url: "wss://nats.klodi.4gpts.com:4222",
+            daemon_version: "0.3.0",
+            browser_pair_url: None,
+            channel_names: &names,
+        };
+        let note = bootstrap_note(&inputs);
+        assert!(!note.contains("Other surfaces"));
     }
 }

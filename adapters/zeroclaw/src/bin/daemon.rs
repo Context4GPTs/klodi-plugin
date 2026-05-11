@@ -32,14 +32,16 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use klodi_rust_host::{
     BodyShape, BrowserPairConfig, ForwarderConfig, MinterImpl, ResolvedSession,
-    ShimConfig, ShimHandle, ZeroClawWsConfig, ZeroclawCliMinter, adopt_session_id,
-    paths, resolve_session_id, run_forwarder, send_session_message,
+    SessionBinding, ShimConfig, ShimHandle, ZeroClawWsConfig, ZeroclawCliMinter,
+    adopt_session_id, channels::factory::build_channel_registry, paths,
+    resolve_session_id, run_forwarder, send_session_message,
     zeroclaw_bootstrap_note,
 };
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use futures_util::StreamExt;
 
 /// Nominal value for `ForwarderConfig::wake_post_timeout`. The
 /// `BodyShape::ZeroClawSession` path doesn't use reqwest for wake
@@ -310,14 +312,18 @@ async fn main() -> Result<()> {
         None
     };
 
-    let bootstrap_inputs = zeroclaw_bootstrap_note::BootstrapInputs {
+    // Heartbeat doesn't use `channel_names` (it's one-line) — compose
+    // with an empty list, send into the session at resolve time.
+    let empty_names: Vec<String> = Vec::new();
+    let heartbeat_inputs = zeroclaw_bootstrap_note::BootstrapInputs {
         handle: &cfg_summary.handle,
         user_id: &cfg_summary.user_id,
         nats_url: &cfg_summary.nats_url,
         daemon_version: env!("CARGO_PKG_VERSION"),
         browser_pair_url: shim_handle.as_ref().map(|h| h.url.as_str()),
+        channel_names: &empty_names,
     };
-    let heartbeat = zeroclaw_bootstrap_note::heartbeat(&bootstrap_inputs);
+    let heartbeat = zeroclaw_bootstrap_note::heartbeat(&heartbeat_inputs);
 
     // Resolve operator session. Adopt path takes precedence (operator
     // explicit), then read-or-bootstrap with atomic first-write.
@@ -337,6 +343,41 @@ async fn main() -> Result<()> {
         adopted = cli.adopt_session.is_some(),
         "klodi_zeroclaw_session_resolved"
     );
+
+    // Channel-registry build comes BEFORE the bootstrap-note post so
+    // the §I-9 multi-surface copy can list every surface klodi will
+    // page the operator on.
+    let registry_outcome = match build_channel_registry(
+        &klodi_home,
+        &SessionBinding {
+            ws_config: ws_config.clone(),
+            session_id: resolved.session_id.clone(),
+        },
+    )
+    .await
+    {
+        Ok((registry, cfg)) => Some((registry, cfg)),
+        Err(err) => {
+            tracing::warn!(
+                error = %format!("{err:#}"),
+                "klodi_zeroclaw_daemon_channel_registry_build_failed_continuing_single_surface"
+            );
+            None
+        }
+    };
+    let channel_names_owned: Vec<String> = registry_outcome
+        .as_ref()
+        .map(|(r, _)| r.channel_names())
+        .unwrap_or_default();
+
+    let bootstrap_inputs = zeroclaw_bootstrap_note::BootstrapInputs {
+        handle: &cfg_summary.handle,
+        user_id: &cfg_summary.user_id,
+        nats_url: &cfg_summary.nats_url,
+        daemon_version: env!("CARGO_PKG_VERSION"),
+        browser_pair_url: shim_handle.as_ref().map(|h| h.url.as_str()),
+        channel_names: &channel_names_owned,
+    };
 
     // The atomic resolve path already wrote the heartbeat as the
     // session's first message — skip the standalone post in that case
@@ -381,6 +422,21 @@ async fn main() -> Result<()> {
         });
     }
 
+    // I-6: hand the same registry to the reply-attribution task so
+    // dashboard replies land in `${KLODI_HOME}/approvals/<rid>.reply.json`
+    // for the MCP server's approval gate. Failures are non-fatal —
+    // the dedicated klodi session path keeps working without the
+    // dashboard surface.
+    if let Some((registry, cfg)) = registry_outcome {
+        if cfg.dashboard.enabled {
+            tokio::spawn(run_reply_attribution(klodi_home.clone(), registry));
+        } else {
+            tracing::info!(
+                "klodi_zeroclaw_reply_attribution_skipped_dashboard_disabled"
+            );
+        }
+    }
+
     run_forwarder(ForwarderConfig {
         creds_path,
         config_path,
@@ -401,6 +457,66 @@ async fn main() -> Result<()> {
     })
     .await
     .context("running klodi-zeroclaw-daemon")
+}
+
+/// I-6 reply attribution loop. Subscribes to `registry.replies()` —
+/// emitted by `DashboardChannel`'s polling bridge — and persists each
+/// matched reply to `${KLODI_HOME}/approvals/<rid>.reply.json` so a
+/// freshly-spawned MCP server's approval gate can pick it up on the
+/// agent's next retry. Failures inside the task log + skip; the task
+/// itself stays alive until the daemon shuts down.
+async fn run_reply_attribution(
+    klodi_home: PathBuf,
+    registry: klodi_rust_host::ChannelRegistry,
+) {
+    let mut stream = registry.replies();
+    tracing::info!(
+        channel_count = registry.channel_count(),
+        "klodi_zeroclaw_reply_attribution_started"
+    );
+    while let Some((channel_name, reply)) = stream.next().await {
+        let Some(rid) = reply.correlation_id.as_deref() else {
+            // Bare chat — not tied to an open approval. Drop.
+            continue;
+        };
+        let record = klodi_rust_host::channels::reply_capture::PersistedReply {
+            text: reply.text.clone(),
+            channel_name: reply.channel_name.clone(),
+            origin: reply.origin.clone(),
+            received_at_unix_seconds:
+                klodi_rust_host::channels::reply_capture::now_unix_seconds(),
+        };
+        match klodi_rust_host::channels::reply_capture::persist_reply(
+            &klodi_home,
+            rid,
+            &record,
+        ) {
+            Ok(true) => {
+                tracing::info!(
+                    request_id = %rid,
+                    channel = %channel_name,
+                    origin = %reply.origin,
+                    "klodi_zeroclaw_reply_attribution_captured"
+                );
+            }
+            Ok(false) => {
+                tracing::debug!(
+                    request_id = %rid,
+                    channel = %channel_name,
+                    "klodi_zeroclaw_reply_attribution_duplicate_ignored"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    request_id = %rid,
+                    error = %format!("{err:#}"),
+                    "klodi_zeroclaw_reply_attribution_persist_failed"
+                );
+            }
+        }
+    }
+    tracing::info!("klodi_zeroclaw_reply_attribution_stream_closed");
+    let _ = klodi_home; // keep ownership; referenced via captures above
 }
 
 /// Build the WS config from CLI inputs. Honours explicit `--ws-url` /

@@ -30,23 +30,45 @@ pub struct McpConfig {
     /// `next_action` messages so the agent surfaces the correct command
     /// for the current host. Default: `"klodi-register"`.
     pub register_cli: String,
-    /// ZeroClaw operator-channel binding. Set by the
-    /// `klodi-zeroclaw-mcp` binary so the I-4 (`klodi_report_to_operator`)
-    /// and I-5 (approval gate) tools can write into the persisted
-    /// operator session. Daemon-only adapters leave this `None`; in that
-    /// case the operator-channel surface is filtered out of the catalog
-    /// and the approval gate is a no-op (the host's own approval
-    /// mechanism is responsible).
+    /// Dedicated klodi-session binding. Set by the `klodi-zeroclaw-mcp`
+    /// binary so the I-4 (`klodi_report_to_operator`) and I-5 (approval
+    /// gate) tools can write into the persisted dedicated klodi session.
+    /// Daemon-only adapters leave this `None`; in that case the
+    /// operator-channel surface is filtered out of the catalog and the
+    /// approval gate is a no-op (the host's own approval mechanism is
+    /// responsible).
+    ///
+    /// **Renamed from `operator_channel` in 0.3.0** — the new
+    /// `channels` module owns the operator-channel abstraction. This
+    /// field now names the specific surface (the dedicated klodi
+    /// session) it always was; the multi-surface fan-out happens
+    /// through `channel_registry` below.
     #[cfg(feature = "zeroclaw_session")]
-    pub operator_channel: Option<OperatorChannel>,
+    pub klodi_session_target: Option<KlodiSessionTarget>,
+
+    /// Multi-channel registry used by the approval gate +
+    /// `klodi_report_to_operator` to fan a single notification across
+    /// every operator-visible surface (dashboard + dedicated klodi
+    /// session + any upstream-delegated channels) per
+    /// `docs/plans/2026-05-10-klodi-zeroclaw-channels-implementation.md`.
+    /// `None` for daemon-only adapters; daemons that plug a `Some`
+    /// here get full fan-out at the approval-gate path (Phase 5).
+    #[cfg(feature = "zeroclaw_session")]
+    pub channel_registry: Option<crate::channels::ChannelRegistry>,
 }
 
 /// Resolved (`ZeroClawWsConfig`, persisted `session_id`) pair. Built by
 /// `klodi-zeroclaw-mcp` from `${KLODI_HOME}/zeroclaw.{token,session}`
-/// + the gateway URL on process start.
+/// + the gateway URL on process start. Represents the **dedicated klodi
+/// session** — the agent's reasoning surface + chronicle of record.
+///
+/// **Renamed from `OperatorChannel` in 0.3.0** to reduce confusion with
+/// the new `channels::OperatorChannel` trait. The new trait abstracts
+/// over every operator-visible surface; this struct only knows about
+/// the one dedicated klodi session.
 #[cfg(feature = "zeroclaw_session")]
 #[derive(Clone)]
-pub struct OperatorChannel {
+pub struct KlodiSessionTarget {
     pub ws_config: crate::zeroclaw_ws::ZeroClawWsConfig,
     pub session_id: String,
 }
@@ -79,11 +101,23 @@ impl KlodiMcpHandler {
         &self.inner.cfg.register_cli
     }
 
-    /// `Some(channel)` iff the binary plugged a ZeroClaw session in;
-    /// `None` for daemon-only adapters.
+    /// `Some(target)` iff the binary plugged a dedicated klodi session
+    /// in; `None` for daemon-only adapters.
     #[cfg(feature = "zeroclaw_session")]
-    pub(super) fn operator_channel(&self) -> Option<&OperatorChannel> {
-        self.inner.cfg.operator_channel.as_ref()
+    pub(super) fn klodi_session_target(&self) -> Option<&KlodiSessionTarget> {
+        self.inner.cfg.klodi_session_target.as_ref()
+    }
+
+    /// `Some(registry)` iff the binary built a `ChannelRegistry` for
+    /// multi-surface fan-out. `None` falls back to the single-target
+    /// dedicated-klodi-session path (back-compat for old MCP server
+    /// drivers).
+    #[cfg(feature = "zeroclaw_session")]
+    #[allow(dead_code)] // wired up in Phase 5 (approval-gate re-routing)
+    pub(super) fn channel_registry(
+        &self,
+    ) -> Option<&crate::channels::ChannelRegistry> {
+        self.inner.cfg.channel_registry.as_ref()
     }
 
     /// Lazily open the persistent NATS-WS connection. Subsequent calls
