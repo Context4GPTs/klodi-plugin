@@ -436,7 +436,14 @@ async fn forward_zeroclaw_session<T: Serialize>(
         tokio::time::sleep(delay).await;
     }
 
-    match crate::zeroclaw_ws::send_session_message(ws_config, session_id, &content).await {
+    match crate::zeroclaw_ws::send_session_message(
+        ws_config,
+        session_id,
+        &content,
+        crate::zeroclaw_ws::SendAckPolicy::OnAgentObservation,
+    )
+    .await
+    {
         Ok(_) => {
             // Reset the failure counter so the next send is unthrottled.
             state

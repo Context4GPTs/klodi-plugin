@@ -440,6 +440,7 @@ async fn approval_gate(
                         &target.ws_config,
                         &target.session_id,
                         &prompt,
+                        crate::zeroclaw_ws::SendAckPolicy::OnAgentObservation,
                     )
                     .await
                     .is_ok()
@@ -727,6 +728,7 @@ async fn dispatch_report_to_operator(
         &target.ws_config,
         &target.session_id,
         &content,
+        crate::zeroclaw_ws::SendAckPolicy::OnAgentObservation,
     )
     .await
     .map_err(|err| {

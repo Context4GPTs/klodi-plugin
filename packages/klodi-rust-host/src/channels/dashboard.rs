@@ -36,7 +36,7 @@ use serde_json::Value;
 use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
-use crate::zeroclaw_ws::{ZeroClawWsConfig, send_session_message};
+use crate::zeroclaw_ws::{SendAckPolicy, ZeroClawWsConfig, send_session_message};
 
 use super::cursor::DispatcherCursor;
 use super::ledger::CreatedSessionsLedger;
@@ -589,6 +589,7 @@ impl DashboardChannel {
                 &self.inner.ws_config,
                 session_id,
                 &resurrection_breadcrumb(),
+                SendAckPolicy::OnAgentObservation,
             )
             .await;
         }
@@ -1036,13 +1037,18 @@ impl OperatorChannel for DashboardChannel {
             }
         };
 
-        send_session_message(&self.inner.ws_config, &session_id, &rendered)
-            .await
-            .with_context(|| {
-                format!(
-                    "posting dashboard notification {correlation_id} to session {session_id}"
-                )
-            })?;
+        send_session_message(
+            &self.inner.ws_config,
+            &session_id,
+            &rendered,
+            SendAckPolicy::OnAgentObservation,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "posting dashboard notification {correlation_id} to session {session_id}"
+            )
+        })?;
         // Record the adjacency entry so a bare affirmation within
         // [`ADJACENCY_WINDOW`] correlates to this notification.
         self.record_adjacency(&correlation_id, &session_id).await;

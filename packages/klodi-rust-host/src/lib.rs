@@ -108,6 +108,6 @@ pub use zeroclaw_session::{
 };
 #[cfg(feature = "zeroclaw_session")]
 pub use zeroclaw_ws::{
-    SessionOutcome, ZeroClawWsConfig, bootstrap_session,
+    SendAckPolicy, SessionOutcome, ZeroClawWsConfig, bootstrap_session,
     bootstrap_session_with_first_message, send_session_message,
 };

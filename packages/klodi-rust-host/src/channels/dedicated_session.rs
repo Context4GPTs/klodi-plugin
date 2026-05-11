@@ -14,7 +14,7 @@ use reqwest::Client as HttpClient;
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::zeroclaw_ws::{ZeroClawWsConfig, send_session_message};
+use crate::zeroclaw_ws::{SendAckPolicy, ZeroClawWsConfig, send_session_message};
 
 use super::session_health::{
     SessionHealth, check_session_alive, resurrection_breadcrumb,
@@ -119,6 +119,7 @@ impl OperatorChannel for DedicatedSessionChannel {
                     &self.ws_config,
                     &self.session_id,
                     &resurrection_breadcrumb(),
+                    SendAckPolicy::OnAgentObservation,
                 )
                 .await;
             }
@@ -140,14 +141,19 @@ impl OperatorChannel for DedicatedSessionChannel {
             }
         }
 
-        send_session_message(&self.ws_config, &self.session_id, &rendered)
-            .await
-            .with_context(|| {
-                format!(
-                    "posting notification {correlation_id} to dedicated klodi session {}",
-                    self.session_id,
-                )
-            })?;
+        send_session_message(
+            &self.ws_config,
+            &self.session_id,
+            &rendered,
+            SendAckPolicy::OnAgentObservation,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "posting notification {correlation_id} to dedicated klodi session {}",
+                self.session_id,
+            )
+        })?;
 
         if matches!(health, SessionHealth::Missing) {
             // Post the breadcrumb after the silent-recreate write so
@@ -156,6 +162,7 @@ impl OperatorChannel for DedicatedSessionChannel {
                 &self.ws_config,
                 &self.session_id,
                 &resurrection_breadcrumb(),
+                SendAckPolicy::OnAgentObservation,
             )
             .await;
         }

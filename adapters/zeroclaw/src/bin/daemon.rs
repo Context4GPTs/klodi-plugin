@@ -34,7 +34,7 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use klodi_rust_host::{
-    BodyShape, BrowserPairConfig, ForwarderConfig, MinterImpl, ResolvedSession,
+    BodyShape, BrowserPairConfig, ForwarderConfig, MinterImpl,
     SessionBinding, ShimConfig, ShimHandle, ZeroClawWsConfig, ZeroclawCliMinter,
     adopt_session_id, channels::factory::build_channel_registry, paths,
     resolve_session_id, run_forwarder, send_session_message,
@@ -314,6 +314,26 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Spawn the pairing-shim accept loop NOW, before any WS writes.
+    // Without this, `klodi_zeroclaw_shim_bound` is logged at t=0 but
+    // the listening socket is created inside `handle.serve(m)` — which
+    // historically ran AFTER the bootstrap WS drains, leaving the
+    // helper URL operator-visible but unreachable for ~6 minutes on a
+    // cold first boot. `shim_handle` is moved into the task; we keep a
+    // cloned URL string so the rest of startup (heartbeat composition,
+    // print_pair_block, browser-open) can still reference it.
+    let shim_url: Option<String> = shim_handle.as_ref().map(|h| h.url.clone());
+    if let (Some(handle), Some(m)) = (shim_handle, minter.clone()) {
+        tokio::spawn(async move {
+            if let Err(err) = handle.serve(m).await {
+                tracing::warn!(
+                    error = %format!("{err:#}"),
+                    "klodi_zeroclaw_shim_loop_exited"
+                );
+            }
+        });
+    }
+
     // Heartbeat doesn't use `channel_names` (it's one-line) — compose
     // with an empty list, send into the session at resolve time.
     let empty_names: Vec<String> = Vec::new();
@@ -322,7 +342,7 @@ async fn main() -> Result<()> {
         user_id: &cfg_summary.user_id,
         nats_url: &cfg_summary.nats_url,
         daemon_version: env!("CARGO_PKG_VERSION"),
-        browser_pair_url: shim_handle.as_ref().map(|h| h.url.as_str()),
+        browser_pair_url: shim_url.as_deref(),
         channel_names: &empty_names,
     };
     let heartbeat = zeroclaw_bootstrap_note::heartbeat(&heartbeat_inputs);
@@ -373,56 +393,77 @@ async fn main() -> Result<()> {
         .map(|(r, _)| r.channel_names())
         .unwrap_or_default();
 
-    let bootstrap_inputs = zeroclaw_bootstrap_note::BootstrapInputs {
-        handle: &cfg_summary.handle,
-        user_id: &cfg_summary.user_id,
-        nats_url: &cfg_summary.nats_url,
-        daemon_version: env!("CARGO_PKG_VERSION"),
-        browser_pair_url: shim_handle.as_ref().map(|h| h.url.as_str()),
-        channel_names: &channel_names_owned,
+    // The atomic resolve path already wrote the heartbeat as the
+    // session's first message on the freshly-minted path — skip the
+    // standalone post in that case so the operator's chat doesn't
+    // show the same line twice. Compose the bootstrap-note body
+    // upfront (when needed) so the spawned task below can take owned
+    // strings without dragging `BootstrapInputs<'_>` references along.
+    let heartbeat_already_written = resolved.freshly_minted;
+    let needs_intro =
+        resolved.freshly_minted || resolved.message_count.unwrap_or(1) == 0;
+    let bootstrap_note_body: Option<String> = if needs_intro {
+        let bootstrap_inputs = zeroclaw_bootstrap_note::BootstrapInputs {
+            handle: &cfg_summary.handle,
+            user_id: &cfg_summary.user_id,
+            nats_url: &cfg_summary.nats_url,
+            daemon_version: env!("CARGO_PKG_VERSION"),
+            browser_pair_url: shim_url.as_deref(),
+            channel_names: &channel_names_owned,
+        };
+        Some(zeroclaw_bootstrap_note::bootstrap_note(&bootstrap_inputs))
+    } else {
+        None
     };
 
-    // The atomic resolve path already wrote the heartbeat as the
-    // session's first message — skip the standalone post in that case
-    // so the operator's chat doesn't show the same line twice.
-    let heartbeat_already_written = resolved.freshly_minted;
-    post_startup_notes(
-        &ws_config,
-        &resolved,
-        &bootstrap_inputs,
-        &heartbeat,
-        heartbeat_already_written,
-    )
-    .await?;
+    // Spawn the startup-note writes so they don't gate the daemon's
+    // primary work — NATS dial, reply-attribution, and the operator-
+    // visible pair block all proceed immediately. These are bootstrap
+    // breadcrumbs into the operator's session; nothing downstream
+    // waits on them landing, and failures are already logged inside
+    // `post_startup_notes`. The writes themselves are OnGatewayWrite
+    // (no agent expected to observe them at this point) so each one
+    // returns in ~5s rather than burning the 180s wake-regime drain.
+    let ws_for_notes = ws_config.clone();
+    let session_id_for_notes = resolved.session_id.clone();
+    let heartbeat_owned = heartbeat.clone();
+    tokio::spawn(async move {
+        if let Err(err) = post_startup_notes(
+            &ws_for_notes,
+            &session_id_for_notes,
+            &heartbeat_owned,
+            heartbeat_already_written,
+            bootstrap_note_body.as_deref(),
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %format!("{err:#}"),
+                session_id = %session_id_for_notes,
+                "klodi_zeroclaw_startup_notes_failed_continuing"
+            );
+        }
+    });
 
-    // Boxed stdout block + (optional) browser auto-open + spawn the
-    // helper accept loop. Non-fatal at every step — the daemon's
-    // primary job (NATS forwarding) proceeds regardless.
-    if let Some(handle) = &shim_handle {
-        print_pair_block(&handle.url, minter.as_deref()).await;
+    // Operator-facing pair block + (optional) browser auto-open. The
+    // accept loop was spawned earlier so the URL is reachable from
+    // t=0; this block is just the human-readable surface telling the
+    // operator how to use it.
+    if let Some(url) = shim_url.as_deref() {
+        print_pair_block(url, minter.as_deref()).await;
         if should_open_browser(cli.open_browser) {
-            match open_browser_url(&handle.url) {
+            match open_browser_url(url) {
                 Ok(()) => tracing::info!(
-                    url = %handle.url,
+                    url = %url,
                     "klodi_zeroclaw_open_browser_dispatched"
                 ),
                 Err(err) => tracing::warn!(
                     error = %err,
-                    url = %handle.url,
+                    url = %url,
                     "klodi_zeroclaw_open_browser_failed"
                 ),
             }
         }
-    }
-    if let (Some(handle), Some(m)) = (shim_handle, minter) {
-        tokio::spawn(async move {
-            if let Err(err) = handle.serve(m).await {
-                tracing::warn!(
-                    error = %format!("{err:#}"),
-                    "klodi_zeroclaw_shim_loop_exited"
-                );
-            }
-        });
     }
 
     // Hand the same registry to the reply-attribution task so
@@ -589,18 +630,29 @@ fn read_config_summary(path: &std::path::Path) -> Result<ConfigSummary> {
 /// that refuses to start.
 async fn post_startup_notes(
     ws: &ZeroClawWsConfig,
-    resolved: &ResolvedSession,
-    inputs: &zeroclaw_bootstrap_note::BootstrapInputs<'_>,
+    session_id: &str,
     heartbeat: &str,
     heartbeat_already_written: bool,
+    bootstrap_note: Option<&str>,
 ) -> Result<()> {
+    // Both writes are OnGatewayWrite: at startup no agent loop is yet
+    // observing the session, so the wake-regime 180s `agent_start` wait
+    // would burn its full window every time. OnGatewayWrite returns as
+    // soon as the gateway accepts the frame (plus a 5s error-grace
+    // read), which is the right semantic — these writes are bootstrap
+    // breadcrumbs, not operator-observed wakes.
     if !heartbeat_already_written {
-        if let Err(err) =
-            send_session_message(ws, &resolved.session_id, heartbeat).await
+        if let Err(err) = send_session_message(
+            ws,
+            session_id,
+            heartbeat,
+            klodi_rust_host::SendAckPolicy::OnGatewayWrite,
+        )
+        .await
         {
             tracing::warn!(
                 error = %format!("{err:#}"),
-                session_id = %resolved.session_id,
+                session_id = %session_id,
                 "klodi_zeroclaw_heartbeat_post_failed_continuing"
             );
             // Continue — the operator will still see wakes when they arrive.
@@ -608,19 +660,23 @@ async fn post_startup_notes(
         }
     }
 
-    // Bootstrap note — sent on freshly-minted sessions OR sessions with
-    // no prior messages. Steady-state daemon restarts skip it so the
-    // operator's chat doesn't accumulate identical intros.
-    let needs_intro = resolved.freshly_minted
-        || resolved.message_count.unwrap_or(1) == 0;
-    if needs_intro {
-        let body = zeroclaw_bootstrap_note::bootstrap_note(inputs);
-        if let Err(err) =
-            send_session_message(ws, &resolved.session_id, &body).await
+    // Bootstrap note — composed by the caller (it owns the session
+    // metadata and channel-registry surface list needed by
+    // `bootstrap_note::BootstrapInputs`). `None` means "skip the
+    // standalone post" — used for steady-state daemon restarts where
+    // the operator already has the intro in their chat history.
+    if let Some(body) = bootstrap_note {
+        if let Err(err) = send_session_message(
+            ws,
+            session_id,
+            body,
+            klodi_rust_host::SendAckPolicy::OnGatewayWrite,
+        )
+        .await
         {
             tracing::warn!(
                 error = %format!("{err:#}"),
-                session_id = %resolved.session_id,
+                session_id = %session_id,
                 "klodi_zeroclaw_bootstrap_note_post_failed_continuing"
             );
         }

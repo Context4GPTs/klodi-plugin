@@ -207,13 +207,21 @@ async fn resolve_session_id_with_http(
     // Bootstrap path: open WS, mint a session, atomically write the
     // first message before closing. This is the only place
     // bootstrap_message is consumed.
-    let outcome =
-        zeroclaw_ws::bootstrap_session_with_first_message(cfg, bootstrap_message)
-            .await
-            .context(
-                "bootstrapping a fresh ZeroClaw session via WS /ws/chat \
-                 with atomic first message",
-            )?;
+    //
+    // Use OnGatewayWrite — at mint time the session has no agent loop
+    // attached (the daemon is still in startup, the operator hasn't
+    // opened the dashboard), so the wake-regime `agent_start` wait
+    // would burn its full 180s window for no observability gain.
+    let outcome = zeroclaw_ws::bootstrap_session_with_first_message(
+        cfg,
+        bootstrap_message,
+        zeroclaw_ws::SendAckPolicy::OnGatewayWrite,
+    )
+    .await
+    .context(
+        "bootstrapping a fresh ZeroClaw session via WS /ws/chat \
+         with atomic first message",
+    )?;
     persist_session_file(&path, &outcome.session_id)?;
     Ok(ResolvedSession {
         session_id: outcome.session_id,

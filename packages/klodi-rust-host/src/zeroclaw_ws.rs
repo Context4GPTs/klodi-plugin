@@ -176,11 +176,11 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Deadline for waiting on a post-send acknowledgement frame
-/// (`agent_start`). Observed against the gateway the gateway emits this as
-/// soon as the agent loop picks our message up, so on an idle session
-/// it lands within a second; on a busy session it lands after the
-/// in-flight turn finishes (30–90s typical, 60s+ for agentic wakes per
-/// operator report).
+/// (`agent_start`) under [`SendAckPolicy::OnAgentObservation`]. Observed
+/// against the gateway: emitted as soon as the agent loop picks our
+/// message up — on an idle session within a second; on a busy session
+/// after the in-flight turn drains (30–90s typical, 60s+ for agentic
+/// wakes per operator report).
 ///
 /// 180s gives us room for one prior in-flight turn to drain plus our
 /// own to start, without holding the per-channel forwarder queue
@@ -194,11 +194,49 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// message into the loop.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// Error-grace window under [`SendAckPolicy::OnGatewayWrite`]. After
+/// the WS frame has been flushed (`SEND_TIMEOUT` bounds that), we read
+/// inbound frames for this short window strictly to surface gateway
+/// `error` frames (auth, schema mismatch, session-not-found). Sized
+/// against the protocol's actual latency floor — on a healthy
+/// connection error frames arrive in milliseconds; agent-turn
+/// duration does not factor in because no agent is expected in this
+/// regime. Window elapsing without an error frame is the success
+/// signal, not an exceptional condition.
+const SEND_ERROR_GRACE: Duration = Duration::from_secs(5);
+
 /// Deadline for the initial `session_start` frame after a successful
 /// WS upgrade. Distinct from `DRAIN_TIMEOUT` — the gateway emits
 /// `session_start` immediately after upgrade regardless of agent-loop
 /// state, so a long wait here means something is actually wrong.
 const SESSION_START_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// What the WS send helper waits on after the gateway accepts the
+/// frame. Picked per call-site to match the operational regime — the
+/// policy makes the implicit "no agent attached" vs "agent loop live"
+/// state explicit, so timeouts in either branch are bounded by a
+/// purpose-fit constant rather than the worst-case wake duration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendAckPolicy {
+    /// **Bootstrap regime** — daemon startup, session-seeding writes,
+    /// any path where no agent is expected to be attached. After the
+    /// WS layer flushes the frame, we briefly read inbound frames
+    /// (`SEND_ERROR_GRACE`) to catch gateway `error` frames; absence
+    /// of an error within that window is the success signal. Does NOT
+    /// wait for `agent_start` — there is no agent loop to start in
+    /// this regime, and a long wait would conflate "no agent attached"
+    /// (a design state) with "delivery failure" (an operational state).
+    OnGatewayWrite,
+    /// **Wake-delivery regime** — runtime forwarder writes, channel
+    /// fan-out, agent-observed notifications. After the flush, blocks
+    /// up to `DRAIN_TIMEOUT` for the gateway's `agent_start` frame as
+    /// a positive visibility signal. On timeout the WS write itself
+    /// still succeeded (the message is persisted in the session), so
+    /// we return `Ok` with a warn log; the forwarder acks the NATS
+    /// message. Error frames return `Err` immediately so the caller
+    /// can NAK the upstream delivery.
+    OnAgentObservation,
+}
 
 /// Open a fresh WS connection (no `session_id` query) and return the
 /// session id the gateway minted. Closes the connection cleanly before
@@ -232,8 +270,11 @@ pub async fn bootstrap_session(cfg: &ZeroClawWsConfig) -> Result<SessionOutcome>
 /// Behaviour:
 /// 1. Open WS without `session_id` → wait for `session_start`.
 /// 2. Send `{"type":"message","content":<content>}`.
-/// 3. Drain frames briefly waiting for `agent_start` (or any
-///    non-error frame) so we know the gateway accepted the write.
+/// 3. Drain frames under `ack` policy (see [`SendAckPolicy`]). The
+///    bootstrap path is virtually always [`SendAckPolicy::OnGatewayWrite`]
+///    — at session-mint time there is no agent loop to observe the
+///    write, so the wake-regime 180s wait would conflate "no agent yet"
+///    (design state) with "delivery failure" (operational state).
 /// 4. Close WS.
 ///
 /// Returns the gateway-minted `SessionOutcome`. Errors propagate; the
@@ -241,6 +282,7 @@ pub async fn bootstrap_session(cfg: &ZeroClawWsConfig) -> Result<SessionOutcome>
 pub async fn bootstrap_session_with_first_message(
     cfg: &ZeroClawWsConfig,
     content: &str,
+    ack: SendAckPolicy,
 ) -> Result<SessionOutcome> {
     let req = build_ws_request(&cfg.ws_url, &cfg.bearer)?;
     let (mut ws, _resp) = timeout(HANDSHAKE_TIMEOUT, connect_async(req))
@@ -249,26 +291,36 @@ pub async fn bootstrap_session_with_first_message(
         .with_context(|| format!("WS handshake to {} failed", cfg.ws_url))?;
 
     let outcome = await_session_start(&mut ws).await?;
-    write_message_and_drain(&mut ws, &outcome.session_id, content).await?;
+    write_message_and_drain(&mut ws, &outcome.session_id, content, ack).await?;
     let _ = ws.close(None).await;
     Ok(outcome)
 }
 
-/// Resume `session_id` and append `content` to it as a user-role message.
-/// Returns once the gateway has emitted `agent_start` (the agent loop
-/// picked the message up). Returns `Err` on `error` frame or transport
-/// failure.
+/// Resume `session_id` and append `content` to it as a user-role
+/// message under `ack` policy:
 ///
-/// The forwarder treats a `Ok(())` return as "wake delivered, ack the
-/// NATS message". This isn't a per-message correlation guarantee —
-/// multiple wakes arriving in quick succession share the agent's
-/// serial processing and the gateway doesn't carry a per-message ack
-/// today. Acceptable for the demo / low-volume case; the README
-/// documents the gap.
+/// - [`SendAckPolicy::OnAgentObservation`] (the wake-delivery default):
+///   returns once the gateway has emitted `agent_start`, i.e. the agent
+///   loop picked the message up. On timeout the WS write itself still
+///   succeeded so the message is persisted in the session; the caller
+///   gets `Ok` plus a warn log. This isn't a per-message correlation
+///   guarantee — multiple wakes arriving in quick succession share the
+///   agent's serial processing and the gateway doesn't carry a
+///   per-message ack today. Acceptable for the demo / low-volume case;
+///   the README documents the gap.
+///
+/// - [`SendAckPolicy::OnGatewayWrite`]: returns as soon as the WS layer
+///   flushes the frame and a short error-grace window elapses without
+///   the gateway raising an `error` frame. Use for daemon startup /
+///   bootstrap writes where no agent loop is expected to observe the
+///   message at write time.
+///
+/// Either policy returns `Err` on `error` frame or transport failure.
 pub async fn send_session_message(
     cfg: &ZeroClawWsConfig,
     session_id: &str,
     content: &str,
+    ack: SendAckPolicy,
 ) -> Result<SessionOutcome> {
     let url = ws_url_with_session(&cfg.ws_url, session_id)?;
     let req = build_ws_request(&url, &cfg.bearer)?;
@@ -278,21 +330,34 @@ pub async fn send_session_message(
         .with_context(|| format!("WS handshake to {url} failed"))?;
 
     let session_outcome = await_session_start(&mut ws).await?;
-    write_message_and_drain(&mut ws, session_id, content).await?;
+    write_message_and_drain(&mut ws, session_id, content, ack).await?;
     let _ = ws.close(None).await;
     Ok(session_outcome)
 }
 
 /// Write one `{"type":"message","content":...}` frame to an already-
-/// established WS, then drain inbound frames until either `agent_start`
-/// arrives, the gateway closes the WS, or `DRAIN_TIMEOUT` elapses.
-/// Used by both [`send_session_message`] and
+/// established WS, then drain inbound frames under the caller's `ack`
+/// policy. Used by both [`send_session_message`] and
 /// [`bootstrap_session_with_first_message`] so the post-send protocol
 /// stays in one place.
+///
+/// Policy semantics — see [`SendAckPolicy`] for the design rationale:
+///
+/// - [`SendAckPolicy::OnGatewayWrite`]: read frames for `SEND_ERROR_GRACE`
+///   strictly to surface gateway `error` frames. Window elapsing or the
+///   gateway closing the WS is the success signal. No `agent_start`
+///   wait — the constant is sized for protocol latency, not agent-turn
+///   duration.
+/// - [`SendAckPolicy::OnAgentObservation`]: drain up to `DRAIN_TIMEOUT`
+///   waiting for `agent_start` as a positive visibility signal. On
+///   timeout the WS write itself succeeded (message is persisted), so
+///   return `Ok` plus a warn log; callers (the forwarder) ack the
+///   upstream NATS message either way.
 async fn write_message_and_drain<S>(
     ws: &mut S,
     session_id: &str,
     content: &str,
+    ack: SendAckPolicy,
 ) -> Result<()>
 where
     S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
@@ -312,9 +377,90 @@ where
         .context("WS send timed out")?
         .context("WS send failed")?;
 
-    // Wait for the gateway to react. agent_start = "your message
-    // entered the agent loop". Bounded by DRAIN_TIMEOUT — see its
-    // docstring for the agent-turn-duration calculus.
+    match ack {
+        SendAckPolicy::OnGatewayWrite => drain_for_errors_only(ws, session_id).await,
+        SendAckPolicy::OnAgentObservation => drain_for_agent_start(ws, session_id).await,
+    }
+}
+
+/// Post-send drain for [`SendAckPolicy::OnGatewayWrite`]. Reads frames
+/// for `SEND_ERROR_GRACE` looking only for `error` frames; everything
+/// else (including `agent_start`, which can fire if an agent happens
+/// to be attached) is treated as additional success evidence. Window
+/// elapsing or WS close is success.
+async fn drain_for_errors_only<S>(ws: &mut S, session_id: &str) -> Result<()>
+where
+    S: futures_util::Stream<
+            Item = Result<Message, tokio_tungstenite::tungstenite::Error>,
+        > + Unpin,
+{
+    let drain = async {
+        while let Some(frame) = ws.next().await {
+            let msg = match frame {
+                Ok(m) => m,
+                Err(err) => bail!("WS read error after send: {err}"),
+            };
+            let txt = match msg {
+                Message::Text(t) => t,
+                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) => continue,
+                Message::Close(_) => break,
+                Message::Frame(_) => continue,
+            };
+            match parse_inbound(&txt) {
+                InboundFrame::Error { code, message, component } => {
+                    bail!(
+                        "ZeroClaw gateway returned error frame: code={:?} component={:?} message={:?}",
+                        code,
+                        component,
+                        message
+                    );
+                }
+                InboundFrame::AgentStart { .. }
+                | InboundFrame::SessionStart { .. }
+                | InboundFrame::Other => continue,
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+
+    match timeout(SEND_ERROR_GRACE, drain).await {
+        Ok(Ok(())) => {
+            // WS closed cleanly within the grace window — gateway is
+            // done with us. Bootstrap-class writes routinely close the
+            // WS right after accepting the frame, so this is the
+            // expected steady state.
+            tracing::debug!(
+                session_id = %session_id,
+                "klodi_zeroclaw_ws_closed_in_error_grace",
+            );
+            Ok(())
+        }
+        Ok(Err(err)) => Err(err),
+        Err(_) => {
+            // Grace window elapsed with no error frame. This is the
+            // success signal for OnGatewayWrite — the gateway accepted
+            // the write and would have surfaced any rejection within
+            // protocol-level latency. NOT a warn-worthy event.
+            tracing::debug!(
+                session_id = %session_id,
+                "klodi_zeroclaw_ws_send_error_grace_elapsed",
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Post-send drain for [`SendAckPolicy::OnAgentObservation`]. Waits up
+/// to `DRAIN_TIMEOUT` for `agent_start` as the positive visibility
+/// signal that an agent loop picked the message up. On timeout, returns
+/// `Ok` with a warn log (the WS write succeeded; the message is
+/// persisted regardless). Error frames return `Err`.
+async fn drain_for_agent_start<S>(ws: &mut S, session_id: &str) -> Result<()>
+where
+    S: futures_util::Stream<
+            Item = Result<Message, tokio_tungstenite::tungstenite::Error>,
+        > + Unpin,
+{
     let mut acked = false;
     let drain = async {
         while let Some(frame) = ws.next().await {
