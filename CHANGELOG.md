@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.9] — 2026-05-11
+
 ### Added (`klodi-zeroclaw` 0.2.9)
 
 > Targets `klodi-zeroclaw 0.2.9`. OpenClaw, the Python adapters
