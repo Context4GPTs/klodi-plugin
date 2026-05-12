@@ -84,11 +84,18 @@ pub enum BodyShape {
     },
 }
 
-#[cfg(feature = "zeroclaw_session")]
+// Single Debug impl with a cfg-gated arm — avoids the
+// positive+negative cfg split that `adapters/zeroclaw/scripts/vendor.py`
+// can't safely strip (it removes `#[cfg(feature = "zeroclaw_session")]`
+// but leaves `#[cfg(not(feature = ...))]`, so both halves of a split
+// would compile in the staged crate and conflict on the impl). See the
+// matching note in `mcp/tools.rs::dispatch` for the same rule applied
+// to a mutable binding.
 impl std::fmt::Debug for BodyShape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Structured => f.debug_struct("Structured").finish(),
+            #[cfg(feature = "zeroclaw_session")]
             Self::ZeroClawRegistry {
                 dedicated_session_id,
                 ..
@@ -97,15 +104,6 @@ impl std::fmt::Debug for BodyShape {
                 .field("dedicated_session_id", dedicated_session_id)
                 .field("registry", &"<…>")
                 .finish(),
-        }
-    }
-}
-
-#[cfg(not(feature = "zeroclaw_session"))]
-impl std::fmt::Debug for BodyShape {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Structured => f.debug_struct("Structured").finish(),
         }
     }
 }
