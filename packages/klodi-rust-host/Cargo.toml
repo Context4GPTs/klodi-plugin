@@ -1,13 +1,13 @@
 # klodi-rust-host — host-orchestration glue for the Rust adapters.
 #
 # `klodi-nats-client` is the wire-level NATS client (connect, request,
-# subscribe, publish). This crate sits one layer up: forwarder daemon
-# (subscribes both consumers, POSTs each delivered event to a local host
-# wake URL), HTTP-only registration loop, default `${KLODI_HOME}` paths,
+# subscribe, publish). This crate sits one layer up: the wake forwarder
+# (subscribes both consumers, calls a per-adapter callback per event),
+# HTTP-only registration loop, default `${KLODI_HOME}` paths,
 # `klodi_setup_status` reporter, and the `--health-port` HTTP probe.
 #
 # Three adapters (klodi-moltis, klodi-ironclaw, klodi-zeroclaw) consume
-# this crate. Their bin/ files are ~30 LOC drivers that build a
+# this crate. Their bin/ files are thin drivers that build a
 # `ForwarderConfig` from CLI/env and call into here.
 #
 # Per **D § D8** in
@@ -17,7 +17,7 @@
 
 [package]
 name = "klodi-rust-host"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -40,22 +40,16 @@ path = "src/lib.rs"
 [features]
 default = []
 # Enables the stdio MCP server (`mcp` module) plus the helpers that wire
-# klodi into a host's MCP config (`zeroclaw_config` module). Adapters
-# whose host acts as an MCP client (ZeroClaw, future Moltis/IronClaw)
-# pull this in; daemon-only adapters keep the lean dependency tree.
+# klodi into a host's MCP config (`host_mcp_config` module). Adapters
+# whose host acts as an MCP client pull this in; daemon-only adapters
+# keep the lean dependency tree.
 mcp = ["dep:rmcp", "dep:toml_edit"]
-# Enables the ZeroClaw session-aware path: `zeroclaw_ws` (WebSocket
-# client against `/ws/chat`), `zeroclaw_session` (operator-session-id
-# bootstrap + persistence under `${KLODI_HOME}/zeroclaw.session`),
-# `zeroclaw_bootstrap_note` (plugin-authored intro/heartbeat note), and
-# `zeroclaw_approval` (irreversible-tool gate). Adds
-# `BodyShape::ZeroClawRegistry` to the forwarder so wakes route through
-# a `ChannelRegistry` to a single agent surface (dashboard or dedicated
-# klodi session) instead of POSTing to `/webhook` (resolves the 30s
-# `TimeoutLayer` 408). Only the ZeroClaw adapter enables this —
-# Moltis/IronClaw stay on `BodyShape::Structured` against their async
-# wake hooks.
-zeroclaw_session = ["dep:tokio-tungstenite", "dep:http", "dep:async-trait", "dep:toml"]
+# Enables the ZeroClaw-specific path: wake-prompt builder, spawn-via-cron
+# client (`zeroclaw_spawn`), minimal WS client for register-time session
+# bootstrap, `${KLODI_HOME}/zeroclaw.{token,session}` persistence helpers,
+# and the gateway-CLI pairing-code minter. Only the ZeroClaw adapter
+# enables this — Moltis/IronClaw stay on the structured-wake HTTP path.
+zeroclaw = ["dep:tokio-tungstenite", "dep:http"]
 
 [dependencies]
 klodi-nats-client = { path = "../nats-client-rs" }
@@ -85,45 +79,20 @@ tracing = "=0.1.41"
 # Used by the forwarder + register subscribe / await semantics.
 futures-util = "=0.3.31"
 
-# `mcp` feature only — see [features].
-# `include_dir` ships the canonical klodi skill bundle inside the
-# published crate. It powers two consumers: the MCP server's
-# `resources/list` + `resources/read` surface (read-only canonical bytes),
-# and the registration flow's policy-seeding step (non-destructively
-# copies templates/negotiation_style.template.md + policies/security.md
-# into ${KLODI_HOME}/policies/ on first registration).
-include_dir = "=0.7.4"
-
 rmcp = { version = "=1.6.0", features = ["server", "transport-io", "macros"], optional = true }
 toml_edit = { version = "=0.22.22", optional = true }
 
-# `zeroclaw_session` feature only — see [features].
-# `tokio-tungstenite` is the WebSocket client used to write into the
-# operator's ZeroClaw session via `/ws/chat`. `rustls-tls-native-roots`
-# matches the `rustls-tls` posture of the existing reqwest dep so the
-# release binary stays OpenSSL-free. `http` is needed to construct the
-# WS upgrade request with `Authorization: Bearer …` + the
-# `?session_id=<uuid>` query.
+# `zeroclaw` feature only — see [features].
+# `tokio-tungstenite` is the WebSocket client used by `register` to
+# bootstrap the operator chat session with a single hello line via
+# `/ws/chat`. `rustls-tls-native-roots` matches the `rustls-tls` posture
+# of reqwest so the release binary stays OpenSSL-free. `http` is needed
+# to construct the WS upgrade request with `Authorization: Bearer …`.
 tokio-tungstenite = { version = "=0.24.0", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }
 # `http` 1.x — match whatever reqwest's resolver picks (currently 1.4.x).
-# Tungstenite 0.24 uses `http` 1 too; both crates re-export the parts we
-# touch so the runtime contract stays the same across patch bumps.
 http = { version = "1", optional = true }
-# `async-trait` is the simplest way to make `dyn OperatorChannel`
-# work — native `async fn` in traits is stable but `dyn` compatibility
-# still requires boxed-future spelling. async-trait handles that
-# rewrite mechanically.
-async-trait = { version = "=0.1.89", optional = true }
-# `toml` for parsing `${KLODI_HOME}/klodi.toml` `[notifications]` —
-# read-only. `toml_edit` is already pulled for `mcp` so we keep its
-# stricter parser available, but the channels config wants a plain
-# deserialize and `toml` is the canonical lightweight choice.
-toml = { version = "=0.8.19", optional = true }
 
 [dev-dependencies]
 tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "test-util", "process"] }
 tempfile = "=3.14.0"
-# Mocks `GET /api/sessions` for the `zeroclaw_session::classify_cached_session`
-# tests. Only pulled in under `cargo test`; doesn't affect the published
-# crate or release-binary footprint.
 wiremock = "=0.6.2"

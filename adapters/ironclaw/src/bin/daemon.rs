@@ -1,24 +1,23 @@
 //! `klodi-ironclaw-daemon` — long-running NATS-native wake forwarder
 //! for IronClaw.
 //!
-//! Per 0012 § Lifecycle, IronClaw runs a dedicated background subscriber
-//! inside the plugin. The daemon owns one persistent NATS-WS connection
-//! and POSTs each delivered klodi event to IronClaw's local
-//! event-trigger endpoint.
-//!
-//! Per **D § D8** the daemon body lives in `klodi_rust_host::forwarder`;
-//! this binary only binds CLI / env.
+//! IronClaw runs a dedicated background subscriber inside the plugin.
+//! The daemon owns one persistent NATS-WS connection and POSTs each
+//! delivered klodi event to IronClaw's local event-trigger endpoint
+//! via the shared `HttpStructuredHandler`.
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use klodi_rust_host::{BodyShape, ForwarderConfig, paths, run_forwarder};
+use klodi_rust_host::{ForwarderConfig, paths, run_forwarder};
+use klodi_rust_host::forwarder::HttpStructuredHandler;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Per-attempt timeout for the wake POST. IronClaw's `/event-trigger`
 /// acks on receipt and runs the agent in the background, so 10s is the
-/// right upper bound — long enough for a healthy ack, short enough that a
-/// stalled host surfaces fast and JetStream redelivers.
+/// right upper bound — long enough for a healthy ack, short enough that
+/// a stalled host surfaces fast and JetStream redelivers.
 const WAKE_POST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Parser, Debug)]
@@ -40,8 +39,6 @@ struct Cli {
     )]
     ironclaw_event_url: String,
     /// Optional bearer token for IronClaw's event-trigger endpoint.
-    /// P1-14: shared bearer-token mechanism — accepts a token where one
-    /// is configured server-side, otherwise request goes unauthenticated.
     #[arg(long, env = "IRONCLAW_AGENT_TOKEN")]
     ironclaw_token: Option<String>,
     /// Optional `/healthz` HTTP probe port (P2-25).
@@ -81,19 +78,20 @@ async fn main() -> Result<()> {
         );
     }
 
+    let handler = Arc::new(HttpStructuredHandler::new(
+        cli.ironclaw_event_url,
+        cli.ironclaw_token,
+        format!("klodi-ironclaw-daemon/{}", env!("CARGO_PKG_VERSION")),
+        "klodi_ironclaw".to_string(),
+        WAKE_POST_TIMEOUT,
+    )?);
+
     run_forwarder(ForwarderConfig {
         creds_path,
         config_path,
-        wake_url: cli.ironclaw_event_url,
-        bearer_token: cli.ironclaw_token,
-        user_agent: format!(
-            "klodi-ironclaw-daemon/{}",
-            env!("CARGO_PKG_VERSION")
-        ),
+        handler,
         log_event_prefix: "klodi_ironclaw".into(),
         health_port: cli.health_port,
-        body_shape: BodyShape::Structured,
-        wake_post_timeout: WAKE_POST_TIMEOUT,
     })
     .await
     .context("running klodi-ironclaw-daemon")

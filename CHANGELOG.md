@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.13] — 2026-05-12 — klodi-zeroclaw clean break
+
+**klodi-zeroclaw only — every other adapter is untouched.** This release rebuilds the zeroclaw adapter against the new wake-agent-spawn architecture described in `docs/plans/2026-05-12-klodi-wake-agent-spawn.md`. It entirely supersedes the 0.2.6 → 0.2.12 wake-routing + operator-visibility series. Wire-shape changes are breaking despite the patch-level bump — see Migration.
+
+### The architecture, in one sentence
+
+NATS event → daemon → `POST /api/agent/spawn` with the event as the prompt → ZeroClaw runs the LLM in an isolated session → LLM acts via `klodi_*` and writes to the operator's chat via `sessions_send` only when the operator should see something.
+
+When a gateway hasn't yet shipped `/api/agent/spawn`, the spawn client transparently falls back to `POST /api/cron` (one-shot, isolated, delete-after-run) + `POST /api/cron/{id}/run`. The path-selection probe runs once per daemon process and is auto-detected from the gateway's response — operators can also force the cron path with `ZEROCLAW_FORCE_CRON_FALLBACK=1`.
+
+### What this delivers
+
+- **Operator visibility is the LLM's job.** Routine activity is silent. When the LLM decides the operator should see something it writes one line in its own voice via `sessions_send`. No firehose, no `[INFO]` lines, no plugin-namespaced infrastructure messages.
+- **NATS ack < 50ms, regardless of agent-turn duration.** The daemon's "did the wake land?" question becomes "did the spawn POST return 200?" Wake delivery decouples completely from how long the LLM takes to reason.
+- **Approval happens in chat naturally.** The operator types "yes" or "no"; the next wake on that listing reads the reply via `sessions_history`. No plugin-side approval state machine.
+
+### Removed in 0.2.13
+
+- `klodi_report_to_operator` / `klodi_escalate_to_user` MCP tools — `sessions_send` is the primitive; the LLM curates directly.
+- Severity enum (`diagnostic | operator | operator_important | approval_request`) — the LLM phrases each situation in its own register.
+- Per-wake-kind formatting matrix in the daemon — the LLM phrases each event type.
+- Approval-gate state machine in `mcp/tools.rs` — replies happen in chat.
+- Channel registry / `OperatorChannel` trait / `DashboardChannel` / `UpstreamChannel` / `DedicatedSessionChannel` / `ChannelInvoker` / `CreatedSessionsLedger` / `DispatcherCursor` — every notification path now flows through the spawned agent.
+- Klodi inbox self-hosted SPA (`packages/klodi-rust-host/src/inbox/`, `assets/inbox.html`, the `/inbox/*` HTTP routes) — there is no longer an escalation surface to render.
+- Pairing shim / loopback HTTP listener (`zeroclaw_pairing_shim`) — register pairs directly during the one-time setup.
+- Plugin-authored bootstrap/heartbeat note (`zeroclaw_bootstrap_note`) — register writes one hello line and exits.
+- WS-based wake delivery (`BodyShape::ZeroClawRegistry`, the WS forwarder loop) — wakes use HTTP spawn.
+- Embedded skill bundle (`skill_bundle`, `klodi://skill/*` MCP resources, the `skill/` directory) — the wake prompt is the catalog.
+- Klodi-side policy seeding (`policy_seed`, `klodi_setup_reseed_policies`, `policies/{negotiation_style,security}.md` templates) — operators author `${KLODI_HOME}/negotiation_style.md` themselves; the wake prompt points the agent at it.
+- Reply-attribution task in the daemon — there's no approval gate to feed.
+- `BodyShape::ZeroClawRegistry` from `klodi_rust_host::forwarder` — the forwarder is now a callback-driven shell; the structured-HTTP variant lives in `forwarder::HttpStructuredHandler` for Moltis/IronClaw, and zeroclaw supplies its own `SpawnWakeHandler`.
+- `klodi_rust_host` features renamed `zeroclaw_session` → `zeroclaw` and trimmed (no more `tokio-tungstenite` in the daemon path; only `register` keeps a WS client for the one-shot session bootstrap).
+- `setup_status` phase `NeedsPolicy` and the `negotiation_style_*` / `security_policy_*` fields — the plugin no longer audits policy files.
+
+### Added in 0.2.13
+
+- `klodi-zeroclaw-register` mints the ZeroClaw bearer + bootstraps the operator chat session as part of the one-time setup flow. Persists `${KLODI_HOME}/zeroclaw.token` (mode 0600) and `${KLODI_HOME}/zeroclaw.session` (mode 0600).
+- `klodi-zeroclaw-daemon` becomes a thin driver: subscribe NATS → compose the canonical wake prompt → `SpawnClient::spawn(prompt)`. ~200 lines including CLI parsing.
+- `klodi_rust_host::wake_prompt::build_wake_prompt` — pure, tested builder for the canonical prompt template (`docs/plans/2026-05-12-klodi-wake-agent-spawn.md` §5).
+- `klodi_rust_host::zeroclaw_spawn::SpawnClient` — auto-detects `/api/agent/spawn` vs cron fallback, wiremock-tested for both paths.
+- `klodi_rust_host::forwarder::{WakeEvent, WakeHandler, HttpStructuredHandler}` — generic callback-driven forwarder; Moltis/IronClaw keep their HTTP shape via `HttpStructuredHandler`, zeroclaw supplies its own.
+- `klodi-zeroclaw 0.2.13` version bump (other adapters stay on 0.2.12). The internal `klodi-rust-host` crate (`publish = false`, vendored at `make build`) jumps to `0.2.0` to mark the API reshape — vendored, not published.
+
+### Migration
+
+**klodi-zeroclaw operators.** Stop the 0.2.x daemon. Run `klodi-zeroclaw-register` once to pair + bootstrap the new operator session, then start `klodi-zeroclaw-daemon` (no required flags — defaults to `http://127.0.0.1:7070`). The old `${KLODI_HOME}/zeroclaw.session` is reused if present; `${KLODI_HOME}/policies/`, `${KLODI_HOME}/buy/`, `${KLODI_HOME}/sell/` are untouched. The `ZEROCLAW_WEBHOOK_URL` env var is gone — use `ZEROCLAW_HTTP_BASE` (no `/webhook` suffix). The `--adopt-session`, `--browser-pair-shim-port`, `--open-browser`, `--zeroclaw-cli` flags are gone — pairing happens in register, the helper shim no longer exists.
+
+**Other adapters.** No migration. Moltis/IronClaw daemons still POST structured envelopes to their local wake URLs and ack on receipt; their daemon binaries now import `forwarder::HttpStructuredHandler` instead of the old `BodyShape::Structured` enum. The wire shape is unchanged.
+
+**Out-of-tree consumers of `klodi_rust_host`.** The crate is internal-only (`publish = false`), so this surface change does not affect crates.io consumers. In-tree adapters above are migrated.
+
 ## [0.2.12] — 2026-05-12
 
 Two slices in this release. **Every adapter republishes** for the schema change; **klodi-zeroclaw** additionally ships the operator-visibility surface for `klodi_escalate_to_user`.

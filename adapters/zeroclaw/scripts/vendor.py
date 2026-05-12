@@ -231,28 +231,18 @@ def stage_generated_catalog() -> None:
 def stage_mcp_assets() -> None:
     """Mirror the MCP server's runtime assets into the staged tree.
 
-    `klodi_rust_host` embeds three non-Rust resources at compile time:
+    `klodi_rust_host` embeds one non-Rust resource at compile time:
 
-    - `schemas.json` (read by `mcp/schemas.rs` via `include_str!("../../schemas.json")`)
-    - `skill/` (read by `mcp/skill_data.rs` via `include_dir!("$CARGO_MANIFEST_DIR/skill")`)
-    - `assets/inbox.html` (read by `inbox/handlers.rs` via
-      `include_str!("../../assets/inbox.html")` — the klodi inbox SPA
-      served by the daemon's loopback shim).
+    - `schemas.json` (read by `mcp/schemas.rs` via
+      `include_str!("../../schemas.json")`)
 
-    All three paths resolve against `klodi-rust-host/` in the workspace
-    (where they're symlinks or sibling dirs to the canonical sources).
-    Inside the staged crate the same relative shape must exist so the
-    macros expand the same way:
+    The 2026-05-12 wake-agent-spawn redesign removed the embedded skill
+    bundle and the klodi inbox SPA — the wake prompt is the catalog,
+    and operator visibility lives in the LLM's `sessions_send` calls.
 
-      | Macro path                     | Staged location                  |
-      |--------------------------------|----------------------------------|
-      | `../../schemas.json`           | `<staged>/src/schemas.json`      |
-      | `$CARGO_MANIFEST_DIR/skill`    | `<staged>/skill/`                |
-      | `../../assets/inbox.html`      | `<staged>/src/assets/inbox.html` |
-
-    Without this step, `cargo build` of the staged crate fails with
-    "file not found" the moment a vendored source touches one of these
-    macros.
+      | Macro path           | Staged location              |
+      |----------------------|------------------------------|
+      | `../../schemas.json` | `<staged>/src/schemas.json`  |
     """
     schemas_src = REPO_ROOT / "packages" / "tool-catalog" / "dist" / "schemas.json"
     if not schemas_src.exists():
@@ -264,41 +254,7 @@ def stage_mcp_assets() -> None:
     schemas_dst = STAGED / "src" / "schemas.json"
     shutil.copy2(schemas_src, schemas_dst)
 
-    skill_src = REPO_ROOT / "skill"
-    if not skill_src.is_dir():
-        sys.stderr.write(
-            f"[vendor] skill bundle missing at {skill_src} — refusing to stage.\n"
-        )
-        raise SystemExit(1)
-    skill_dst = STAGED / "skill"
-    if skill_dst.exists():
-        shutil.rmtree(skill_dst)
-    shutil.copytree(
-        skill_src,
-        skill_dst,
-        ignore=shutil.ignore_patterns(*COPY_EXCLUDES),
-    )
-
-    # Klodi inbox SPA. `include_str!` in `inbox/handlers.rs` resolves to
-    # the staged path `<staged>/src/assets/inbox.html` (two levels up
-    # from `<staged>/src/_rust_host/inbox/handlers.rs`).
-    inbox_src = (
-        REPO_ROOT / "packages" / "klodi-rust-host" / "assets" / "inbox.html"
-    )
-    if not inbox_src.exists():
-        sys.stderr.write(
-            f"[vendor] inbox.html missing at {inbox_src} — refusing to stage.\n"
-        )
-        raise SystemExit(1)
-    inbox_dst = STAGED / "src" / "assets" / "inbox.html"
-    inbox_dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(inbox_src, inbox_dst)
-
-    print(
-        "[vendor] mirrored MCP assets: "
-        f"src/schemas.json + skill/ ({len(list(skill_dst.rglob('*')))} entries) "
-        "+ src/assets/inbox.html"
-    )
+    print("[vendor] mirrored MCP assets: src/schemas.json")
 
 
 def strip_mcp_cfg_gates() -> int:
@@ -319,16 +275,17 @@ def strip_mcp_cfg_gates() -> int:
     to flip flags back on.
 
     Currently stripped:
-    - `mcp`               → stdio MCP server + host config writer.
-    - `zeroclaw_session`  → WS client, persisted session id, bootstrap
-                            note, approval gate. Added by klodi-zeroclaw 0.2.6
-                            for the wake-routing redesign.
+    - `mcp`       → stdio MCP server + host config writer.
+    - `zeroclaw`  → wake-prompt builder, spawn-via-cron client, register's
+                    WS bootstrap, gateway-CLI pairing minter, session-id
+                    persistence. Renamed from `zeroclaw_session` in the
+                    2026-05-12 wake-agent-spawn cut.
 
     The strip only runs in this adapter's `vendor.py`. Moltis and
     IronClaw keep the gates intact and the cfgs evaluate to false in
     their staged crates, leaving the gated modules out.
     """
-    features_to_strip = ["mcp", "zeroclaw_session"]
+    features_to_strip = ["mcp", "zeroclaw"]
     rust_host_dir = STAGED / "src" / "_rust_host"
     total = 0
     for feat in features_to_strip:

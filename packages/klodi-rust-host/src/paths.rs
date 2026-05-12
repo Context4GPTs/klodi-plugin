@@ -57,23 +57,12 @@ pub fn creds_path() -> PathBuf {
     klodi_home().join("nats.creds")
 }
 
-/// `${KLODI_HOME}/policies/` — user-editable policy files seeded
-/// non-destructively from the embedded skill bundle on first registration.
-pub fn policies_dir() -> PathBuf {
-    klodi_home().join("policies")
-}
-
-/// `${KLODI_HOME}/policies/negotiation_style.md` — user's pricing,
-/// posture, and counter-offer ladder. Seeded once from
-/// `templates/negotiation_style.template.md`; user fills the placeholders.
+/// `${KLODI_HOME}/negotiation_style.md` — operator-authored pricing,
+/// posture, and counter-offer ladder. The plugin no longer seeds this
+/// file; the operator writes it themselves and the wake prompt points
+/// the spawned agent at it.
 pub fn negotiation_style_path() -> PathBuf {
-    policies_dir().join("negotiation_style.md")
-}
-
-/// `${KLODI_HOME}/policies/security.md` — static hard rules. Seeded as-is
-/// from the bundled `policies/security.md`; not expected to be edited.
-pub fn security_policy_path() -> PathBuf {
-    policies_dir().join("security.md")
+    klodi_home().join("negotiation_style.md")
 }
 
 /// `${KLODI_HOME}/buy/` — per-standing-search strategy files written by
@@ -152,18 +141,8 @@ mod tests {
             PathBuf::from("/tmp/klodi-home-config-test/nats.creds")
         );
         assert_eq!(
-            policies_dir(),
-            PathBuf::from("/tmp/klodi-home-config-test/policies")
-        );
-        assert_eq!(
             negotiation_style_path(),
-            PathBuf::from(
-                "/tmp/klodi-home-config-test/policies/negotiation_style.md",
-            )
-        );
-        assert_eq!(
-            security_policy_path(),
-            PathBuf::from("/tmp/klodi-home-config-test/policies/security.md")
+            PathBuf::from("/tmp/klodi-home-config-test/negotiation_style.md")
         );
         assert_eq!(
             buy_dir(),

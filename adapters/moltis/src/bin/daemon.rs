@@ -3,21 +3,20 @@
 //! Runs alongside Moltis (systemd / launchd / whatever supervisor you
 //! prefer). Owns a single persistent NATS-WS connection per the user's
 //! creds. Each delivered klodi notification or channel message is
-//! POSTed to Moltis's local agent-wake API, which schedules the agent.
-//!
-//! Per **D § D8** the daemon body lives in `klodi_rust_host::forwarder`;
-//! this binary only binds CLI / env to the shared `ForwarderConfig`.
+//! POSTed to Moltis's local agent-wake API via the shared
+//! `HttpStructuredHandler`, which schedules the agent.
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use klodi_rust_host::{BodyShape, ForwarderConfig, paths, run_forwarder};
+use klodi_rust_host::{ForwarderConfig, paths, run_forwarder};
+use klodi_rust_host::forwarder::HttpStructuredHandler;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Per-attempt timeout for the wake POST. Moltis's wake endpoint acks on
 /// receipt and runs the agent in the background, so 10s is the right
-/// upper bound — long enough for a healthy ack, short enough that a
-/// stalled host surfaces fast and JetStream redelivers.
+/// upper bound.
 const WAKE_POST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Parser, Debug)]
@@ -80,16 +79,20 @@ async fn main() -> Result<()> {
         );
     }
 
+    let handler = Arc::new(HttpStructuredHandler::new(
+        cli.moltis_wake_url,
+        cli.moltis_token,
+        format!("klodi-moltis-daemon/{}", env!("CARGO_PKG_VERSION")),
+        "klodi_moltis".to_string(),
+        WAKE_POST_TIMEOUT,
+    )?);
+
     run_forwarder(ForwarderConfig {
         creds_path,
         config_path,
-        wake_url: cli.moltis_wake_url,
-        bearer_token: cli.moltis_token,
-        user_agent: format!("klodi-moltis-daemon/{}", env!("CARGO_PKG_VERSION")),
+        handler,
         log_event_prefix: "klodi_moltis".into(),
         health_port: cli.health_port,
-        body_shape: BodyShape::Structured,
-        wake_post_timeout: WAKE_POST_TIMEOUT,
     })
     .await
     .context("running klodi-moltis-daemon")

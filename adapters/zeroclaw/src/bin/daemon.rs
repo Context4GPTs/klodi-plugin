@@ -1,200 +1,73 @@
 //! `klodi-zeroclaw-daemon` — long-running NATS-native wake forwarder
 //! for ZeroClaw.
 //!
-//! The daemon body lives in `klodi_rust_host::forwarder`; this binary
-//! binds CLI / env, resolves the bearer + operator session, posts the
-//! plugin-authored heartbeat + bootstrap note, builds the channel
-//! registry (dedicated klodi session + dashboard + any
-//! operator-configured upstream channels), and then hands a
-//! [`ForwarderConfig`] with `BodyShape::ZeroClawRegistry` to the shared
-//! runner so wakes route through the registry to a single agent
-//! surface (falling through to the dedicated session on Err). The
-//! pre-0.2.6 `POST /webhook` delivery path was removed in 0.2.8 —
-//! every supported ZeroClaw build (≥ 0.7.4) exposes `/ws/chat`, and
-//! the legacy synchronous-prompt path was unusable on real klodi turns
-//! (30s gateway timeout vs. 60s+ agent turns).
+//! Per `docs/plans/2026-05-12-klodi-wake-agent-spawn.md` §2 the daemon
+//! is a thin driver:
 //!
-//! Bearer pairing flow (as of 0.2.8): when no explicit env token, no
-//! cached `${KLODI_HOME}/zeroclaw.token`, and no sidecar
-//! `${KLODI_HOME}/zeroclaw.pairing-code` exist, the daemon auto-mints
-//! its own pairing code via the gateway's
-//! `zeroclaw gateway get-paircode --new` CLI and pairs itself —
-//! eliminating the operator step of finding the gateway's startup code
-//! and writing it to disk on first boot. Sidecar codes still take
-//! precedence (operator-controlled re-pair).
+//! 1. Subscribe to the user's two NATS consumers.
+//! 2. For each delivered event, serialise it, compose the canonical
+//!    wake prompt (`wake_prompt::build_wake_prompt`), POST it to
+//!    `/api/agent/spawn` (or the cron-fallback pair), and ACK NATS on
+//!    HTTP 200.
+//! 3. The spawned agent runs in an isolated ZeroClaw session, reasons
+//!    over the event, acts via `klodi_*` and writes to the operator's
+//!    chat via `sessions_send` only when the operator should see
+//!    something.
 //!
-//! 0.2.8 also exposes a loopback browser-pairing helper at a tty-time
-//! auto-opened URL ([`klodi_rust_host::zeroclaw_pairing_shim`]). The
-//! shim hands the operator a fresh pairing code on every page hit,
-//! pre-copies it to clipboard, and redirects to the dashboard — so
-//! the dashboard's "PAIRING REQUIRED" prompt is a single ⌘V + Enter.
-//!
-//! 0.2.9 adds the channel registry (built before bootstrap-note post)
-//! and the reply-attribution task that captures dashboard replies for
-//! the MCP server's approval gate.
+//! No WS write. No webhook. No queue. No klodi-side approval gate.
+//! The daemon never sees the agent's turn duration.
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use klodi_nats_client::KlodiError;
+use klodi_rust_host::forwarder::{WakeEvent, WakeHandler, WakeHandlerFuture};
 use klodi_rust_host::{
-    BodyShape, BrowserPairConfig, ChannelRegistry, DedicatedSessionChannel,
-    ForwarderConfig, InboxState, MinterImpl, Recipient, RegisteredChannel,
-    SessionBinding, Severity, ShimConfig, ShimHandle, ZeroClawWsConfig,
-    ZeroclawCliMinter, adopt_session_id,
-    channels::factory::build_channel_registry, paths, resolve_session_id,
-    run_forwarder, send_session_message, zeroclaw_bootstrap_note,
+    ForwarderConfig, SpawnClient, SpawnError, WakePromptInputs, build_wake_prompt, paths,
+    read_session_id, register, run_forwarder,
 };
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
-use futures_util::StreamExt;
-
-/// Nominal value for `ForwarderConfig::wake_post_timeout`. The
-/// `BodyShape::ZeroClawRegistry` path doesn't use reqwest for wake
-/// delivery — the field is required by the shared `ForwarderConfig`
-/// struct but never consulted on this code path.
-const WAKE_POST_TIMEOUT_PLACEHOLDER: Duration = Duration::from_secs(60);
-
-/// Timeout for spawning + waiting on the gateway CLI when the daemon
-/// auto-mints a pairing code. The CLI typically responds in <100ms;
-/// 5s is a generous ceiling for a heavily-loaded gateway.
-const BROWSER_PAIR_CLI_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Whether to auto-open the operator's browser at the loopback
-/// pairing-helper URL on startup.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-enum OpenBrowserDefault {
-    /// Auto-open if stdout is a tty, skip otherwise. Default.
-    Auto,
-    /// Auto-open unconditionally.
-    Always,
-    /// Never auto-open.
-    Never,
-}
-
-impl std::fmt::Display for OpenBrowserDefault {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Auto => f.write_str("auto"),
-            Self::Always => f.write_str("always"),
-            Self::Never => f.write_str("never"),
-        }
-    }
-}
 
 #[derive(Parser, Debug)]
 #[command(
     name = "klodi-zeroclaw-daemon",
-    about = "Long-running NATS-WS wake daemon for klodi on ZeroClaw.",
+    about = "Long-running NATS-native wake daemon. Each event spawns an isolated agent turn.",
     version = env!("CARGO_PKG_VERSION"),
 )]
 struct Cli {
+    /// Override `${KLODI_HOME}/nats.creds`.
     #[arg(long, env = "KLODI_CREDS")]
     creds: Option<PathBuf>,
+    /// Override `${KLODI_HOME}/config.json`.
     #[arg(long, env = "KLODI_CONFIG")]
     config: Option<PathBuf>,
-    /// ZeroClaw gateway base-URL hint. The daemon derives the canonical
-    /// `/ws/chat` (wake delivery) and `/pair` (bearer mint) endpoints
-    /// from this — see `klodi_rust_host::ZeroClawWsConfig::from_webhook_url`.
-    /// The env-var name is a holdover from the pre-0.2.6 era when wakes
-    /// went to `POST /webhook` directly; today the literal `/webhook`
-    /// route is unused. Override with `--zeroclaw-ws-url` /
-    /// `--zeroclaw-http-base` when the gateway lives at a non-canonical
-    /// path.
+    /// Override `${KLODI_HOME}` for the persisted session id +
+    /// `zeroclaw.token` lookups.
+    #[arg(long, env = "KLODI_HOME")]
+    klodi_home: Option<PathBuf>,
+    /// ZeroClaw gateway base URL (no path). The daemon derives
+    /// `/api/agent/spawn` and `/api/cron` from this. Default matches
+    /// the canonical `klodi-zeroclaw` docker setup.
     #[arg(
         long,
-        env = "ZEROCLAW_WEBHOOK_URL",
-        default_value = "http://127.0.0.1:7070/webhook"
+        env = "ZEROCLAW_HTTP_BASE",
+        default_value = "http://127.0.0.1:7070"
     )]
-    zeroclaw_webhook_url: String,
-    /// Override the derived `/pair` URL. Daemon derives this by
-    /// replacing the trailing `/webhook` in `--zeroclaw-webhook-url`
-    /// with `/pair`; set this explicitly when the gateway lives at a
-    /// non-canonical path.
-    #[arg(long, env = "ZEROCLAW_PAIR_URL")]
-    zeroclaw_pair_url: Option<String>,
-    /// Override the derived `/ws/chat` URL.
-    #[arg(long, env = "ZEROCLAW_WS_URL")]
-    zeroclaw_ws_url: Option<String>,
-    /// Override the derived REST base used for session diagnostics.
-    #[arg(long, env = "ZEROCLAW_HTTP_BASE")]
-    zeroclaw_http_base: Option<String>,
-    /// Bearer token used as `Authorization: Bearer` on the `/ws/chat`
-    /// upgrade. When unset the daemon resolves the bearer at startup:
-    /// a sidecar pairing-code file at `${KLODI_HOME}/zeroclaw.pairing-code`
-    /// triggers a `POST /pair` and caches the resulting `zc_<hex>`
-    /// token at `${KLODI_HOME}/zeroclaw.token`; otherwise the daemon
-    /// reads the cached token, or (0.2.8+) auto-mints a fresh code via
-    /// the gateway CLI.
+    zeroclaw_http_base: String,
+    /// Bearer token used as `Authorization: Bearer` on every spawn
+    /// call. When unset the daemon reads `${KLODI_HOME}/zeroclaw.token`
+    /// (written by `klodi-zeroclaw-register`).
     #[arg(long, env = "ZEROCLAW_AGENT_TOKEN")]
     zeroclaw_token: Option<String>,
+    /// Skip the native `/api/agent/spawn` probe and use the cron
+    /// fallback (`/api/cron` + `/api/cron/{id}/run`) for every wake.
+    /// Set when you know the gateway hasn't shipped `/api/agent/spawn`
+    /// yet and want to avoid the per-process probe round-trip.
+    #[arg(long, env = "ZEROCLAW_FORCE_CRON_FALLBACK", default_value_t = false)]
+    force_cron_fallback: bool,
     /// Optional `/healthz` HTTP probe port (P2-25).
     #[arg(long, env = "ZEROCLAW_HEALTH_PORT")]
     health_port: Option<u16>,
-    /// Adopt an existing ZeroClaw session id for klodi instead of
-    /// minting a new one. The default is to always create a new
-    /// dedicated session (operators with a pre-existing chat keep both
-    /// unmixed); this flag is the explicit opt-in when the operator
-    /// wants their klodi activity to land in an existing session.
-    ///
-    /// The daemon probes the gateway to confirm the id resumes
-    /// successfully, then persists it to `${KLODI_HOME}/zeroclaw.session`
-    /// (overwriting any prior value). On any probe failure (typo,
-    /// wrong bearer, deleted session) the daemon bails — typos must
-    /// not silently re-bootstrap.
-    #[arg(long, env = "ZEROCLAW_ADOPT_SESSION")]
-    adopt_session: Option<String>,
-    /// Path to the `zeroclaw` CLI used to mint a fresh pairing code on
-    /// demand. Default `"zeroclaw"`, resolved on PATH.
-    /// Override when the gateway lives at a non-canonical path or when
-    /// the daemon runs on a different host. If the binary is not
-    /// reachable, the daemon falls back to the env / cached token /
-    /// sidecar code bearer-resolve flow and the loopback browser-pairing
-    /// helper auto-disables itself.
-    #[arg(long, env = "ZEROCLAW_CLI", default_value = "zeroclaw")]
-    zeroclaw_cli: PathBuf,
-    /// Disable the loopback browser-pairing helper. When set, the
-    /// daemon does not detect the gateway CLI, does not auto-mint its
-    /// own bearer, does not bind the helper port, and does not
-    /// auto-open the operator's browser. Use for non-canonical
-    /// deployments where `zeroclaw` isn't on PATH, or when you want
-    /// the operator to manage pairing manually via
-    /// `${KLODI_HOME}/zeroclaw.pairing-code` or `ZEROCLAW_AGENT_TOKEN`.
-    #[arg(
-        long,
-        env = "ZEROCLAW_BROWSER_PAIR_DISABLE",
-        default_value_t = false
-    )]
-    no_browser_pair_shim: bool,
-    /// TCP port the loopback browser-pairing helper binds on (always
-    /// `127.0.0.1`). Default `0` = let the OS pick an ephemeral port;
-    /// the chosen port is included in the heartbeat the operator sees
-    /// in chat. Pin a port when you want a stable bookmarkable URL
-    /// across restarts.
-    #[arg(
-        long,
-        env = "ZEROCLAW_BROWSER_PAIR_PORT",
-        default_value_t = 0_u16
-    )]
-    browser_pair_shim_port: u16,
-    /// Override the dashboard URL surfaced to the operator (in stdout,
-    /// the heartbeat, and the helper's HTML). Default: derive from
-    /// `--zeroclaw-webhook-url` by stripping `/webhook`. Override when
-    /// the daemon runs in a container with port-mapped access from the
-    /// host (e.g., `http://localhost:18793`).
-    #[arg(long, env = "ZEROCLAW_DASHBOARD_URL")]
-    zeroclaw_dashboard_url: Option<String>,
-    /// Whether to auto-open the operator's browser at the helper URL.
-    /// `auto` (default) opens only when stdout is a tty (interactive
-    /// runs). `always` opens regardless. `never` suppresses entirely.
-    /// Containers that can't open a host browser should set `never`.
-    #[arg(
-        long,
-        env = "ZEROCLAW_OPEN_BROWSER",
-        value_enum,
-        default_value_t = OpenBrowserDefault::Auto
-    )]
-    open_browser: OpenBrowserDefault,
 }
 
 #[tokio::main]
@@ -207,12 +80,10 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let creds_path = cli.creds.unwrap_or_else(paths::creds_path);
-    let config_path = cli.config.unwrap_or_else(paths::config_path);
+    let klodi_home = cli.klodi_home.clone().unwrap_or_else(paths::klodi_home);
+    let creds_path = cli.creds.unwrap_or_else(|| klodi_home.join("nats.creds"));
+    let config_path = cli.config.unwrap_or_else(|| klodi_home.join("config.json"));
 
-    if cli.zeroclaw_webhook_url.is_empty() {
-        bail!("--zeroclaw-webhook-url (or ZEROCLAW_WEBHOOK_URL) must be set");
-    }
     if !creds_path.exists() {
         bail!(
             "klodi creds not found at {} — run klodi-zeroclaw-register first",
@@ -226,1190 +97,123 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Detect the gateway CLI minter once. Both the bearer auto-pair
-    // fallback and the loopback browser-pairing helper consume it. A
-    // `None` here is fully non-fatal — operators on non-canonical
-    // deployments where `zeroclaw` is not on PATH (e.g., the daemon
-    // running on a different host from the gateway) get the same
-    // behaviour as the 0.2.7 release.
-    let minter: Option<Arc<MinterImpl>> = if cli.no_browser_pair_shim {
-        tracing::info!(
-            "klodi_zeroclaw_browser_pair_disabled — auto-pair and shim suppressed by flag"
-        );
-        None
-    } else {
-        let cfg = BrowserPairConfig {
-            cli_path: cli.zeroclaw_cli.clone(),
-            timeout: BROWSER_PAIR_CLI_TIMEOUT,
-        };
-        match ZeroclawCliMinter::detect(cfg).await {
-            Some(m) => Some(Arc::new(MinterImpl::Cli(m))),
-            None => {
-                tracing::info!(
-                    cli_path = %cli.zeroclaw_cli.display(),
-                    "klodi_zeroclaw_browser_pair_cli_missing — auto-pair and shim disabled"
-                );
-                None
-            }
-        }
-    };
-
-    let bearer = pair::resolve_bearer(
-        cli.zeroclaw_token.as_deref(),
-        cli.zeroclaw_pair_url.as_deref(),
-        &cli.zeroclaw_webhook_url,
-        &paths::klodi_home(),
-        minter.as_deref(),
-    )
-    .await?;
-
-    let ws_config = build_ws_config(
-        &cli.zeroclaw_webhook_url,
-        cli.zeroclaw_ws_url.as_deref(),
-        cli.zeroclaw_http_base.as_deref(),
-        bearer.clone(),
-    )?;
-
-    // Heartbeat + (optional) bootstrap note. Read handle/user_id/nats_url
-    // from config.json directly — KlodiClient::new will load it again
-    // inside run_forwarder, but we need the values before then so the
-    // operator sees the heartbeat at the moment the daemon starts, not
-    // after the first NATS subscribe round-trips. We compose the
-    // heartbeat string here so it can be fed into the atomic bootstrap
-    // path (plan-update fix C — closes the empty-session GC window
-    // described in the updated §4).
-    let klodi_home = paths::klodi_home();
-    let cfg_summary = read_config_summary(&config_path)
-        .with_context(|| format!("reading {} for heartbeat", config_path.display()))?;
-
-    // Bind the loopback pairing-helper port BEFORE composing the
-    // heartbeat so the URL is known and embedded as a clickable
-    // affordance in the chat. Bind failures (port busy, FD exhaustion)
-    // are non-fatal — the daemon still boots; the operator just
-    // doesn't get the helper.
-    let shim_handle: Option<ShimHandle> = if minter.is_some() {
-        let dashboard_url = cli
-            .zeroclaw_dashboard_url
-            .clone()
-            .unwrap_or_else(|| derive_dashboard_url(&cli.zeroclaw_webhook_url));
-        let shim_cfg = ShimConfig::loopback(
-            cli.browser_pair_shim_port,
-            dashboard_url,
-            env!("CARGO_PKG_VERSION").to_string(),
-        );
-        match ShimHandle::bind(shim_cfg).await {
-            Ok(h) => {
-                tracing::info!(
-                    url = %h.url,
-                    "klodi_zeroclaw_shim_bound"
-                );
-                Some(h)
-            }
-            Err(err) => {
-                tracing::warn!(
-                    error = %format!("{err:#}"),
-                    "klodi_zeroclaw_shim_bind_failed"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Spawn the pairing-shim accept loop NOW, before any WS writes.
-    // Without this, `klodi_zeroclaw_shim_bound` is logged at t=0 but
-    // the listening socket is created inside `handle.serve(m)` — which
-    // historically ran AFTER the bootstrap WS drains, leaving the
-    // helper URL operator-visible but unreachable for ~6 minutes on a
-    // cold first boot. `shim_handle` is moved into the task; we keep a
-    // cloned URL string so the rest of startup (heartbeat composition,
-    // print_pair_block, browser-open) can still reference it.
-    //
-    // The inbox surface piggybacks on this same listener (see
-    // `klodi_rust_host::inbox` + `zeroclaw_pairing_shim::serve_with_inbox`).
-    // Its state is built from the already-resolved ws_config; the
-    // klodi session id is read lazily on each inbox request, so the
-    // accept loop can come up before `resolve_session_id` finishes.
-    let shim_url: Option<String> = shim_handle.as_ref().map(|h| h.url.clone());
-    let inbox_state: Option<InboxState> = match InboxState::new(
-        ws_config.clone(),
-        klodi_home.clone(),
-    ) {
-        Ok(state) => Some(state),
-        Err(err) => {
-            tracing::warn!(
-                error = %format!("{err:#}"),
-                "klodi_zeroclaw_inbox_state_build_failed_disabling_inbox"
-            );
-            None
-        }
-    };
-    if let (Some(handle), Some(m)) = (shim_handle, minter.clone()) {
-        let inbox_for_loop = inbox_state.clone();
-        tokio::spawn(async move {
-            if let Err(err) = handle
-                .serve_with_inbox(m, inbox_for_loop)
-                .await
-            {
-                tracing::warn!(
-                    error = %format!("{err:#}"),
-                    "klodi_zeroclaw_shim_loop_exited"
-                );
-            }
-        });
-    }
-
-    // Surface the inbox URL to the operator the same way the pairing
-    // helper URL is surfaced: write it to a known file under
-    // `${KLODI_HOME}/zeroclaw.inbox-url` so the demo `up` script (and
-    // future bookmark integrations) can print it without having to
-    // grep the daemon's log. The file is rewritten on every boot; an
-    // error here is non-fatal — the operator can still reach the
-    // inbox at the URL printed in `print_pair_block`.
-    if let (Some(url), true) = (shim_url.as_deref(), inbox_state.is_some()) {
-        let inbox_url = format!("{url}/inbox/");
-        let path = klodi_home.join("zeroclaw.inbox-url");
-        if let Err(err) = std::fs::write(&path, format!("{inbox_url}\n")) {
-            tracing::warn!(
-                error = %err,
-                path = %path.display(),
-                "klodi_zeroclaw_inbox_url_persist_failed"
-            );
-        } else {
-            tracing::info!(
-                url = %inbox_url,
-                path = %path.display(),
-                "klodi_zeroclaw_inbox_url_persisted"
-            );
-        }
-    }
-
-    // Heartbeat doesn't use `channel_names` (it's one-line) — compose
-    // with an empty list, send into the session at resolve time.
-    let empty_names: Vec<String> = Vec::new();
-    let heartbeat_inputs = zeroclaw_bootstrap_note::BootstrapInputs {
-        handle: &cfg_summary.handle,
-        user_id: &cfg_summary.user_id,
-        nats_url: &cfg_summary.nats_url,
-        daemon_version: env!("CARGO_PKG_VERSION"),
-        browser_pair_url: shim_url.as_deref(),
-        channel_names: &empty_names,
-    };
-    let heartbeat = zeroclaw_bootstrap_note::heartbeat(&heartbeat_inputs);
-
-    // Resolve operator session. Adopt path takes precedence (operator
-    // explicit), then read-or-bootstrap with atomic first-write.
-    let resolved = if let Some(adopt_id) = &cli.adopt_session {
-        adopt_session_id(&klodi_home, &ws_config, adopt_id)
-            .await
-            .context("adopting operator-supplied ZeroClaw session id")?
-    } else {
-        resolve_session_id(&klodi_home, &ws_config, &heartbeat)
-            .await
-            .context("resolving ZeroClaw operator session")?
-    };
-    tracing::info!(
-        session_id = %resolved.session_id,
-        freshly_minted = resolved.freshly_minted,
-        message_count = ?resolved.message_count,
-        adopted = cli.adopt_session.is_some(),
-        "klodi_zeroclaw_session_resolved"
-    );
-
-    // Channel-registry build comes BEFORE the bootstrap-note post so
-    // the multi-surface copy can list every surface klodi will
-    // page the operator on. Wakes flow through this registry too
-    // (see `BodyShape::ZeroClawRegistry` below) — failure here
-    // would otherwise silently route every wake to a single pinned
-    // session, which is the exact bug the 0.2.11 session-routing
-    // rewrite addresses. So on `build_channel_registry` failure we
-    // construct a dedicated-session-only fallback registry so the
-    // chronicle-of-record path keeps working while operators fix
-    // their `klodi.toml`.
-    let binding = SessionBinding {
-        ws_config: ws_config.clone(),
-        session_id: resolved.session_id.clone(),
-    };
-    let (registry, registry_cfg) = match build_channel_registry(
-        &klodi_home,
-        &binding,
-        &cli.zeroclaw_cli,
-    )
-    .await
-    {
-        Ok((r, cfg)) => (r, Some(cfg)),
-        Err(err) => {
-            tracing::warn!(
-                error = %format!("{err:#}"),
-                "klodi_zeroclaw_daemon_channel_registry_build_failed_using_fallback"
-            );
-            (build_fallback_registry(&binding)?, None)
-        }
-    };
-    let dashboard_enabled = registry_cfg
-        .as_ref()
-        .map(|c| c.dashboard.enabled)
-        .unwrap_or(false);
-    let channel_names_owned: Vec<String> = registry.channel_names();
-    tracing::info!(
-        channels = ?channel_names_owned,
-        dashboard_enabled = dashboard_enabled,
-        dedicated_session_id = %resolved.session_id,
-        "klodi_zeroclaw_channel_registry_ready"
-    );
-
-    // The atomic resolve path already wrote the heartbeat as the
-    // session's first message on the freshly-minted path — skip the
-    // standalone post in that case so the operator's chat doesn't
-    // show the same line twice. Compose the bootstrap-note body
-    // upfront (when needed) so the spawned task below can take owned
-    // strings without dragging `BootstrapInputs<'_>` references along.
-    let heartbeat_already_written = resolved.freshly_minted;
-    let needs_intro =
-        resolved.freshly_minted || resolved.message_count.unwrap_or(1) == 0;
-    let bootstrap_note_body: Option<String> = if needs_intro {
-        let bootstrap_inputs = zeroclaw_bootstrap_note::BootstrapInputs {
-            handle: &cfg_summary.handle,
-            user_id: &cfg_summary.user_id,
-            nats_url: &cfg_summary.nats_url,
-            daemon_version: env!("CARGO_PKG_VERSION"),
-            browser_pair_url: shim_url.as_deref(),
-            channel_names: &channel_names_owned,
-        };
-        Some(zeroclaw_bootstrap_note::bootstrap_note(&bootstrap_inputs))
-    } else {
-        None
-    };
-
-    // Spawn the startup-note writes so they don't gate the daemon's
-    // primary work — NATS dial, reply-attribution, and the operator-
-    // visible pair block all proceed immediately. These are bootstrap
-    // breadcrumbs into the operator's session; nothing downstream
-    // waits on them landing, and failures are already logged inside
-    // `post_startup_notes`. The writes themselves are OnGatewayWrite
-    // (no agent expected to observe them at this point) so each one
-    // returns in ~5s rather than burning the 180s wake-regime drain.
-    let ws_for_notes = ws_config.clone();
-    let session_id_for_notes = resolved.session_id.clone();
-    let heartbeat_owned = heartbeat.clone();
-    tokio::spawn(async move {
-        if let Err(err) = post_startup_notes(
-            &ws_for_notes,
-            &session_id_for_notes,
-            &heartbeat_owned,
-            heartbeat_already_written,
-            bootstrap_note_body.as_deref(),
+    let bearer = resolve_bearer(cli.zeroclaw_token.as_deref(), &klodi_home)?;
+    let identity = register::read_config_identity(&klodi_home)
+        .context("reading handle + user_id from config.json")?;
+    let operator_session_id = read_session_id(&klodi_home)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "operator session id not found at {} — run klodi-zeroclaw-register first \
+             (the daemon needs it to interpolate into every wake prompt so the spawned \
+             agent knows where to write back via sessions_send)",
+            klodi_home.join("zeroclaw.session").display(),
         )
-        .await
-        {
-            tracing::warn!(
-                error = %format!("{err:#}"),
-                session_id = %session_id_for_notes,
-                "klodi_zeroclaw_startup_notes_failed_continuing"
-            );
-        }
+    })?;
+
+    let mut spawn_client = SpawnClient::new(&cli.zeroclaw_http_base, bearer)?;
+    if cli.force_cron_fallback {
+        spawn_client = spawn_client.force_cron_fallback();
+    }
+
+    tracing::info!(
+        handle = %identity.handle,
+        user_id = %identity.user_id,
+        operator_session_id = %operator_session_id,
+        http_base = %cli.zeroclaw_http_base,
+        force_cron_fallback = cli.force_cron_fallback,
+        "klodi_zeroclaw_daemon_starting"
+    );
+
+    let handler: Arc<dyn WakeHandler> = Arc::new(SpawnWakeHandler {
+        spawn_client,
+        handle: identity.handle,
+        user_id: identity.user_id,
+        operator_session_id,
     });
 
-    // Operator-facing pair block + (optional) browser auto-open. The
-    // accept loop was spawned earlier so the URL is reachable from
-    // t=0; this block is just the human-readable surface telling the
-    // operator how to use it.
-    let inbox_url_for_block = shim_url
-        .as_deref()
-        .filter(|_| inbox_state.is_some())
-        .map(|u| format!("{u}/inbox/"));
-    if let Some(url) = shim_url.as_deref() {
-        print_pair_block(url, inbox_url_for_block.as_deref(), minter.as_deref())
-            .await;
-        if should_open_browser(cli.open_browser) {
-            match open_browser_url(url) {
-                Ok(()) => tracing::info!(
-                    url = %url,
-                    "klodi_zeroclaw_open_browser_dispatched"
-                ),
-                Err(err) => tracing::warn!(
-                    error = %err,
-                    url = %url,
-                    "klodi_zeroclaw_open_browser_failed"
-                ),
-            }
-        }
-    }
-
-    // Hand the same registry to the reply-attribution task so
-    // dashboard replies land in `${KLODI_HOME}/approvals/<rid>.reply.json`
-    // for the MCP server's approval gate. Failures are non-fatal —
-    // the dedicated klodi session path keeps working without the
-    // dashboard surface.
-    if dashboard_enabled {
-        tokio::spawn(run_reply_attribution(klodi_home.clone(), registry.clone()));
-    } else {
-        tracing::info!(
-            "klodi_zeroclaw_reply_attribution_skipped_dashboard_disabled"
-        );
-    }
-
-    let dedicated_session_id = resolved.session_id;
     run_forwarder(ForwarderConfig {
         creds_path,
         config_path,
-        wake_url: cli.zeroclaw_webhook_url.clone(),
-        bearer_token: Some(bearer),
-        user_agent: format!(
-            "klodi-zeroclaw-daemon/{}",
-            env!("CARGO_PKG_VERSION")
-        ),
+        handler,
         log_event_prefix: "klodi_zeroclaw".into(),
         health_port: cli.health_port,
-        body_shape: BodyShape::ZeroClawRegistry {
-            registry,
-            dedicated_session_id,
-        },
-        // Unused on the registry path — see WAKE_POST_TIMEOUT_PLACEHOLDER.
-        wake_post_timeout: WAKE_POST_TIMEOUT_PLACEHOLDER,
     })
     .await
     .context("running klodi-zeroclaw-daemon")
 }
 
-/// Minimal channel registry containing just a `DedicatedSessionChannel`
-/// — used when [`build_channel_registry`] fails (malformed
-/// `${KLODI_HOME}/klodi.toml`, on-disk artifact creation failure,
-/// etc.). Without this, wake forwarding would have no destination at
-/// all when the operator's config file is broken — a strictly worse
-/// regression than 0.2.10's "wakes-go-to-pinned" behaviour, which is
-/// what the registry rewrite replaces.
-///
-/// The dedicated session is the chronicle of record; the fallback
-/// preserves that path so the agent loop keeps receiving wakes while
-/// the operator fixes their config. Dashboard + upstream channels are
-/// skipped — they require config to know where to write.
-fn build_fallback_registry(binding: &SessionBinding) -> Result<ChannelRegistry> {
-    let dedicated = DedicatedSessionChannel::new(
-        binding.ws_config.clone(),
-        binding.session_id.clone(),
-    );
-    // `agent_surface` is on the impl, not the registration — the
-    // dedicated channel returns `true` so the registry treats this as a
-    // single-destination agent route.
-    Ok(ChannelRegistry::new(vec![RegisteredChannel {
-        impl_: Arc::new(dedicated),
-        recipient: Recipient::Address(binding.session_id.clone()),
-        severity_floor: Severity::Diagnostic,
-        event_filter: vec![],
-    }]))
-}
-
-/// Reply attribution loop. Subscribes to `registry.replies()` —
-/// emitted by `DashboardChannel`'s polling bridge — and persists each
-/// matched reply to `${KLODI_HOME}/approvals/<rid>.reply.json` so a
-/// freshly-spawned MCP server's approval gate can pick it up on the
-/// agent's next retry. Failures inside the task log + skip; the task
-/// itself stays alive until the daemon shuts down.
-async fn run_reply_attribution(
-    klodi_home: PathBuf,
-    registry: klodi_rust_host::ChannelRegistry,
-) {
-    let mut stream = registry.replies();
-    tracing::info!(
-        channel_count = registry.channel_count(),
-        "klodi_zeroclaw_reply_attribution_started"
-    );
-    while let Some((channel_name, reply)) = stream.next().await {
-        let Some(rid) = reply.correlation_id.as_deref() else {
-            // Bare chat — not tied to an open approval. Drop.
-            continue;
-        };
-        let record = klodi_rust_host::channels::reply_capture::PersistedReply {
-            text: reply.text.clone(),
-            channel_name: reply.channel_name.clone(),
-            origin: reply.origin.clone(),
-            received_at_unix_seconds:
-                klodi_rust_host::channels::reply_capture::now_unix_seconds(),
-        };
-        match klodi_rust_host::channels::reply_capture::persist_reply(
-            &klodi_home,
-            rid,
-            &record,
-        ) {
-            Ok(true) => {
-                tracing::info!(
-                    request_id = %rid,
-                    channel = %channel_name,
-                    origin = %reply.origin,
-                    "klodi_zeroclaw_reply_attribution_captured"
-                );
-            }
-            Ok(false) => {
-                tracing::debug!(
-                    request_id = %rid,
-                    channel = %channel_name,
-                    "klodi_zeroclaw_reply_attribution_duplicate_ignored"
-                );
-            }
-            Err(err) => {
-                tracing::warn!(
-                    request_id = %rid,
-                    error = %format!("{err:#}"),
-                    "klodi_zeroclaw_reply_attribution_persist_failed"
-                );
-            }
-        }
-    }
-    tracing::info!("klodi_zeroclaw_reply_attribution_stream_closed");
-    let _ = klodi_home; // keep ownership; referenced via captures above
-}
-
-/// Build the WS config from CLI inputs. Honours explicit `--ws-url` /
-/// `--http-base` overrides; otherwise derives from the webhook URL.
-fn build_ws_config(
-    webhook_url: &str,
-    ws_override: Option<&str>,
-    http_base_override: Option<&str>,
-    bearer: String,
-) -> Result<ZeroClawWsConfig> {
-    let derived = ZeroClawWsConfig::from_webhook_url(webhook_url, bearer.clone())?;
-    let ws_url = ws_override
-        .map(str::to_string)
-        .unwrap_or(derived.ws_url);
-    let http_base = http_base_override
-        .map(str::to_string)
-        .unwrap_or(derived.http_base);
-    Ok(ZeroClawWsConfig {
-        ws_url,
-        http_base,
-        bearer,
-    })
-}
-
-/// Subset of `${KLODI_HOME}/config.json` fields needed for heartbeat
-/// composition. Loaded directly via serde so we don't have to spin a
-/// full `KlodiClient` ahead of `run_forwarder`.
-#[derive(Debug)]
-struct ConfigSummary {
+/// Wake handler — composes the prompt and spawns an isolated agent
+/// session for each delivered NATS event.
+struct SpawnWakeHandler {
+    spawn_client: SpawnClient,
     handle: String,
     user_id: String,
-    nats_url: String,
+    operator_session_id: String,
 }
 
-fn read_config_summary(path: &std::path::Path) -> Result<ConfigSummary> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("read {}", path.display()))?;
-    let parsed: serde_json::Value = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parse {} as JSON", path.display()))?;
-    let handle = parsed
-        .get("handle")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("config.json missing 'handle'"))?
-        .to_string();
-    let user_id = parsed
-        .get("user_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("config.json missing 'user_id'"))?
-        .to_string();
-    let nats_url = parsed
-        .get("nats_url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("config.json missing 'nats_url'"))?
-        .to_string();
-    Ok(ConfigSummary {
-        handle,
-        user_id,
-        nats_url,
-    })
-}
-
-/// Post the heartbeat (when not already written atomically by the
-/// bootstrap path) and the plugin-authored bootstrap note (only when
-/// the session is freshly minted OR has zero pre-existing messages).
-/// Failures here are non-fatal — the daemon still boots because the
-/// operator is better off with a missing intro line than with a daemon
-/// that refuses to start.
-async fn post_startup_notes(
-    ws: &ZeroClawWsConfig,
-    session_id: &str,
-    heartbeat: &str,
-    heartbeat_already_written: bool,
-    bootstrap_note: Option<&str>,
-) -> Result<()> {
-    // Both writes are OnGatewayWrite: at startup no agent loop is yet
-    // observing the session, so the wake-regime 180s `agent_start` wait
-    // would burn its full window every time. OnGatewayWrite returns as
-    // soon as the gateway accepts the frame (plus a 5s error-grace
-    // read), which is the right semantic — these writes are bootstrap
-    // breadcrumbs, not operator-observed wakes.
-    if !heartbeat_already_written {
-        if let Err(err) = send_session_message(
-            ws,
-            session_id,
-            heartbeat,
-            klodi_rust_host::SendAckPolicy::OnGatewayWrite,
-        )
-        .await
-        {
-            tracing::warn!(
-                error = %format!("{err:#}"),
-                session_id = %session_id,
-                "klodi_zeroclaw_heartbeat_post_failed_continuing"
-            );
-            // Continue — the operator will still see wakes when they arrive.
-            return Ok(());
-        }
-    }
-
-    // Bootstrap note — composed by the caller (it owns the session
-    // metadata and channel-registry surface list needed by
-    // `bootstrap_note::BootstrapInputs`). `None` means "skip the
-    // standalone post" — used for steady-state daemon restarts where
-    // the operator already has the intro in their chat history.
-    if let Some(body) = bootstrap_note {
-        if let Err(err) = send_session_message(
-            ws,
-            session_id,
-            body,
-            klodi_rust_host::SendAckPolicy::OnGatewayWrite,
-        )
-        .await
-        {
-            tracing::warn!(
-                error = %format!("{err:#}"),
-                session_id = %session_id,
-                "klodi_zeroclaw_bootstrap_note_post_failed_continuing"
-            );
-        }
-    }
-    Ok(())
-}
-
-/// Pair-bootstrap helpers — derive the `/pair` URL, consume a sidecar
-/// pairing-code, cache the minted bearer, fall back to the cache, and
-/// (since 0.2.8) auto-mint via the gateway CLI as a final fallback so
-/// first-boot is zero-touch.
-mod pair {
-    use anyhow::{Context, Result, bail};
-    use klodi_nats_client::klodi_secret_write;
-    use klodi_rust_host::MinterImpl;
-    use serde::Deserialize;
-    use std::path::{Path, PathBuf};
-    use std::time::Duration;
-
-    /// `${KLODI_HOME}/zeroclaw.pairing-code` — sidecar one-time code the
-    /// operator's init script writes; the daemon reads + deletes it.
-    pub fn pairing_code_path(home: &Path) -> PathBuf {
-        home.join("zeroclaw.pairing-code")
-    }
-
-    /// `${KLODI_HOME}/zeroclaw.token` — cached `zc_<hex>` bearer minted
-    /// from a successful `/pair`. Mode 0600 on Unix.
-    pub fn token_path(home: &Path) -> PathBuf {
-        home.join("zeroclaw.token")
-    }
-
-    /// Resolve `/pair` by stripping a trailing `/webhook` from the
-    /// webhook URL and appending `/pair`. Honors the explicit override
-    /// when present so non-canonical layouts keep working.
-    pub fn derive_pair_url(
-        webhook_url: &str,
-        override_pair: Option<&str>,
-    ) -> Result<String> {
-        if let Some(p) = override_pair {
-            return Ok(p.to_string());
-        }
-        let trimmed = webhook_url.trim_end_matches('/');
-        if let Some(base) = trimmed.strip_suffix("/webhook") {
-            Ok(format!("{base}/pair"))
-        } else {
-            bail!(
-                "cannot derive /pair URL from webhook URL {webhook_url:?}: expected trailing '/webhook'. \
-                 Set ZEROCLAW_PAIR_URL explicitly, or pair manually and pass ZEROCLAW_AGENT_TOKEN."
-            )
-        }
-    }
-
-    #[derive(Deserialize)]
-    struct PairResponse {
-        token: String,
-        #[serde(default)]
-        paired: bool,
-    }
-
-    pub async fn resolve_bearer(
-        env_token: Option<&str>,
-        pair_url_override: Option<&str>,
-        webhook_url: &str,
-        klodi_home: &Path,
-        minter: Option<&MinterImpl>,
-    ) -> Result<String> {
-        // 1. Explicit env override — operator manages manually.
-        if let Some(token) = env_token {
-            let token = token.trim();
-            if token.is_empty() {
-                bail!("ZEROCLAW_AGENT_TOKEN is set but empty");
-            }
-            tracing::info!("klodi_zeroclaw_bearer_from_env");
-            return Ok(token.to_string());
-        }
-
-        let code_path = pairing_code_path(klodi_home);
-        let cache_path = token_path(klodi_home);
-
-        // 2. Fresh pairing-code file → re-pair and cache. Operators
-        // controlling the re-pair flow (rotation, paired-tokens wipe
-        // recovery) drop a code here; this branch always wins over
-        // both the cache and auto-mint so a refreshed file is honoured.
-        if code_path.exists() {
-            let code = std::fs::read_to_string(&code_path)
-                .with_context(|| {
-                    format!("read pairing code at {}", code_path.display())
-                })?
-                .trim()
-                .to_string();
-            if code.is_empty() {
-                bail!(
-                    "pairing code at {} is empty",
-                    code_path.display()
-                );
-            }
-            let pair_url = derive_pair_url(webhook_url, pair_url_override)?;
-            let token = pair_with_zeroclaw(&pair_url, &code).await?;
-            persist_token(&cache_path, &token)?;
-            if let Err(err) = std::fs::remove_file(&code_path) {
-                tracing::warn!(
-                    error = %err,
-                    path = %code_path.display(),
-                    "klodi_zeroclaw_pairing_code_cleanup_failed"
-                );
-            }
-            tracing::info!(
-                pair_url = %pair_url,
-                "klodi_zeroclaw_paired_from_sidecar"
-            );
-            return Ok(token);
-        }
-
-        // 3. Cached token from a prior successful pair. Happy path on
-        // every restart after the first.
-        if cache_path.exists() {
-            let token = std::fs::read_to_string(&cache_path)
-                .with_context(|| {
-                    format!("read cached token at {}", cache_path.display())
-                })?
-                .trim()
-                .to_string();
-            if token.is_empty() {
-                bail!(
-                    "cached token at {} is empty",
-                    cache_path.display()
-                );
-            }
-            tracing::info!("klodi_zeroclaw_bearer_from_cache");
-            return Ok(token);
-        }
-
-        // 4. Auto-mint via the gateway CLI when nothing else is set.
-        // First-boot convenience — operators on the canonical
-        // deployment no longer need to find the gateway's startup
-        // pairing code and write it to disk. A failure here falls
-        // through to the bail message so the operator still gets
-        // the actionable hint about ZEROCLAW_AGENT_TOKEN / the sidecar
-        // file.
-        if let Some(m) = minter {
-            match m.mint().await {
-                Ok(code) => {
-                    let pair_url =
-                        derive_pair_url(webhook_url, pair_url_override)?;
-                    let token = pair_with_zeroclaw(&pair_url, &code).await?;
-                    persist_token(&cache_path, &token)?;
+impl WakeHandler for SpawnWakeHandler {
+    fn handle<'a>(&'a self, event: &'a WakeEvent) -> WakeHandlerFuture<'a> {
+        Box::pin(async move {
+            let event_json_pretty = serde_json::to_string_pretty(event).map_err(|err| {
+                KlodiError::NatsPublish(format!("serialising wake event: {err}"))
+            })?;
+            let prompt = build_wake_prompt(&WakePromptInputs {
+                handle: &self.handle,
+                user_id: &self.user_id,
+                event_json_pretty: &event_json_pretty,
+                operator_session_id: &self.operator_session_id,
+            });
+            match self.spawn_client.spawn(&prompt).await {
+                Ok(outcome) => {
                     tracing::info!(
-                        pair_url = %pair_url,
-                        "klodi_zeroclaw_paired_via_auto_mint"
+                        kind = %event.kind(),
+                        event_id = %event.event_id(),
+                        spawn_path = ?outcome.path,
+                        spawn_session_id = outcome.session_id.as_deref().unwrap_or(""),
+                        "klodi_zeroclaw_wake_spawned"
                     );
-                    return Ok(token);
+                    Ok(())
                 }
                 Err(err) => {
                     tracing::warn!(
+                        kind = %event.kind(),
+                        event_id = %event.event_id(),
                         error = %format!("{err:#}"),
-                        "klodi_zeroclaw_auto_mint_failed_falling_through"
+                        "klodi_zeroclaw_wake_spawn_failed"
                     );
+                    Err(spawn_error_to_klodi(err))
                 }
             }
-        }
+        })
+    }
+}
 
+fn spawn_error_to_klodi(err: SpawnError) -> KlodiError {
+    KlodiError::NatsPublish(format!("zeroclaw spawn: {err}"))
+}
+
+/// Resolve the bearer token. Explicit `--zeroclaw-token` wins; otherwise
+/// read `${KLODI_HOME}/zeroclaw.token` (written by `register`).
+fn resolve_bearer(env_token: Option<&str>, klodi_home: &std::path::Path) -> Result<String> {
+    if let Some(token) = env_token {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            bail!("ZEROCLAW_AGENT_TOKEN is set but empty");
+        }
+        return Ok(trimmed.to_string());
+    }
+    let path = klodi_home.join("zeroclaw.token");
+    let raw = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "reading {} — run klodi-zeroclaw-register first to pair with the gateway",
+            path.display(),
+        )
+    })?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
         bail!(
-            "ZeroClaw bearer unavailable: set ZEROCLAW_AGENT_TOKEN, or write a one-time pairing code to {} \
-             (the daemon will POST /pair, cache the bearer at {}, and consume the code file). \
-             If `zeroclaw` is on PATH the daemon also auto-mints when none of the above are present; \
-             override the path with --zeroclaw-cli when the gateway lives elsewhere.",
-            code_path.display(),
-            cache_path.display(),
-        )
-    }
-
-    async fn pair_with_zeroclaw(
-        pair_url: &str,
-        code: &str,
-    ) -> Result<String> {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .context("build pair HTTP client")?;
-        let resp = http
-            .post(pair_url)
-            .header("X-Pairing-Code", code)
-            .header("Content-Type", "application/json")
-            .body("{}")
-            .send()
-            .await
-            .with_context(|| format!("POST {pair_url} (pair)"))?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            bail!(
-                "pair POST to {} returned {}: {}",
-                pair_url,
-                status,
-                truncate(&body, 200),
-            );
-        }
-        let parsed: PairResponse = serde_json::from_str(&body)
-            .with_context(|| {
-                format!(
-                    "decode pair response (status {status}): {}",
-                    truncate(&body, 200)
-                )
-            })?;
-        if !parsed.token.starts_with("zc_") {
-            bail!(
-                "unexpected token shape from /pair (expected 'zc_' prefix): {:?}",
-                truncate(&parsed.token, 16)
-            );
-        }
-        if !parsed.paired {
-            tracing::warn!(
-                "klodi_zeroclaw_pair_response_paired_false"
-            );
-        }
-        Ok(parsed.token)
-    }
-
-    fn persist_token(target: &Path, token: &str) -> Result<()> {
-        klodi_secret_write(target, token.as_bytes(), 0o600)
-            .with_context(|| {
-                format!("klodi_secret_write {}", target.display())
-            })
-    }
-
-    fn truncate(s: &str, n: usize) -> String {
-        if s.chars().count() <= n {
-            s.to_string()
-        } else {
-            let mut out: String = s.chars().take(n).collect();
-            out.push('…');
-            out
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use tempfile::tempdir;
-
-        #[test]
-        fn derive_pair_url_canonical() {
-            assert_eq!(
-                derive_pair_url("http://127.0.0.1:7070/webhook", None).unwrap(),
-                "http://127.0.0.1:7070/pair"
-            );
-        }
-
-        #[test]
-        fn derive_pair_url_strips_trailing_slash() {
-            assert_eq!(
-                derive_pair_url("http://127.0.0.1:7070/webhook/", None).unwrap(),
-                "http://127.0.0.1:7070/pair"
-            );
-        }
-
-        #[test]
-        fn derive_pair_url_handles_subpath() {
-            assert_eq!(
-                derive_pair_url("https://gw.example/zc/webhook", None).unwrap(),
-                "https://gw.example/zc/pair"
-            );
-        }
-
-        #[test]
-        fn derive_pair_url_explicit_override_wins() {
-            assert_eq!(
-                derive_pair_url(
-                    "http://127.0.0.1:7070/whatever",
-                    Some("http://other:9000/pair")
-                )
-                .unwrap(),
-                "http://other:9000/pair"
-            );
-        }
-
-        #[test]
-        fn derive_pair_url_rejects_non_webhook_path() {
-            let err = derive_pair_url("http://127.0.0.1:7070/wakes", None)
-                .unwrap_err()
-                .to_string();
-            assert!(
-                err.contains("expected trailing '/webhook'"),
-                "unexpected error: {err}"
-            );
-        }
-
-        #[tokio::test]
-        async fn resolve_bearer_prefers_env() {
-            let dir = tempdir().unwrap();
-            let token = resolve_bearer(
-                Some("zc_explicit_env"),
-                None,
-                "http://127.0.0.1:7070/webhook",
-                dir.path(),
-                None,
-            )
-            .await
-            .unwrap();
-            assert_eq!(token, "zc_explicit_env");
-        }
-
-        #[tokio::test]
-        async fn resolve_bearer_reads_cached_token_when_no_code_file() {
-            let dir = tempdir().unwrap();
-            std::fs::write(
-                dir.path().join("zeroclaw.token"),
-                "zc_cached_value\n",
-            )
-            .unwrap();
-            let token = resolve_bearer(
-                None,
-                None,
-                "http://127.0.0.1:7070/webhook",
-                dir.path(),
-                None,
-            )
-            .await
-            .unwrap();
-            assert_eq!(token, "zc_cached_value");
-        }
-
-        #[tokio::test]
-        async fn resolve_bearer_bails_when_no_source_available() {
-            let dir = tempdir().unwrap();
-            let err = resolve_bearer(
-                None,
-                None,
-                "http://127.0.0.1:7070/webhook",
-                dir.path(),
-                None,
-            )
-            .await
-            .unwrap_err()
-            .to_string();
-            assert!(err.contains("ZEROCLAW_AGENT_TOKEN"));
-            assert!(err.contains("zeroclaw.pairing-code"));
-        }
-
-        #[tokio::test]
-        async fn resolve_bearer_rejects_empty_cached_token() {
-            let dir = tempdir().unwrap();
-            std::fs::write(dir.path().join("zeroclaw.token"), "   \n").unwrap();
-            assert!(
-                resolve_bearer(
-                    None,
-                    None,
-                    "http://127.0.0.1:7070/webhook",
-                    dir.path(),
-                    None,
-                )
-                .await
-                .is_err()
-            );
-        }
-
-        #[tokio::test]
-        async fn resolve_bearer_skips_minter_when_cache_present() {
-            // Cached token wins over auto-mint — once paired, restarts
-            // should reuse the cached bearer rather than re-mint on
-            // every boot (would accumulate tokens in
-            // `gateway.paired_tokens`).
-            let dir = tempdir().unwrap();
-            std::fs::write(
-                dir.path().join("zeroclaw.token"),
-                "zc_cached_value\n",
-            )
-            .unwrap();
-            let m = MinterImpl::Stub {
-                fixed_code: "987654".into(),
-            };
-            let token = resolve_bearer(
-                None,
-                None,
-                "http://127.0.0.1:7070/webhook",
-                dir.path(),
-                Some(&m),
-            )
-            .await
-            .unwrap();
-            assert_eq!(token, "zc_cached_value");
-        }
-
-        #[tokio::test]
-        async fn resolve_bearer_consults_minter_when_no_other_source() {
-            // No env, no sidecar, no cache → minter is the last
-            // fallback. The minter mints fine, but pair_with_zeroclaw
-            // fails because there's no real gateway at the unreachable
-            // URL. The point of the test is that the failure happens
-            // *after* the minter was called — i.e., the auto-mint
-            // branch is exercised, not the bail path.
-            let dir = tempdir().unwrap();
-            let m = MinterImpl::Stub {
-                fixed_code: "987654".into(),
-            };
-            // Port 1 is reserved/unreachable on every platform we
-            // support, so the connect fails fast.
-            let err = resolve_bearer(
-                None,
-                None,
-                "http://127.0.0.1:1/webhook",
-                dir.path(),
-                Some(&m),
-            )
-            .await
-            .unwrap_err()
-            .to_string();
-            // The error must come from pair_with_zeroclaw, not from
-            // the bail message — match on something that only appears
-            // in the HTTP path.
-            assert!(
-                err.contains("/pair") || err.contains("pair POST") || err.contains("POST"),
-                "expected auto-mint pair error, got: {err}"
-            );
-            assert!(
-                !err.contains("ZEROCLAW_AGENT_TOKEN"),
-                "must not have fallen through to bail message: {err}"
-            );
-        }
-    }
-}
-
-/// Strip the trailing `/webhook` segment from a webhook URL to derive
-/// the gateway dashboard URL the operator opens in their browser.
-/// Falls through unchanged when the URL doesn't end in `/webhook` so
-/// non-canonical layouts still produce a reasonable fallback.
-fn derive_dashboard_url(webhook_url: &str) -> String {
-    let trimmed = webhook_url.trim_end_matches('/');
-    if let Some(base) = trimmed.strip_suffix("/webhook") {
-        base.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Print a clearly-delimited block to stdout pointing the operator at
-/// the loopback browser-pairing helper, with a freshly-minted code
-/// when the minter cooperates. Fails-soft on every step — this is
-/// operator UX, not load-bearing.
-async fn print_pair_block(
-    url: &str,
-    inbox_url: Option<&str>,
-    minter: Option<&MinterImpl>,
-) {
-    let bar = "═".repeat(64);
-    let code_line = match minter {
-        Some(m) => match m.mint().await {
-            Ok(code) => format!(
-                "  Pairing code:  {code}   (≈60s validity — reload the URL for a fresh one)"
-            ),
-            Err(_) => "  Pairing code:  (mint failed — the URL below will retry on every hit)".to_string(),
-        },
-        None => "  Pairing code:  (gateway CLI unavailable — see warning above)".to_string(),
-    };
-    // Blank lines around the block + bars on top/bottom give the
-    // operator a clear visual landing in the daemon's startup log.
-    println!();
-    println!("{bar}");
-    println!("  klodi · ZeroClaw browser pairing helper");
-    println!();
-    println!("{code_line}");
-    println!();
-    println!("  Open this URL — your browser code will be pre-copied to clipboard:");
-    println!("    {url}");
-    if let Some(inbox) = inbox_url {
-        println!();
-        println!("  Klodi inbox — where klodi_escalate_to_user lands:");
-        println!("    {inbox}");
-    }
-    println!("{bar}");
-    println!();
-    tracing::info!(
-        url = %url,
-        inbox_url = inbox_url.unwrap_or(""),
-        "klodi_zeroclaw_pair_block_printed"
-    );
-}
-
-fn should_open_browser(setting: OpenBrowserDefault) -> bool {
-    match setting {
-        OpenBrowserDefault::Always => true,
-        OpenBrowserDefault::Never => false,
-        OpenBrowserDefault::Auto => std::io::stdout().is_terminal(),
-    }
-}
-
-/// Spawn the OS-native browser-launcher pointed at `url`. Returns as
-/// soon as the launcher is dispatched; we don't wait for the browser
-/// to actually open (it never blocks on us, and on Linux `xdg-open`
-/// detaches asynchronously).
-fn open_browser_url(url: &str) -> std::io::Result<()> {
-    let mut cmd = open_command();
-    cmd.arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
-}
-
-#[cfg(target_os = "macos")]
-fn open_command() -> std::process::Command {
-    std::process::Command::new("open")
-}
-
-#[cfg(target_os = "windows")]
-fn open_command() -> std::process::Command {
-    // `cmd /c start "" <url>` — the empty string is the window title
-    // placeholder that `start` requires when the URL would otherwise
-    // be interpreted as the title arg.
-    let mut c = std::process::Command::new("cmd");
-    c.args(["/c", "start", ""]);
-    c
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn open_command() -> std::process::Command {
-    std::process::Command::new("xdg-open")
-}
-
-#[cfg(test)]
-mod daemon_tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn build_ws_config_uses_derived_when_no_overrides() {
-        let cfg = build_ws_config(
-            "http://127.0.0.1:7070/webhook",
-            None,
-            None,
-            "zc_token".into(),
-        )
-        .unwrap();
-        assert_eq!(cfg.ws_url, "ws://127.0.0.1:7070/ws/chat");
-        assert_eq!(cfg.http_base, "http://127.0.0.1:7070");
-        assert_eq!(cfg.bearer, "zc_token");
-    }
-
-    #[test]
-    fn build_ws_config_honours_explicit_overrides() {
-        let cfg = build_ws_config(
-            "http://127.0.0.1:7070/webhook",
-            Some("wss://other:8443/ws/chat"),
-            Some("https://other:8443"),
-            "zc_token".into(),
-        )
-        .unwrap();
-        assert_eq!(cfg.ws_url, "wss://other:8443/ws/chat");
-        assert_eq!(cfg.http_base, "https://other:8443");
-    }
-
-    #[test]
-    fn read_config_summary_extracts_required_fields() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("config.json");
-        std::fs::write(
-            &path,
-            r#"{"handle":"alice","user_id":"u1","nats_url":"wss://nats.example/4222","nkey_public":"X"}"#,
-        )
-        .unwrap();
-        let cfg = read_config_summary(&path).unwrap();
-        assert_eq!(cfg.handle, "alice");
-        assert_eq!(cfg.user_id, "u1");
-        assert_eq!(cfg.nats_url, "wss://nats.example/4222");
-    }
-
-    #[test]
-    fn read_config_summary_errors_on_missing_handle() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("config.json");
-        std::fs::write(&path, r#"{"user_id":"u1","nats_url":"x"}"#).unwrap();
-        let err = read_config_summary(&path).unwrap_err().to_string();
-        assert!(err.contains("handle"), "got: {err}");
-    }
-
-    #[test]
-    fn read_config_summary_errors_on_invalid_json() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("config.json");
-        std::fs::write(&path, "{not json").unwrap();
-        assert!(read_config_summary(&path).is_err());
-    }
-
-    #[test]
-    fn derive_dashboard_url_strips_trailing_webhook() {
-        assert_eq!(
-            derive_dashboard_url("http://127.0.0.1:7070/webhook"),
-            "http://127.0.0.1:7070"
+            "{} is empty — re-run klodi-zeroclaw-register to re-pair",
+            path.display(),
         );
     }
-
-    #[test]
-    fn derive_dashboard_url_strips_trailing_slash_then_webhook() {
-        assert_eq!(
-            derive_dashboard_url("http://127.0.0.1:7070/webhook/"),
-            "http://127.0.0.1:7070"
-        );
-    }
-
-    #[test]
-    fn derive_dashboard_url_handles_subpath_layout() {
-        assert_eq!(
-            derive_dashboard_url("https://gw.example/zc/webhook"),
-            "https://gw.example/zc"
-        );
-    }
-
-    #[test]
-    fn derive_dashboard_url_falls_through_when_no_webhook_suffix() {
-        // Operator passed something non-canonical — degrade to using
-        // the URL as-is rather than guessing a different path.
-        assert_eq!(
-            derive_dashboard_url("https://gw.example/api/v1"),
-            "https://gw.example/api/v1"
-        );
-    }
-
-    #[test]
-    fn should_open_browser_always_returns_true() {
-        assert!(should_open_browser(OpenBrowserDefault::Always));
-    }
-
-    #[test]
-    fn should_open_browser_never_returns_false() {
-        assert!(!should_open_browser(OpenBrowserDefault::Never));
-    }
-
-    #[test]
-    fn open_browser_default_display_matches_clap_value_enum_lowercase() {
-        // clap `value_enum` parses lowercase variant names. The Display
-        // impl must round-trip so help / errors show what the user
-        // would actually type.
-        assert_eq!(OpenBrowserDefault::Auto.to_string(), "auto");
-        assert_eq!(OpenBrowserDefault::Always.to_string(), "always");
-        assert_eq!(OpenBrowserDefault::Never.to_string(), "never");
-    }
+    Ok(trimmed.to_string())
 }

@@ -6,12 +6,6 @@
 //! `${KLODI_HOME}/config.json` via [`klodi_secret_write`][secret-write]
 //! — atomic + TOCTOU-free.
 //!
-//! Three identical copies previously lived under
-//! `adapters/{moltis,ironclaw,zeroclaw}/src/register.rs`. Per **D § D8**
-//! they collapse to one implementation here; the per-adapter binary
-//! supplies the user-agent string + reset-instruction text via
-//! [`RegisterArgs`].
-//!
 //! [secret-write]: klodi_nats_client::klodi_secret_write
 
 use anyhow::{Context, Result, bail};
@@ -117,7 +111,6 @@ pub async fn run_register(args: RegisterArgs) -> Result<()> {
             }
             PollOutcome::Completed(env) => {
                 persist_session(&args.klodi_home, &env).await?;
-                seed_policies_after_register(&args.klodi_home);
                 println!(
                     "Registration complete — welcome, @{}.",
                     env.handle.as_deref().unwrap_or("?"),
@@ -145,12 +138,8 @@ async fn poll_once(http: &HttpClient, url: &str) -> Result<PollOutcome> {
         let status = resp.status();
         // 404 means the session row hasn't been materialised yet — the
         // web app's `GET /authorize` handler creates it on first browser
-        // hit (apps/web/src/app/authorize/route.ts), and there's a
-        // window between binary-prints-URL and user-clicks-link where
-        // the row legitimately doesn't exist. Treat it as pending so
-        // the next tick re-polls instead of aborting the 10-min window
-        // on the very first request. Mirrors the explicit handling in
-        // adapters/hermes/src/klodi_hermes/register.py.
+        // hit. Treat as pending so the next tick re-polls instead of
+        // aborting the 10-min window on the first request.
         if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(PollOutcome::Pending);
         }
@@ -170,36 +159,6 @@ async fn poll_once(http: &HttpClient, url: &str) -> Result<PollOutcome> {
         "completed" => Ok(PollOutcome::Completed(env)),
         "expired" => Ok(PollOutcome::Expired),
         _ => Ok(PollOutcome::Pending),
-    }
-}
-
-/// Best-effort policy seeding. Failures are logged + reported on stdout
-/// but never block registration — the user's creds are already on disk
-/// at this point and we'd rather have a registered host with missing
-/// policies than fail the whole flow because a template is unreadable.
-/// Surfaced issues are reported by `klodi_setup_status` on the next
-/// run via the `negotiation_style_missing` / `security_policy_missing`
-/// issue codes.
-fn seed_policies_after_register(klodi_home: &Path) {
-    match crate::policy_seed::seed_policies_if_absent(klodi_home) {
-        Ok(report) => {
-            let parts: Vec<&str> = [
-                report.negotiation_style_seeded.then_some("negotiation_style.md"),
-                report.security_policy_seeded.then_some("security.md"),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            if !parts.is_empty() {
-                println!("Seeded {}.", parts.join(" + "));
-            }
-        }
-        Err(err) => {
-            tracing::warn!(error = %err, "policy seeding failed during register");
-            eprintln!(
-                "warning: policy seeding failed ({err}); run klodi_setup_reseed_policies later.",
-            );
-        }
     }
 }
 
@@ -279,14 +238,70 @@ fn trim_slash(url: &str) -> &str {
     url.trim_end_matches('/')
 }
 
+/// Read the `handle` + `user_id` fields from `${KLODI_HOME}/config.json`.
+/// Used by adapter binaries that need them on the startup path before
+/// `KlodiClient::new` has been called.
+pub fn read_config_identity(klodi_home: &Path) -> Result<ConfigIdentity> {
+    let path = klodi_home.join("config.json");
+    let bytes = std::fs::read(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing {} as JSON", path.display()))?;
+    let handle = parsed
+        .get("handle")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("config.json missing 'handle'"))?
+        .to_string();
+    let user_id = parsed
+        .get("user_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("config.json missing 'user_id'"))?
+        .to_string();
+    Ok(ConfigIdentity { handle, user_id })
+}
+
+/// Subset of `${KLODI_HOME}/config.json` adapter binaries need before
+/// dialling NATS.
+#[derive(Debug, Clone)]
+pub struct ConfigIdentity {
+    pub handle: String,
+    pub user_id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn trim_slash_handles_trailing() {
         assert_eq!(trim_slash("https://klodi.4gpts.com/"), "https://klodi.4gpts.com");
         assert_eq!(trim_slash("https://klodi.4gpts.com"), "https://klodi.4gpts.com");
         assert_eq!(trim_slash("https://klodi.4gpts.com//"), "https://klodi.4gpts.com");
+    }
+
+    #[test]
+    fn read_config_identity_extracts_handle_and_user_id() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"handle":"alice","user_id":"u1","nats_url":"wss://x"}"#,
+        )
+        .unwrap();
+        let id = read_config_identity(dir.path()).unwrap();
+        assert_eq!(id.handle, "alice");
+        assert_eq!(id.user_id, "u1");
+    }
+
+    #[test]
+    fn read_config_identity_errors_on_missing_handle() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"user_id":"u1","nats_url":"x"}"#,
+        )
+        .unwrap();
+        let err = read_config_identity(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("handle"), "got: {err}");
     }
 }

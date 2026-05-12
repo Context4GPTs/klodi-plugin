@@ -5,23 +5,23 @@
 //! 1. The NATS request/reply tools from `schemas.json` (catalog passthrough).
 //!    Each one is dispatched through `KlodiClient::request(<subject>, params)`;
 //!    the marketplace's reply lands in `CallToolResult::structured`.
-//! 2. A set of local tools (no 1:1 NATS subject) that run inside this process:
-//!    - `klodi_setup_status` — reads `${KLODI_HOME}/{nats.creds,config.json,policies/}`
-//!    - `klodi_setup_reseed_policies` — non-destructive seed of `policies/{negotiation_style,security}.md`
+//! 2. A small set of local tools (no 1:1 NATS subject):
+//!    - `klodi_setup_status` — reads `${KLODI_HOME}/{nats.creds,config.json}`
 //!    - `klodi_health` — round-trips through `users.whoami`
 //!    - `klodi_channel_message` — direct JetStream publish
 //!    - `klodi_watch` — composite: `searches.create` (or one-shot `listings.search`) + `${KLODI_HOME}/buy/<slug>.md`
 //!    - `klodi_unwatch` — composite: `searches.delete` + delete `${KLODI_HOME}/buy/<slug>.md`
 //!
-//! Per spec §§ 2/5, registration and repair (`klodi_register`,
-//! `klodi_setup_repair`) are NOT MCP tools on the Rust path — they live in
-//! the per-host CLI binary (`klodi-<host>-register`). `klodi_setup_status`'s
-//! `next_action` field surfaces the binary name to the agent.
+//! The 2026-05-12 wake-agent-spawn redesign deletes
+//! `klodi_escalate_to_user` and the irreversible-tool approval gate —
+//! the spawned wake agent calls `sessions_send` directly when the
+//! operator should see something, and approvals happen in chat (the
+//! next wake's agent reads the operator's reply via
+//! `sessions_history`).
 
 use super::handler::KlodiMcpHandler;
 use super::schemas::catalog;
 use crate::buy_sell_files::{self, ActionOnMatch, BuyFile, slugify};
-use crate::policy_seed;
 use crate::setup_status::klodi_setup_status_with_register_cli;
 use klodi_nats_client::KlodiError;
 use klodi_nats_client::catalog::ToolName;
@@ -34,37 +34,9 @@ use std::sync::Arc;
 
 const LOCAL_TOOL_HEALTH: &str = "klodi_health";
 const LOCAL_TOOL_SETUP_STATUS: &str = "klodi_setup_status";
-const LOCAL_TOOL_SETUP_RESEED_POLICIES: &str = "klodi_setup_reseed_policies";
 const LOCAL_TOOL_CHANNEL_MESSAGE: &str = "klodi_channel_message";
 const LOCAL_TOOL_WATCH: &str = "klodi_watch";
 const LOCAL_TOOL_UNWATCH: &str = "klodi_unwatch";
-
-/// Post a structured note into the operator's dedicated klodi
-/// session. Only registered + dispatched when the `zeroclaw_session`
-/// feature is on AND `McpConfig::klodi_session_target` is `Some`.
-/// Daemon-only adapters don't expose this tool.
-#[cfg(feature = "zeroclaw_session")]
-const LOCAL_TOOL_ESCALATE_TO_USER: &str = "klodi_escalate_to_user";
-
-/// Approval-gate retry parameter the agent passes back. Reserved field
-/// the plugin recognises on EVERY tool call — gated tools use it to
-/// match the retry against the persisted pending entry. Listed here so
-/// the agent and the plugin agree on the exact field name.
-#[cfg(feature = "zeroclaw_session")]
-const APPROVAL_REQUEST_ID_FIELD: &str = "_klodi_approval_request_id";
-
-/// Approval-gate retry parameter carrying the operator's verbatim chat
-/// reply. The plugin's affirmation regex runs against this value.
-#[cfg(feature = "zeroclaw_session")]
-const APPROVAL_TEXT_FIELD: &str = "_klodi_approval_operator_text";
-
-/// Maximum age before [`zeroclaw_approval::reap_expired`] drops a
-/// pending entry. 24h gives the operator a full day to come back and
-/// approve a long-running negotiation thread; older entries are almost
-/// always abandoned and would otherwise grow unbounded under
-/// `${KLODI_HOME}/approvals/`.
-#[cfg(feature = "zeroclaw_session")]
-const APPROVAL_MAX_AGE_SECONDS: i64 = 24 * 60 * 60;
 
 const BUY_FILE_HINT: &str =
     "Append your standing-search strategy (target price, walk-away rules, dialogue digest) \
@@ -82,8 +54,6 @@ fn build_tool_list() -> Vec<Tool> {
     let mut out: Vec<Tool> = Vec::with_capacity(32);
     let cat = catalog();
     for (name, entry) in cat.tools.iter() {
-        // Cross-check the public name appears in the strongly-typed
-        // ToolName enum. If catalog and enum disagree, codegen is stale.
         if ToolName::from_name(name).is_none() {
             tracing::warn!(
                 tool = name.as_str(),
@@ -96,22 +66,11 @@ fn build_tool_list() -> Vec<Tool> {
 
     out.push(make_tool(
         LOCAL_TOOL_SETUP_STATUS,
-        "Inspect klodi setup state. Reports phase (unconfigured | registering | needs_policy | ready), \
-         file-presence flags, policy-fill state, and a structured `next_action` describing the single \
-         next step (run a CLI binary, call another klodi tool, edit a file, or tighten file perms). \
-         Call this at the start of every session and any time a connection or policy issue surfaces.",
-        &json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        }),
-    ));
-    out.push(make_tool(
-        LOCAL_TOOL_SETUP_RESEED_POLICIES,
-        "Re-seed ${KLODI_HOME}/policies/{negotiation_style,security}.md from the embedded skill \
-         bundle, non-destructively. Existing files are preserved verbatim — use this to restore a \
-         deleted policy file without touching the user's edits to the others. Returns per-file \
-         seed flags: `{ negotiation_style_seeded, security_policy_seeded }`.",
+        "Inspect klodi setup state. Reports phase (unconfigured | registering | ready), \
+         file-presence flags, and a structured `next_action` describing the single next \
+         step (run a CLI binary, call another klodi tool, edit a file, or tighten file \
+         perms). Call this at the start of every session and any time a connection issue \
+         surfaces.",
         &json!({
             "type": "object",
             "properties": {},
@@ -212,72 +171,6 @@ fn build_tool_list() -> Vec<Tool> {
             "additionalProperties": false
         }),
     ));
-    #[cfg(feature = "zeroclaw_session")]
-    out.push(make_tool(
-        LOCAL_TOOL_ESCALATE_TO_USER,
-        "Yield to the user — post a klodi-prefixed message into the operator's \
-         most-recently-active dashboard session so the operator sees the ask \
-         wherever their cursor is. Routing is single-destination: each call \
-         lands in exactly ONE agent surface (no fan-out, no duplicate agent \
-         turns). With default or 'operator_important' / 'approval_request' \
-         severity the message reaches the operator's dashboard; if no dashboard \
-         session is active the registry falls through to the dedicated klodi \
-         session automatically (the chronicle of record). Upstream notification \
-         channels (Telegram/Slack/email) fan alongside the agent route since \
-         they don't trigger agent loops.\n\n\
-         \
-         The rendered message starts with `── klodi · req=<id> · \
-         klodi_escalate_to_user ──`. When the operator's dashboard agent sees \
-         that exact prefix-and-event-kind it MUST no-op the turn — klodi posted \
-         it, the operator is the one expected to reply (the agent fires again on \
-         the operator's next user-role message). The same prefix on a different \
-         event_kind slot (e.g. `· offer.accepted ──`, `· klodi_tx_confirm.approval \
-         ──`) is NOT a no-op — those are wakes / approval prompts the dashboard \
-         agent should surface to the operator inline.\n\n\
-         \
-         Call this whenever you can't proceed autonomously: a channel/comment \
-         message classifies as Unknown (SKILL.md §4), a policy decision is \
-         ambiguous, a wake's required input is missing from the sell/buy file. \
-         Never inline a blocking question in your assistant reply — the operator \
-         may be reading their dashboard tab, not the dedicated session.\n\n\
-         \
-         Returns { posted, destination_channel, session_id, severity, \
-         correlation_id }. `posted: false` means every accepting agent surface \
-         failed; retry or surface a visible error.",
-        &json!({
-            "type": "object",
-            "properties": {
-                "summary": {
-                    "type": "string",
-                    "description": "One-line headline the operator sees first (1..200 chars)",
-                    "minLength": 1,
-                    "maxLength": 200
-                },
-                "details": {
-                    "type": "string",
-                    "description": "Optional multi-line body. Markdown OK.",
-                    "maxLength": 4000
-                },
-                "severity": {
-                    "type": "string",
-                    "enum": [
-                        "diagnostic",
-                        "operator",
-                        "operator_important",
-                        "approval_request"
-                    ],
-                    "description": "Routing level. 'approval_request' = blocking ask that gates agent progress (irreversible action, ambiguous policy, missing input) — routes to dashboard, bypasses batching. 'operator_important' (default) = the operator should see this within minutes; routes to dashboard, falls through to dedicated when no dashboard session is active. 'operator' = informational chronicle note — routes to the dedicated klodi session ONLY; the operator does NOT see it on the dashboard (use this only for logging from the dedicated agent, not for actual escalation). 'diagnostic' = daemon health / echo; dedicated session only."
-                },
-                "structured": {
-                    "type": "object",
-                    "description": "Optional structured payload, embedded as a fenced JSON block",
-                    "additionalProperties": true
-                }
-            },
-            "required": ["summary"],
-            "additionalProperties": false
-        }),
-    ));
     out
 }
 
@@ -298,51 +191,15 @@ fn make_tool(name: &str, description: &str, schema: &Value) -> Tool {
 
 /// Dispatch a `tools/call` request. Branches on the tool name into
 /// either a NATS passthrough or one of the local handlers.
-///
-/// Any call (passthrough or local) goes through the approval gate
-/// first when the tool is in the gated list AND the MCP server has an
-/// operator channel configured. Gated tools without operator-channel
-/// support fall through (the host's own approval mechanism is
-/// authoritative in that mode).
 pub(super) async fn dispatch(
     handler: &KlodiMcpHandler,
     name: &str,
     arguments: Option<JsonObject>,
 ) -> Result<CallToolResult, McpError> {
-    // `args` needs to be `mut` so the zeroclaw_session approval-gate
-    // path can strip the reserved fields out of the agent's call. The
-    // moltis/ironclaw build doesn't compile in that path — they get an
-    // unused-mut warning suppressed by `allow` rather than a parallel
-    // immutable binding. Two reasons we can't cfg-split the binding:
-    // (a) zeroclaw's vendor.py strips `#[cfg(feature = "zeroclaw_session")]`
-    // lines so both halves of a cfg-split would go live in the staged
-    // crate, and (b) cfg(not(feature = ...)) survives the strip so the
-    // immutable arm would still fire when the feature is "always-on".
-    #[allow(unused_mut)]
-    let mut args = arguments.unwrap_or_default();
+    let args = arguments.unwrap_or_default();
 
-    // Local-only zeroclaw_session tool — handle before the gate, since
-    // it doesn't need approval and isn't in the catalog.
-    #[cfg(feature = "zeroclaw_session")]
-    if name == LOCAL_TOOL_ESCALATE_TO_USER {
-        return dispatch_escalate_to_user(handler, args).await;
-    }
-
-    // Approval-gate evaluation — strips the reserved fields out of
-    // `args` before passing them on so downstream handlers never see
-    // them. Returns Some(result) when the gate is closed (first call,
-    // or denied retry) and None when it's open (no gating, or approved
-    // retry).
-    #[cfg(feature = "zeroclaw_session")]
-    if let Some(gated_response) = approval_gate(handler, name, &mut args).await? {
-        return Ok(gated_response);
-    }
-
-    // Locally-handled tools take priority over passthrough lookup so a
-    // catalog rename can't accidentally shadow a local handler.
     match name {
         LOCAL_TOOL_SETUP_STATUS => return dispatch_setup_status(handler).await,
-        LOCAL_TOOL_SETUP_RESEED_POLICIES => return dispatch_setup_reseed_policies(handler).await,
         LOCAL_TOOL_HEALTH => return dispatch_health(handler).await,
         LOCAL_TOOL_CHANNEL_MESSAGE => return dispatch_channel_message(handler, args).await,
         LOCAL_TOOL_WATCH => return dispatch_watch(handler, args).await,
@@ -358,431 +215,6 @@ pub(super) async fn dispatch(
         format!("unknown klodi tool: {name}"),
         Some(json!({ "tool": name })),
     ))
-}
-
-/// Approval-gate evaluation. Returns:
-///
-/// - `Ok(None)` — tool is not gated, OR operator channel is not configured,
-///   OR the retry was approved (and the reserved fields are stripped from
-///   `args` so downstream handlers don't see them).
-/// - `Ok(Some(result))` — first call (prompt posted, "approval_required"
-///   response surfaced to the agent), denied retry, or "still pending"
-///   ambiguous retry.
-/// - `Err(...)` — internal failure (couldn't post the prompt, couldn't
-///   persist state, etc.).
-#[cfg(feature = "zeroclaw_session")]
-async fn approval_gate(
-    handler: &KlodiMcpHandler,
-    name: &str,
-    args: &mut JsonObject,
-) -> Result<Option<CallToolResult>, McpError> {
-    // Operator channel is the only thing that makes the gate enforceable
-    // — without it, we can't post the prompt to the operator's session
-    // and there's nothing to retry against. Bail out cleanly so
-    // daemon-only adapters keep working.
-    let target = match handler.klodi_session_target() {
-        Some(c) => c.clone(),
-        None => return Ok(None),
-    };
-
-    // Reap stale pending entries. Doing this on every gated call adds
-    // O(n) directory work to gated tools only — well below the cost of
-    // a NATS round-trip. Failures here log but don't block the actual
-    // dispatch.
-    if let Err(err) = crate::zeroclaw_approval::reap_expired(
-        handler.klodi_home(),
-        APPROVAL_MAX_AGE_SECONDS,
-    ) {
-        tracing::warn!(error = %err, "klodi_approval_reap_failed");
-    }
-
-    let request_id_value = args.remove(APPROVAL_REQUEST_ID_FIELD);
-    let approval_text_value = args.remove(APPROVAL_TEXT_FIELD);
-    let args_for_decision = Value::Object(args.clone());
-
-    if !crate::zeroclaw_approval::should_gate(name, &args_for_decision) {
-        // Tool isn't gated; the reserved fields (if the agent passed
-        // them anyway) have been stripped, so downstream handlers see a
-        // clean args object.
-        return Ok(None);
-    }
-
-    let request_id = request_id_value.and_then(|v| v.as_str().map(str::to_string));
-    let approval_text = approval_text_value.and_then(|v| v.as_str().map(str::to_string));
-
-    match (request_id, approval_text) {
-        (None, _) => {
-            // First call — post prompt, persist pending state, surface
-            // the request_id back to the agent so it can retry.
-            let summary = render_summary(name, &args_for_decision);
-            let pending = crate::zeroclaw_approval::new_pending(
-                name,
-                &args_for_decision,
-                summary.clone(),
-            );
-            // Persist BEFORE posting so a crash mid-post doesn't leave
-            // an unresolvable approval id on the operator's chat.
-            crate::zeroclaw_approval::persist(handler.klodi_home(), &pending)
-                .map_err(|err| McpError::internal_error(
-                    format!("persisting approval state: {err}"),
-                    None,
-                ))?;
-            // Single-destination prompt delivery. The prompt is a
-            // user-role message at the destination — that's
-            // intentional: the operator's session-agent reads it and
-            // surfaces inline to the operator. The registry handles
-            // fallback to the dedicated session if the dashboard's T3
-            // returned nothing; upstream channels (Telegram/Slack/…) fan
-            // alongside the picked agent route. Daemon-only adapters
-            // that bind no registry use the direct WS path below.
-            let posted = match handler.channel_registry() {
-                Some(registry) => {
-                    let notification = crate::channels::Notification {
-                        event_kind: format!("{name}.approval"),
-                        summary: summary.clone(),
-                        details: Some(format_approval_body(name, &pending.request_id, &summary)),
-                        severity: crate::channels::Severity::ApprovalRequest,
-                        structured: None,
-                        correlation_id: Some(pending.request_id.clone()),
-                        reply_hint: Some(format!(
-                            "Reply: /klodi yes:{rid}  to confirm   /klodi no:{rid}  to cancel",
-                            rid = pending.request_id,
-                        )),
-                    };
-                    // Registry's fall-through chain has already tried
-                    // every accepting agent surface; `posted=false`
-                    // means all of them failed.
-                    registry.notify(notification).await.posted
-                }
-                None => {
-                    let prompt = crate::zeroclaw_approval::format_prompt(
-                        name,
-                        &pending.request_id,
-                        &summary,
-                    );
-                    crate::zeroclaw_ws::send_session_message(
-                        &target.ws_config,
-                        &target.session_id,
-                        &prompt,
-                        crate::zeroclaw_ws::SendAckPolicy::OnAgentObservation,
-                    )
-                    .await
-                    .is_ok()
-                }
-            };
-            if !posted {
-                // Every accepting agent surface failed. Drop the
-                // pending entry so the agent can retry from scratch.
-                let _ = crate::zeroclaw_approval::clear(
-                    handler.klodi_home(),
-                    &pending.request_id,
-                );
-                return Err(McpError::internal_error(
-                    "posting approval prompt: every configured agent surface failed"
-                        .to_string(),
-                    None,
-                ));
-            }
-            Ok(Some(structured_with_text(json!({
-                "approval_required": true,
-                "request_id": pending.request_id,
-                "tool": name,
-                "summary": summary,
-                "instructions": format!(
-                    "Wait for the operator's reply in any of their klodi-visible chats \
-                     (dedicated klodi session OR active dashboard session). When they answer, \
-                     retry this same tool call with the same args plus \
-                     '{APPROVAL_REQUEST_ID_FIELD}' set to '{}' and (optionally) \
-                     '{APPROVAL_TEXT_FIELD}' set to the operator's verbatim reply text. If \
-                     the reply landed in the dashboard, omit '{APPROVAL_TEXT_FIELD}' — the \
-                     plugin reads the captured reply from disk.",
-                    pending.request_id,
-                ),
-            }))))
-        }
-        (Some(rid), explicit_text) => {
-            let pending = match crate::zeroclaw_approval::load(
-                handler.klodi_home(),
-                &rid,
-            ) {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    return Ok(Some(structured_with_text(json!({
-                        "approval_required": true,
-                        "request_id": rid,
-                        "denied": true,
-                        "reason": format!(
-                            "no pending approval matches request_id={rid}. \
-                             It may have expired (>24h) or never been issued. \
-                             Drop the reserved fields and retry to start a fresh approval flow."
-                        ),
-                    }))));
-                }
-                Err(err) => {
-                    return Err(McpError::internal_error(
-                        format!("loading approval state: {err}"),
-                        None,
-                    ));
-                }
-            };
-            if pending.tool != name {
-                return Ok(Some(structured_with_text(json!({
-                    "approval_required": true,
-                    "request_id": rid,
-                    "denied": true,
-                    "reason": format!(
-                        "request_id {rid} was issued for tool {} but the retry called {name}. \
-                         Drop the reserved fields and retry to start a fresh approval flow.",
-                        pending.tool,
-                    ),
-                }))));
-            }
-
-            // Source the reply text: prefer the agent-provided
-            // verbatim text (existing dedicated-session path); fall
-            // back to the captured `.reply.json` written by the
-            // daemon's reply-attribution task (dashboard channel
-            // path).
-            let (text, channel_origin) = match explicit_text {
-                Some(t) => (t, None),
-                None => match crate::channels::reply_capture::load_reply(
-                    handler.klodi_home(),
-                    &rid,
-                ) {
-                    Ok(Some(reply)) => {
-                        let origin = format!("{}:{}", reply.channel_name, reply.origin);
-                        (reply.text, Some(origin))
-                    }
-                    Ok(None) => {
-                        return Ok(Some(structured_with_text(json!({
-                            "approval_required": true,
-                            "request_id": rid,
-                            "still_pending": true,
-                            "reason": format!(
-                                "no operator reply captured for request_id {rid} yet — \
-                                 retry once the operator has answered, or supply \
-                                 '{APPROVAL_TEXT_FIELD}' directly with their verbatim text",
-                            ),
-                        }))));
-                    }
-                    Err(err) => {
-                        return Err(McpError::internal_error(
-                            format!("loading captured reply: {err}"),
-                            None,
-                        ));
-                    }
-                },
-            };
-
-            match crate::zeroclaw_approval::evaluate_retry(&pending, &text, &args_for_decision) {
-                crate::zeroclaw_approval::ApprovalDecision::Approved => {
-                    let _ = crate::zeroclaw_approval::clear(
-                        handler.klodi_home(),
-                        &rid,
-                    );
-                    let _ = crate::channels::reply_capture::clear_reply(
-                        handler.klodi_home(),
-                        &rid,
-                    );
-                    if let Some(origin) = channel_origin {
-                        tracing::info!(
-                            request_id = %rid,
-                            origin = %origin,
-                            "klodi_approval_released_via_captured_reply"
-                        );
-                    }
-                    // Open the gate — let the call fall through to the
-                    // normal dispatcher.
-                    Ok(None)
-                }
-                crate::zeroclaw_approval::ApprovalDecision::Denied => {
-                    let _ = crate::zeroclaw_approval::clear(
-                        handler.klodi_home(),
-                        &rid,
-                    );
-                    let _ = crate::channels::reply_capture::clear_reply(
-                        handler.klodi_home(),
-                        &rid,
-                    );
-                    Ok(Some(structured_with_text(json!({
-                        "approval_required": true,
-                        "request_id": rid,
-                        "denied": true,
-                        "reason": "operator declined the request",
-                    }))))
-                }
-                crate::zeroclaw_approval::ApprovalDecision::NotGranted { reason } => {
-                    Ok(Some(structured_with_text(json!({
-                        "approval_required": true,
-                        "request_id": rid,
-                        "still_pending": true,
-                        "reason": reason,
-                    }))))
-                }
-            }
-        }
-    }
-}
-
-/// Multi-line approval body — used as `Notification.details` when the
-/// approval prompt fans out via the channel registry. The dashboard
-/// channel's renderer wraps this in the `── klodi · req=… ──`
-/// envelope; the dedicated klodi session adds the existing icon /
-/// formatting; upstream channels pass it through as plain text.
-#[cfg(feature = "zeroclaw_session")]
-fn format_approval_body(tool: &str, request_id: &str, summary: &str) -> String {
-    format!(
-        "🔒 **Operator approval needed** (request_id `{request_id}`)\n\n\
-         The agent wants to call `{tool}`:\n\n\
-         {summary}",
-    )
-}
-
-/// Compact, operator-readable summary of the about-to-be-gated call.
-/// Plain JSON-of-args by default; we'd want richer per-tool formatting
-/// later but the JSON shape matches what the agent already sees.
-#[cfg(feature = "zeroclaw_session")]
-fn render_summary(tool: &str, args: &Value) -> String {
-    let pretty = serde_json::to_string_pretty(args)
-        .unwrap_or_else(|_| args.to_string());
-    format!("Tool: `{tool}`\n\nArgs:\n```json\n{pretty}\n```")
-}
-
-/// Map the `severity` string the agent supplies on
-/// `klodi_escalate_to_user` to a [`crate::channels::Severity`].
-///
-/// Accepts the canonical registry names (`diagnostic` / `operator` /
-/// `operator_important` / `approval_request`) plus the legacy
-/// `info`/`warn`/`error` aliases — older agents still in flight may
-/// pass them. Unknown strings fall back to
-/// [`Severity::OperatorImportant`] (matching the tool's stated intent
-/// of "the operator should see this"); a tool named "escalate to user"
-/// should not silently route back to the dedicated session.
-///
-/// **Why the canonical-first match.** A prior version recognised only
-/// `warn`/`error`; every other value (including the canonical
-/// `operator_important`) silently coerced to `Severity::Operator`,
-/// which the new dispatch table routes to the dedicated session — i.e.
-/// straight back to the agent that just called the tool, not to the
-/// user. See
-/// `docs/reports/2026-05-11-klodi-zeroclaw-0.2.9-operator-fanout-bugs.md`.
-#[cfg(feature = "zeroclaw_session")]
-fn parse_report_severity(severity: &str) -> crate::channels::Severity {
-    crate::channels::Severity::from_str_canonical(severity)
-        .or_else(|| match severity {
-            "warn" | "error" => Some(crate::channels::Severity::OperatorImportant),
-            "info" => Some(crate::channels::Severity::Operator),
-            _ => None,
-        })
-        .unwrap_or(crate::channels::Severity::OperatorImportant)
-}
-
-#[cfg(feature = "zeroclaw_session")]
-async fn dispatch_escalate_to_user(
-    handler: &KlodiMcpHandler,
-    args: JsonObject,
-) -> Result<CallToolResult, McpError> {
-    let target = handler.klodi_session_target().ok_or_else(|| {
-        McpError::invalid_request(
-            "klodi_escalate_to_user: this MCP server has no ZeroClaw operator session bound. \
-             Run klodi-zeroclaw-daemon first so ${KLODI_HOME}/zeroclaw.session is populated."
-                .to_string(),
-            None,
-        )
-    })?;
-    let summary = args
-        .get("summary")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            McpError::invalid_params(
-                "klodi_escalate_to_user: 'summary' (string) is required".to_string(),
-                None,
-            )
-        })?;
-    let details = args.get("details").and_then(Value::as_str);
-    // Default: `operator_important`. The tool's purpose is to reach the
-    // user; defaulting to `operator` would route back to the dedicated
-    // session (same place the calling agent lives) and the user would
-    // never see the message.
-    let severity_str = args
-        .get("severity")
-        .and_then(Value::as_str)
-        .unwrap_or("operator_important");
-    let structured = args.get("structured");
-
-    let chosen_severity = parse_report_severity(severity_str);
-
-    // Single-destination dispatch through the channel registry. The
-    // registry picks the highest-floor agent surface accepting this
-    // severity (dashboard for OperatorImportant+, dedicated for
-    // Operator-) and falls through to lower-floor surfaces on Err — so
-    // the dashboard's T3-returned-nothing path naturally lands on
-    // dedicated without the MCP code re-implementing it. Upstream
-    // channels (Telegram/Slack/…) fan alongside the agent route.
-    //
-    // When no registry is configured (daemon-only adapters, tests),
-    // the direct WS path is the only available surface.
-    let notification = crate::channels::Notification {
-        event_kind: "klodi_escalate_to_user".into(),
-        summary: summary.to_string(),
-        details: details.map(str::to_string),
-        severity: chosen_severity,
-        structured: structured.cloned(),
-        correlation_id: None,
-        reply_hint: None,
-    };
-
-    if let Some(registry) = handler.channel_registry() {
-        let outcome = registry.notify(notification).await;
-        if outcome.posted {
-            return Ok(structured_with_text(json!({
-                "posted": true,
-                "destination_channel": outcome.destination_channel,
-                "session_id": target.session_id,
-                "severity": chosen_severity.as_str(),
-                "correlation_id": outcome.correlation_id.as_ref().map(|n| n.as_str()),
-            })));
-        }
-        // Every accepting agent surface failed (including the dedicated
-        // backstop). Surface as a visible error — the agent can retry
-        // or fall back to its own logic.
-        return Err(McpError::internal_error(
-            format!(
-                "klodi_escalate_to_user: every configured agent surface failed \
-                 (last attempt: {:?})",
-                outcome.destination_channel,
-            ),
-            None,
-        ));
-    }
-
-    // No registry — direct write to the dedicated session via the
-    // dedicated channel impl so the render stays consistent with the
-    // registry path (no separate `🔔 …` format drift).
-    let dedicated = crate::channels::DedicatedSessionChannel::new(
-        target.ws_config.clone(),
-        target.session_id.clone(),
-    );
-    let id = crate::channels::OperatorChannel::notify(
-        &dedicated,
-        &crate::channels::Recipient::Address(target.session_id.clone()),
-        &notification,
-    )
-    .await
-    .map_err(|err| {
-        McpError::internal_error(
-            format!("posting note to operator session: {err:#}"),
-            None,
-        )
-    })?;
-
-    Ok(structured_with_text(json!({
-        "posted": true,
-        "destination_channel": "dedicated_session",
-        "session_id": target.session_id,
-        "severity": chosen_severity.as_str(),
-        "correlation_id": id.as_str(),
-    })))
 }
 
 async fn dispatch_passthrough(
@@ -807,20 +239,6 @@ async fn dispatch_setup_status(
     let body = serde_json::to_value(&status).map_err(|err| {
         McpError::internal_error(
             format!("encoding setup_status: {err}"),
-            None,
-        )
-    })?;
-    Ok(structured_with_text(body))
-}
-
-async fn dispatch_setup_reseed_policies(
-    handler: &KlodiMcpHandler,
-) -> Result<CallToolResult, McpError> {
-    let report = policy_seed::seed_policies_if_absent(handler.klodi_home())
-        .map_err(|err| McpError::internal_error(format!("reseed_policies: {err}"), None))?;
-    let body = serde_json::to_value(&report).map_err(|err| {
-        McpError::internal_error(
-            format!("encoding seed report: {err}"),
             None,
         )
     })?;
@@ -938,7 +356,6 @@ async fn dispatch_watch_persist(
     let title = if query_raw.is_empty() { "watch" } else { &query_raw };
     let slug = slugify(title, &id_suffix);
 
-    // Catalog payload = strict subset of args plus the chosen slug.
     let mut payload = Map::new();
     payload.insert("slug".to_string(), Value::String(slug.clone()));
     if !query_raw.is_empty() {
@@ -966,10 +383,6 @@ async fn dispatch_watch_persist(
         .await
         .map_err(map_klodi_err)?;
 
-    // Side effect: persist the buy file. Failure here is surfaced as an
-    // error so the caller can decide whether to retry — the server-side
-    // search is already created at this point, so a failed buy-file
-    // write leaves a half-state the agent should reconcile.
     let action_on_match = match args.get("action_on_match").and_then(Value::as_str) {
         Some("negotiate") => ActionOnMatch::Negotiate,
         _ => ActionOnMatch::Notify,
@@ -1062,12 +475,6 @@ fn compact_search_payload(args: &JsonObject) -> Map<String, Value> {
 }
 
 fn structured_with_text(value: Value) -> CallToolResult {
-    // MCP clients vary in which content channel they prefer.
-    // Setting both a structured body and a text fallback keeps every
-    // client useful — agents that look at `structured_content` get the
-    // typed tree, agents that only render text get a JSON-formatted
-    // line. The two are derived from the same value, so they cannot
-    // disagree.
     let text = serde_json::to_string(&value).unwrap_or_else(|_| value.to_string());
     let mut result = CallToolResult::structured(value);
     result.content = vec![Content::text(text)];
@@ -1096,135 +503,22 @@ mod tests {
     fn build_tool_list_includes_passthrough_and_local() {
         let tools = build_tool_list();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        // Passthrough sample
         assert!(names.contains(&"klodi_list_create"));
         assert!(names.contains(&"klodi_offer_create"));
-        // Local tools
         assert!(names.contains(&"klodi_setup_status"));
-        assert!(names.contains(&"klodi_setup_reseed_policies"));
         assert!(names.contains(&"klodi_health"));
         assert!(names.contains(&"klodi_channel_message"));
         assert!(names.contains(&"klodi_watch"));
         assert!(names.contains(&"klodi_unwatch"));
-        // Tools that intentionally do NOT appear on the Rust MCP surface:
-        // klodi_register / klodi_register_poll / klodi_setup_repair /
-        // klodi_setup_reseed_skill all live in the per-host CLI binary
-        // (klodi-<host>-register) or in the embedded skill bundle, not as
-        // agent tools.
+        // Cuts per 2026-05-12 wake-agent-spawn redesign — these must
+        // NOT appear in the catalog. The spawned wake agent uses
+        // `sessions_send` (ZeroClaw-supplied) instead.
+        assert!(!names.contains(&"klodi_escalate_to_user"));
+        assert!(!names.contains(&"klodi_report_to_operator"));
+        assert!(!names.contains(&"klodi_setup_reseed_policies"));
+        // Register-only tools never appear on the agent's MCP surface.
         assert!(!names.contains(&"klodi_register"));
         assert!(!names.contains(&"klodi_setup_repair"));
-        assert!(
-            tools.len() >= 26 + 6,
-            "expected at least 26 passthrough + 6 local tools — got {}",
-            tools.len(),
-        );
-    }
-
-    #[cfg(feature = "zeroclaw_session")]
-    #[test]
-    fn escalate_to_user_tool_listed_when_zeroclaw_session_feature_enabled() {
-        let tools = build_tool_list();
-        let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-        assert!(
-            names.contains(&"klodi_escalate_to_user"),
-            "klodi_escalate_to_user must appear when zeroclaw_session is on; got {names:?}",
-        );
-        let report_tool = tools
-            .iter()
-            .find(|t| t.name.as_ref() == "klodi_escalate_to_user")
-            .expect("found above");
-        // Schema shape — `summary` required, `severity` enum, `structured`
-        // optional object.
-        let schema = &report_tool.input_schema;
-        let required = schema.get("required").and_then(Value::as_array).unwrap();
-        assert!(required.iter().any(|v| v.as_str() == Some("summary")));
-        let props = schema.get("properties").and_then(Value::as_object).unwrap();
-        assert!(props.contains_key("summary"));
-        assert!(props.contains_key("severity"));
-        assert!(props.contains_key("details"));
-    }
-
-    /// Regression: canonical severity names must coerce to the matching
-    /// [`Severity`] variant so the registry's dispatch chain receives
-    /// the level the agent asked for. The parser also still accepts the
-    /// legacy `info`/`warn`/`error` aliases — 0.2.11 dropped them from
-    /// the published schema enum but agents in flight may still pass
-    /// them, so we keep silent acceptance on the parser side. Unknown
-    /// strings fall back to `OperatorImportant`: the tool is named for
-    /// reaching the user, and a typo shouldn't silently route back to
-    /// the dedicated session (the bug fixed in 0.2.11; see
-    /// `docs/plans/2026-05-11-klodi-zeroclaw-single-destination-routing.md`).
-    #[cfg(feature = "zeroclaw_session")]
-    #[test]
-    fn parse_report_severity_recognises_canonical_and_legacy() {
-        use crate::channels::Severity;
-        // Canonical names round-trip verbatim.
-        assert_eq!(parse_report_severity("diagnostic"), Severity::Diagnostic);
-        assert_eq!(parse_report_severity("operator"), Severity::Operator);
-        assert_eq!(
-            parse_report_severity("operator_important"),
-            Severity::OperatorImportant,
-        );
-        assert_eq!(
-            parse_report_severity("approval_request"),
-            Severity::ApprovalRequest,
-        );
-        // Legacy aliases keep their v0.2.x meaning on the parser side
-        // (schema enum no longer advertises them, but in-flight agents
-        // may still pass them).
-        assert_eq!(parse_report_severity("info"), Severity::Operator);
-        assert_eq!(parse_report_severity("warn"), Severity::OperatorImportant);
-        assert_eq!(parse_report_severity("error"), Severity::OperatorImportant);
-        // Unknown / malformed → OperatorImportant. Default lives up to
-        // the tool's name: the operator should see this.
-        assert_eq!(parse_report_severity(""), Severity::OperatorImportant);
-        assert_eq!(parse_report_severity("urgent"), Severity::OperatorImportant);
-    }
-
-    /// Pin the published severity enum to the canonical names only. The
-    /// 0.2.11 cut tightens the schema as part of the same migration
-    /// that renamed `klodi_report_to_operator` → `klodi_escalate_to_user`
-    /// (one breaking change for both the tool name and the severity
-    /// vocabulary, not two staged releases).
-    #[cfg(feature = "zeroclaw_session")]
-    #[test]
-    fn escalate_to_user_severity_enum_is_canonical_only() {
-        let tools = build_tool_list();
-        let report_tool = tools
-            .iter()
-            .find(|t| t.name.as_ref() == "klodi_escalate_to_user")
-            .expect("klodi_escalate_to_user listed");
-        let props = report_tool
-            .input_schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .unwrap();
-        let severity_enum = props
-            .get("severity")
-            .and_then(|v| v.get("enum"))
-            .and_then(Value::as_array)
-            .expect("severity property carries an enum");
-        let allowed: Vec<&str> = severity_enum
-            .iter()
-            .filter_map(Value::as_str)
-            .collect();
-        for canonical in [
-            "diagnostic",
-            "operator",
-            "operator_important",
-            "approval_request",
-        ] {
-            assert!(
-                allowed.contains(&canonical),
-                "severity enum must advertise canonical name `{canonical}`; got {allowed:?}",
-            );
-        }
-        for legacy in ["info", "warn", "error"] {
-            assert!(
-                !allowed.contains(&legacy),
-                "0.2.11 dropped legacy alias `{legacy}` from the schema; got {allowed:?}",
-            );
-        }
     }
 
     #[test]

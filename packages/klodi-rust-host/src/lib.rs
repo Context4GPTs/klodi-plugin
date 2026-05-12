@@ -7,76 +7,63 @@
 //!
 //! Public modules:
 //!
-//! - [`forwarder`] — daemon that subscribes both consumers and POSTs
-//!   each delivered event to a local host wake URL. SIGTERM-aware,
-//!   bearer-token aware, optional `--health-port` probe.
+//! - [`forwarder`] — daemon that subscribes both consumers and hands
+//!   each delivered event to a per-adapter callback. SIGTERM-aware,
+//!   optional `--health-port` probe.
 //! - [`register`] — HTTP-only registration loop. Mints a session UUID,
 //!   polls `${api_url}/api/sessions/<id>`, persists creds + config via
-//!   `klodi_secret_write`, and seeds `${KLODI_HOME}/policies/` from the
-//!   embedded skill bundle.
+//!   `klodi_secret_write`.
 //! - [`paths`] — cross-platform default `${KLODI_HOME}` resolution and
-//!   sub-path helpers (`policies/`, `buy/`, `sell/`).
-//! - [`policy_seed`] — non-destructive seeding of
-//!   `${KLODI_HOME}/policies/{negotiation_style,security}.md` from the
-//!   embedded skill bundle. Driven by registration + the
-//!   `klodi_setup_reseed_policies` MCP tool.
+//!   sub-path helpers (`buy/`, `sell/`).
 //! - [`buy_sell_files`] — frontmatter parse/write for
 //!   `${KLODI_HOME}/{buy,sell}/<slug>.md` operator-edited strategy files.
 //!   Powers `klodi_watch` / `klodi_unwatch` and listing-lifecycle hooks.
-//! - [`setup_status`] — phase + missing-files + policy awareness +
-//!   structured `next_action` reporter for the daemon CLI's
-//!   `setup-status` subcommand and the in-agent `klodi_setup_status` tool.
-//! - [`skill_bundle`] — `include_dir`-embedded canonical skill bundle.
-//!   Powers both the MCP `resources/list` surface and policy seeding.
+//! - [`setup_status`] — phase + missing-files + structured `next_action`
+//!   reporter for the daemon CLI's `setup-status` subcommand and the
+//!   in-agent `klodi_setup_status` tool.
 //! - [`health`] — minimal `/healthz` HTTP probe served by the forwarder
 //!   when `--health-port` is set.
 //!
-//! Adapter binaries import `klodi_rust_host`'s host-orchestration types
-//! directly and pull `KlodiClient` / `KLODI_DEFAULT_API_URL` / event
-//! types from `klodi_nats_client` per their existing Cargo deps —
-//! re-exporting here would just duplicate the public surface.
+//! ZeroClaw-only surface (under the `zeroclaw` feature):
+//!
+//! - [`zeroclaw_ws`] — minimal WS client used by `register` to bootstrap
+//!   the operator chat session with a single hello line.
+//! - [`zeroclaw_session`] — `${KLODI_HOME}/zeroclaw.session` persistence
+//!   helpers.
+//! - [`zeroclaw_browser_pairing`] — minter that shells out to
+//!   `zeroclaw gateway get-paircode --new` so `register` can pair
+//!   without operator copy-paste.
+//! - [`zeroclaw_spawn`] — the wake-time HTTP client. Composes the
+//!   prompt, calls `POST /api/cron` + `POST /api/cron/{id}/run`,
+//!   returns when ZeroClaw has accepted the spawn (decoupled from the
+//!   agent turn).
+//! - [`wake_prompt`] — pure builder for the canonical wake prompt the
+//!   spawned agent reads on every NATS event.
 
 pub mod buy_sell_files;
 pub mod forwarder;
 pub mod health;
 pub mod paths;
-pub mod policy_seed;
 pub mod register;
 pub mod setup_status;
-pub mod skill_bundle;
 
 #[cfg(feature = "mcp")]
 pub mod host_mcp_config;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
-// `zeroclaw_session` feature only — see Cargo.toml. These modules carry
-// the WS client, persisted session id, plugin-authored bootstrap note,
-// and the approval gate. Other adapters (Moltis, IronClaw) don't
-// enable this feature and never compile this code in.
-//
-// `channels` (added in 0.2.9): `OperatorChannel` trait + `ChannelRegistry`
-// + `DashboardChannel` + `DedicatedSessionChannel` + `UpstreamChannel`
-// + `ChannelInvoker`, plus on-disk support (cursor, ledger, `klodi.toml`
-// parser).
-#[cfg(feature = "zeroclaw_session")]
-pub mod channels;
-#[cfg(feature = "zeroclaw_session")]
-pub mod inbox;
-#[cfg(feature = "zeroclaw_session")]
-pub mod zeroclaw_approval;
-#[cfg(feature = "zeroclaw_session")]
-pub mod zeroclaw_bootstrap_note;
-#[cfg(feature = "zeroclaw_session")]
+#[cfg(feature = "zeroclaw")]
+pub mod wake_prompt;
+#[cfg(feature = "zeroclaw")]
 pub mod zeroclaw_browser_pairing;
-#[cfg(feature = "zeroclaw_session")]
-pub mod zeroclaw_pairing_shim;
-#[cfg(feature = "zeroclaw_session")]
+#[cfg(feature = "zeroclaw")]
 pub mod zeroclaw_session;
-#[cfg(feature = "zeroclaw_session")]
+#[cfg(feature = "zeroclaw")]
+pub mod zeroclaw_spawn;
+#[cfg(feature = "zeroclaw")]
 pub mod zeroclaw_ws;
 
-pub use forwarder::{BodyShape, ForwarderConfig, run_forwarder};
+pub use forwarder::{ForwarderConfig, run_forwarder};
 pub use register::{RegisterArgs, run_register};
 pub use setup_status::{
     IssueSeverity, NextAction, SetupIssue, SetupPhase, SetupStatus, klodi_setup_status,
@@ -88,30 +75,18 @@ pub use host_mcp_config::{HostMcpEntry, apply_host_mcp_entry, default_host_confi
 #[cfg(feature = "mcp")]
 pub use mcp::{McpConfig, run_mcp_server};
 
-#[cfg(feature = "zeroclaw_session")]
-pub use channels::{
-    ChannelInvoker, ChannelRegistry, CreatedSessionsLedger, DashboardChannel,
-    DashboardChannelConfig, DedicatedSessionChannel, DispatcherCursor,
-    Notification, NotificationId, NotificationsConfig, OperatorChannel,
-    OperatorReply, Recipient, RegisteredChannel, RouteOutcome, SessionBinding,
-    Severity, UpstreamChannel, UpstreamChannelConfig, build_channel_registry,
-    session_health::SessionHealth, session_health::check_session_alive,
-    session_health::resurrection_breadcrumb,
-};
-#[cfg(feature = "zeroclaw_session")]
-pub use inbox::InboxState;
-#[cfg(feature = "zeroclaw_session")]
+#[cfg(feature = "zeroclaw")]
+pub use wake_prompt::{WakePromptInputs, build_wake_prompt};
+#[cfg(feature = "zeroclaw")]
 pub use zeroclaw_browser_pairing::{
     BrowserPairConfig, BrowserPairError, MinterImpl, ZeroclawCliMinter,
 };
-#[cfg(feature = "zeroclaw_session")]
-pub use zeroclaw_pairing_shim::{ShimConfig, ShimHandle};
-#[cfg(feature = "zeroclaw_session")]
-pub use zeroclaw_session::{
-    ResolvedSession, adopt_session_id, resolve_session_id, session_path,
-};
-#[cfg(feature = "zeroclaw_session")]
+#[cfg(feature = "zeroclaw")]
+pub use zeroclaw_session::{persist_session_id, read_session_id, session_path};
+#[cfg(feature = "zeroclaw")]
+pub use zeroclaw_spawn::{SpawnClient, SpawnError, SpawnOutcome};
+#[cfg(feature = "zeroclaw")]
 pub use zeroclaw_ws::{
-    SendAckPolicy, SessionOutcome, ZeroClawWsConfig, bootstrap_session,
-    bootstrap_session_with_first_message, send_session_message,
+    SessionOutcome, ZeroClawWsConfig, bootstrap_session_with_first_message,
+    send_session_message,
 };

@@ -1,16 +1,18 @@
-# klodi ZeroClaw adapter — NATS-native daemon driver.
+# klodi ZeroClaw adapter — NATS-native daemon driver that spawns one
+# isolated agent session per marketplace event.
 #
-# Per **D § D8** the adapter is a thin binary tree on top of
-# `klodi-rust-host`. Three binaries (daemon, register, channel-message)
-# each bind CLI/env to the shared crate's runners.
+# Per `docs/plans/2026-05-12-klodi-wake-agent-spawn.md` the adapter is a
+# thin binary tree on top of `klodi-rust-host`. Five binaries — daemon,
+# register, mcp, channel-message, setup-status — each bind CLI/env to
+# the shared crate's runners.
 
 [package]
 name = "klodi-zeroclaw"
-version = "0.2.12"
+version = "0.2.13"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
-description = "klodi — ZeroClaw adapter. NATS-native wake daemon."
+description = "klodi — ZeroClaw adapter. Each NATS event spawns an isolated agent turn."
 repository = "https://github.com/Context4GPTs/klodi-plugin"
 homepage = "https://4gpts.com"
 keywords = ["zeroclaw", "klodi", "marketplace", "p2p", "agent"]
@@ -39,16 +41,11 @@ path = "src/bin/mcp.rs"
 
 [dependencies]
 klodi-nats-client = { path = "../../packages/nats-client-rs" }
-# `mcp` enables the stdio MCP server module + the ZeroClaw config writer.
-# `zeroclaw_session` (introduced 0.2.6, rewired 0.2.11) enables the
-# WS-based wake delivery path through a `ChannelRegistry` — `/ws/chat`
-# instead of `/webhook`, persisted dedicated session under
-# `${KLODI_HOME}/zeroclaw.session`, plugin-authored bootstrap +
-# heartbeat notes, the `klodi_escalate_to_user` tool, and the
-# irreversible-tool approval gate. See
-# docs/plans/2026-05-11-klodi-zeroclaw-single-destination-routing.md
-# for the routing semantics.
-klodi-rust-host = { path = "../../packages/klodi-rust-host", features = ["mcp", "zeroclaw_session"] }
+# `mcp` enables the stdio MCP server module + the host config writer.
+# `zeroclaw` enables the spawn-via-cron client, the wake-prompt builder,
+# the minimal WS bootstrap used by register, and the
+# `${KLODI_HOME}/zeroclaw.{token,session}` persistence helpers.
+klodi-rust-host = { path = "../../packages/klodi-rust-host", features = ["mcp", "zeroclaw"] }
 
 tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "process"] }
 clap = { version = "=4.5.20", features = ["derive", "env"] }
@@ -57,12 +54,8 @@ serde_json = "=1.0.140"
 anyhow = "=1.0.95"
 tracing = "=0.1.41"
 tracing-subscriber = { version = "=0.3.19", features = ["env-filter", "fmt"] }
-# `pair` bootstrap calls `POST /pair` over HTTP. Match the workspace pin
-# used by klodi-rust-host's forwarder.
+# `register` uses reqwest to POST `/pair`. Match the workspace pin.
 reqwest = { version = "=0.12.9", default-features = false, features = ["json", "rustls-tls"] }
-# `futures_util::StreamExt` for the reply-attribution task that
-# consumes `ChannelRegistry::replies()`. Matches the host crate's pin.
-futures-util = "=0.3.31"
 
 [dev-dependencies]
 tokio = { version = "=1.43.0", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "io-std", "io-util", "net", "sync", "process", "test-util"] }

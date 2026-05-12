@@ -21,9 +21,6 @@ mod tools;
 
 pub use handler::McpConfig;
 
-#[cfg(feature = "zeroclaw_session")]
-pub use handler::KlodiSessionTarget;
-
 use anyhow::{Context, Result};
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;

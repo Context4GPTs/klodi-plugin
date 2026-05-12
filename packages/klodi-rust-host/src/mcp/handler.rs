@@ -30,41 +30,6 @@ pub struct McpConfig {
     /// `next_action` messages so the agent surfaces the correct command
     /// for the current host. Default: `"klodi-register"`.
     pub register_cli: String,
-    /// Dedicated klodi-session binding. Set by the `klodi-zeroclaw-mcp`
-    /// binary so the `klodi_escalate_to_user` tool and the approval
-    /// gate can fall back to a direct WS write into the dedicated
-    /// session when no `channel_registry` is plumbed in. Daemon-only
-    /// adapters leave this `None`; in that case the escalate tool is
-    /// filtered out of the catalog and the approval gate is a no-op
-    /// (the host's own approval mechanism is authoritative).
-    #[cfg(feature = "zeroclaw_session")]
-    pub klodi_session_target: Option<KlodiSessionTarget>,
-
-    /// Channel registry used by the approval gate +
-    /// `klodi_escalate_to_user` to route a single notification through
-    /// the single-destination-with-fall-through chain (dashboard first,
-    /// dedicated session as backstop, upstream sinks fanning
-    /// alongside). `None` for daemon-only adapters or tests; the MCP
-    /// server then falls back to a direct WS write into
-    /// `klodi_session_target`.
-    #[cfg(feature = "zeroclaw_session")]
-    pub channel_registry: Option<crate::channels::ChannelRegistry>,
-}
-
-/// Resolved (`ZeroClawWsConfig`, persisted `session_id`) pair. Built by
-/// `klodi-zeroclaw-mcp` from `${KLODI_HOME}/zeroclaw.{token,session}`
-/// + the gateway URL on process start. Represents the **dedicated klodi
-/// session** — the agent's reasoning surface + chronicle of record.
-///
-/// **Renamed from `OperatorChannel` in 0.2.9** to reduce confusion with
-/// the new `channels::OperatorChannel` trait. The new trait abstracts
-/// over every operator-visible surface; this struct only knows about
-/// the one dedicated klodi session.
-#[cfg(feature = "zeroclaw_session")]
-#[derive(Clone)]
-pub struct KlodiSessionTarget {
-    pub ws_config: crate::zeroclaw_ws::ZeroClawWsConfig,
-    pub session_id: String,
 }
 
 #[derive(Clone)]
@@ -93,24 +58,6 @@ impl KlodiMcpHandler {
 
     pub(super) fn register_cli(&self) -> &str {
         &self.inner.cfg.register_cli
-    }
-
-    /// `Some(target)` iff the binary plugged a dedicated klodi session
-    /// in; `None` for daemon-only adapters.
-    #[cfg(feature = "zeroclaw_session")]
-    pub(super) fn klodi_session_target(&self) -> Option<&KlodiSessionTarget> {
-        self.inner.cfg.klodi_session_target.as_ref()
-    }
-
-    /// `Some(registry)` iff the binary built a `ChannelRegistry` for
-    /// single-destination routing with fall-through. `None` falls back
-    /// to a direct WS write into the dedicated klodi session (used by
-    /// daemon-only adapters and tests).
-    #[cfg(feature = "zeroclaw_session")]
-    pub(super) fn channel_registry(
-        &self,
-    ) -> Option<&crate::channels::ChannelRegistry> {
-        self.inner.cfg.channel_registry.as_ref()
     }
 
     /// Lazily open the persistent NATS-WS connection. Subsequent calls
@@ -158,10 +105,9 @@ impl ServerHandler for KlodiMcpHandler {
         .with_server_info(server_info)
         .with_protocol_version(ProtocolVersion::V_2024_11_05)
         .with_instructions(
-            "klodi marketplace tools (klodi_*). Read klodi://skill/SKILL.md before \
-             responding to wake events — it documents the negotiation playbook, \
-             policy hierarchy, and per-event actions. The skill bundle is exposed \
-             as MCP resources under klodi://skill/*."
+            "klodi marketplace tools (klodi_*). Use these to act on the marketplace \
+             (offers, channels, listings, transactions). The spawned wake agent's \
+             prompt tells you when to write back to the operator via sessions_send."
                 .to_string(),
         )
     }
