@@ -1,6 +1,6 @@
 {
   "name": "@klodi/logger-ts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Klodi unified logger (TypeScript). One contract from @klodi/tool-catalog/logging — KlodiLogger redacts at INFO+, emits NDJSON. Includes the service-scoped createLogger facade for marketplace/web/infra-nats.",
   "type": "module",

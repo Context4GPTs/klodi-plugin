@@ -37,11 +37,11 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use klodi_rust_host::{
     BodyShape, BrowserPairConfig, ChannelRegistry, DedicatedSessionChannel,
-    ForwarderConfig, MinterImpl, Recipient, RegisteredChannel, SessionBinding,
-    Severity, ShimConfig, ShimHandle, ZeroClawWsConfig, ZeroclawCliMinter,
-    adopt_session_id, channels::factory::build_channel_registry, paths,
-    resolve_session_id, run_forwarder, send_session_message,
-    zeroclaw_bootstrap_note,
+    ForwarderConfig, InboxState, MinterImpl, Recipient, RegisteredChannel,
+    SessionBinding, Severity, ShimConfig, ShimHandle, ZeroClawWsConfig,
+    ZeroclawCliMinter, adopt_session_id,
+    channels::factory::build_channel_registry, paths, resolve_session_id,
+    run_forwarder, send_session_message, zeroclaw_bootstrap_note,
 };
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -325,16 +325,64 @@ async fn main() -> Result<()> {
     // cold first boot. `shim_handle` is moved into the task; we keep a
     // cloned URL string so the rest of startup (heartbeat composition,
     // print_pair_block, browser-open) can still reference it.
+    //
+    // The inbox surface piggybacks on this same listener (see
+    // `klodi_rust_host::inbox` + `zeroclaw_pairing_shim::serve_with_inbox`).
+    // Its state is built from the already-resolved ws_config; the
+    // klodi session id is read lazily on each inbox request, so the
+    // accept loop can come up before `resolve_session_id` finishes.
     let shim_url: Option<String> = shim_handle.as_ref().map(|h| h.url.clone());
+    let inbox_state: Option<InboxState> = match InboxState::new(
+        ws_config.clone(),
+        klodi_home.clone(),
+    ) {
+        Ok(state) => Some(state),
+        Err(err) => {
+            tracing::warn!(
+                error = %format!("{err:#}"),
+                "klodi_zeroclaw_inbox_state_build_failed_disabling_inbox"
+            );
+            None
+        }
+    };
     if let (Some(handle), Some(m)) = (shim_handle, minter.clone()) {
+        let inbox_for_loop = inbox_state.clone();
         tokio::spawn(async move {
-            if let Err(err) = handle.serve(m).await {
+            if let Err(err) = handle
+                .serve_with_inbox(m, inbox_for_loop)
+                .await
+            {
                 tracing::warn!(
                     error = %format!("{err:#}"),
                     "klodi_zeroclaw_shim_loop_exited"
                 );
             }
         });
+    }
+
+    // Surface the inbox URL to the operator the same way the pairing
+    // helper URL is surfaced: write it to a known file under
+    // `${KLODI_HOME}/zeroclaw.inbox-url` so the demo `up` script (and
+    // future bookmark integrations) can print it without having to
+    // grep the daemon's log. The file is rewritten on every boot; an
+    // error here is non-fatal — the operator can still reach the
+    // inbox at the URL printed in `print_pair_block`.
+    if let (Some(url), true) = (shim_url.as_deref(), inbox_state.is_some()) {
+        let inbox_url = format!("{url}/inbox/");
+        let path = klodi_home.join("zeroclaw.inbox-url");
+        if let Err(err) = std::fs::write(&path, format!("{inbox_url}\n")) {
+            tracing::warn!(
+                error = %err,
+                path = %path.display(),
+                "klodi_zeroclaw_inbox_url_persist_failed"
+            );
+        } else {
+            tracing::info!(
+                url = %inbox_url,
+                path = %path.display(),
+                "klodi_zeroclaw_inbox_url_persisted"
+            );
+        }
     }
 
     // Heartbeat doesn't use `channel_names` (it's one-line) — compose
@@ -467,8 +515,13 @@ async fn main() -> Result<()> {
     // accept loop was spawned earlier so the URL is reachable from
     // t=0; this block is just the human-readable surface telling the
     // operator how to use it.
+    let inbox_url_for_block = shim_url
+        .as_deref()
+        .filter(|_| inbox_state.is_some())
+        .map(|u| format!("{u}/inbox/"));
     if let Some(url) = shim_url.as_deref() {
-        print_pair_block(url, minter.as_deref()).await;
+        print_pair_block(url, inbox_url_for_block.as_deref(), minter.as_deref())
+            .await;
         if should_open_browser(cli.open_browser) {
             match open_browser_url(url) {
                 Ok(()) => tracing::info!(
@@ -1161,7 +1214,11 @@ fn derive_dashboard_url(webhook_url: &str) -> String {
 /// the loopback browser-pairing helper, with a freshly-minted code
 /// when the minter cooperates. Fails-soft on every step — this is
 /// operator UX, not load-bearing.
-async fn print_pair_block(url: &str, minter: Option<&MinterImpl>) {
+async fn print_pair_block(
+    url: &str,
+    inbox_url: Option<&str>,
+    minter: Option<&MinterImpl>,
+) {
     let bar = "═".repeat(64);
     let code_line = match minter {
         Some(m) => match m.mint().await {
@@ -1182,9 +1239,18 @@ async fn print_pair_block(url: &str, minter: Option<&MinterImpl>) {
     println!();
     println!("  Open this URL — your browser code will be pre-copied to clipboard:");
     println!("    {url}");
+    if let Some(inbox) = inbox_url {
+        println!();
+        println!("  Klodi inbox — where klodi_escalate_to_user lands:");
+        println!("    {inbox}");
+    }
     println!("{bar}");
     println!();
-    tracing::info!(url = %url, "klodi_zeroclaw_pair_block_printed");
+    tracing::info!(
+        url = %url,
+        inbox_url = inbox_url.unwrap_or(""),
+        "klodi_zeroclaw_pair_block_printed"
+    );
 }
 
 fn should_open_browser(setting: OpenBrowserDefault) -> bool {

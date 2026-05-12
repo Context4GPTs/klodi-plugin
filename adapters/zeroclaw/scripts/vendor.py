@@ -231,23 +231,28 @@ def stage_generated_catalog() -> None:
 def stage_mcp_assets() -> None:
     """Mirror the MCP server's runtime assets into the staged tree.
 
-    `klodi_rust_host::mcp` embeds two non-Rust resources at compile time:
+    `klodi_rust_host` embeds three non-Rust resources at compile time:
 
     - `schemas.json` (read by `mcp/schemas.rs` via `include_str!("../../schemas.json")`)
     - `skill/` (read by `mcp/skill_data.rs` via `include_dir!("$CARGO_MANIFEST_DIR/skill")`)
+    - `assets/inbox.html` (read by `inbox/handlers.rs` via
+      `include_str!("../../assets/inbox.html")` — the klodi inbox SPA
+      served by the daemon's loopback shim).
 
-    Both paths resolve against `klodi-rust-host/{schemas.json,skill}`
-    in the workspace (where they're symlinks to the canonical sources).
+    All three paths resolve against `klodi-rust-host/` in the workspace
+    (where they're symlinks or sibling dirs to the canonical sources).
     Inside the staged crate the same relative shape must exist so the
     macros expand the same way:
 
-      | Macro path              | Staged location                         |
-      |-------------------------|-----------------------------------------|
-      | `../../schemas.json`    | `<staged>/src/schemas.json`             |
-      | `$CARGO_MANIFEST_DIR/skill` | `<staged>/skill/`                    |
+      | Macro path                     | Staged location                  |
+      |--------------------------------|----------------------------------|
+      | `../../schemas.json`           | `<staged>/src/schemas.json`      |
+      | `$CARGO_MANIFEST_DIR/skill`    | `<staged>/skill/`                |
+      | `../../assets/inbox.html`      | `<staged>/src/assets/inbox.html` |
 
     Without this step, `cargo build` of the staged crate fails with
-    "file not found" the moment a vendored `mcp` source compiles.
+    "file not found" the moment a vendored source touches one of these
+    macros.
     """
     schemas_src = REPO_ROOT / "packages" / "tool-catalog" / "dist" / "schemas.json"
     if not schemas_src.exists():
@@ -273,9 +278,26 @@ def stage_mcp_assets() -> None:
         skill_dst,
         ignore=shutil.ignore_patterns(*COPY_EXCLUDES),
     )
+
+    # Klodi inbox SPA. `include_str!` in `inbox/handlers.rs` resolves to
+    # the staged path `<staged>/src/assets/inbox.html` (two levels up
+    # from `<staged>/src/_rust_host/inbox/handlers.rs`).
+    inbox_src = (
+        REPO_ROOT / "packages" / "klodi-rust-host" / "assets" / "inbox.html"
+    )
+    if not inbox_src.exists():
+        sys.stderr.write(
+            f"[vendor] inbox.html missing at {inbox_src} — refusing to stage.\n"
+        )
+        raise SystemExit(1)
+    inbox_dst = STAGED / "src" / "assets" / "inbox.html"
+    inbox_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(inbox_src, inbox_dst)
+
     print(
         "[vendor] mirrored MCP assets: "
-        f"src/schemas.json + skill/ ({len(list(skill_dst.rglob('*')))} entries)"
+        f"src/schemas.json + skill/ ({len(list(skill_dst.rglob('*')))} entries) "
+        "+ src/assets/inbox.html"
     )
 
 

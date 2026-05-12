@@ -515,7 +515,7 @@
             "type": "string"
           },
           "expires_hours": {
-            "description": "Hours until expiry (default 1440)",
+            "description": "Hours until expiry. Omit (or pass null) for no expiry — the default. Set a positive integer to give the listing a TTL.",
             "type": "integer"
           }
         },
@@ -789,8 +789,15 @@
             "type": "string"
           },
           "expires_at": {
-            "description": "ISO 8601 timestamp",
-            "type": "string"
+            "anyOf": [
+              {
+                "description": "ISO 8601 timestamp",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -816,7 +823,7 @@
     },
     "klodi_list_update": {
       "subject": "p2p.v1.listings.update",
-      "description": "Update an existing listing. Cannot change `category` (withdraw and relist instead). Updating `fulfillment` replaces the entire array atomically.",
+      "description": "Update an existing listing. Cannot change `category` (withdraw and relist instead). Updating `fulfillment` replaces the entire array atomically. `expires_hours` sets a fresh TTL from now, or pass null to clear the expiry entirely.",
       "params": {
         "type": "object",
         "properties": {
@@ -999,6 +1006,17 @@
               {
                 "const": "withdrawn",
                 "type": "string"
+              }
+            ]
+          },
+          "expires_hours": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -1269,8 +1287,15 @@
             "type": "string"
           },
           "expires_at": {
-            "description": "ISO 8601 timestamp",
-            "type": "string"
+            "anyOf": [
+              {
+                "description": "ISO 8601 timestamp",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1572,8 +1597,15 @@
             "type": "string"
           },
           "expires_at": {
-            "description": "ISO 8601 timestamp",
-            "type": "string"
+            "anyOf": [
+              {
+                "description": "ISO 8601 timestamp",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1893,8 +1925,15 @@
                   "type": "string"
                 },
                 "expires_at": {
-                  "description": "ISO 8601 timestamp",
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "description": "ISO 8601 timestamp",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -2202,8 +2241,15 @@
             "type": "string"
           },
           "expires_at": {
-            "description": "ISO 8601 timestamp",
-            "type": "string"
+            "anyOf": [
+              {
+                "description": "ISO 8601 timestamp",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -2510,8 +2556,15 @@
             "type": "string"
           },
           "expires_at": {
-            "description": "ISO 8601 timestamp",
-            "type": "string"
+            "anyOf": [
+              {
+                "description": "ISO 8601 timestamp",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [

@@ -164,9 +164,9 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chrono"
-version = "0.4.38"
+version = "0.4.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a21f936df1771bf62b77f047b726c4625ff2e8aa607c01ec06e5a05bd8463401"
+checksum = "7e36cc9d416881d2e24f9a963be5fb1cd90966419ac844274161d10488b3e825"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "klodi-logger"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "klodi-nats-client",
@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "klodi-nats-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-nats",
  "futures-util",

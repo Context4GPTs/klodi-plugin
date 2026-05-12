@@ -182,6 +182,16 @@ struct MessageMark {
     seen_at: Instant,
 }
 
+// Several helpers below are unused inside this crate today: the
+// dashboard channel's write surface was retired in §5.6 of
+// docs/plans/2026-05-12-klodi-inbox-self-hosted-ui.md, so `notify` no
+// longer calls into `resolve_destination`, `verify_or_reroute_destination`,
+// or `record_adjacency`. The plan deliberately keeps these methods —
+// they become shared helpers for the inbox surface (T3 active-session
+// resolution, stale-session pre-checks, adjacency correlation) when
+// future cuts wire them up. Annotate to silence the dead-code lint
+// without losing the contract.
+#[allow(dead_code)]
 impl DashboardChannel {
     /// Construct a dashboard channel from a resolved WS config + on-disk
     /// support state.
@@ -931,103 +941,60 @@ impl OperatorChannel for DashboardChannel {
     }
 
     fn agent_surface(&self) -> bool {
-        // Writes go to `/ws/chat`; every write fires a server-side
-        // agent loop in the target dashboard session.
+        // Historically true (writes hit `/ws/chat` and fire the
+        // operator-session agent loop). Kept true so the registry
+        // still threads this channel into its agent_chain and falls
+        // through to the next-highest-floor agent surface (the
+        // dedicated klodi session) when `notify` deliberately Errs
+        // below. Reverting to `false` would push the channel into the
+        // non-agent fan-out path, which would re-introduce the write
+        // we are explicitly removing.
         true
     }
 
+    /// Dashboard write surface is disabled — every call returns `Err`
+    /// so the registry falls through to the next-highest-floor agent
+    /// surface (the dedicated klodi session). The
+    /// [`docs/reports/2026-05-12-zeroclaw-ws-broadcast-topology-and-escalation-surface.md`]
+    /// report empirically proved that the gateway's `/ws/chat` broadcast
+    /// topology never delivers these frames to the operator's already-
+    /// open dashboard tab, so this write was wasted — and worse, it
+    /// fired a server-side agent loop in the operator's session every
+    /// time. The klodi inbox (a loopback-served SPA in
+    /// [`crate::inbox`]) now polls the dedicated session for the same
+    /// notifications and renders them to the operator directly.
+    ///
+    /// `replies()` polling stays alive below — capturing operator-typed
+    /// replies for `${KLODI_HOME}/approvals/<rid>.reply.json` is
+    /// orthogonal to writes and survives this change unchanged.
+    ///
+    /// Helpers retained for future reuse / inbox-side polling: see
+    /// [`Self::resolve_destination`], [`Self::list_sessions`],
+    /// [`Self::list_messages`], [`Self::record_adjacency`].
     async fn notify(
         &self,
-        recipient: &Recipient,
+        _recipient: &Recipient,
         payload: &Notification,
     ) -> Result<NotificationId> {
         let correlation_id = payload
             .correlation_id
             .clone()
-            .unwrap_or_else(|| short_token());
-
-        let rendered = render_payload(payload, &correlation_id);
-
-        // Single-destination: T3 picks one operator-typed session, or
-        // the pinned recipient is honoured directly. On no-destination
-        // we return Err — the caller (the registry's `route()`
-        // wrapper, the forwarder, MCP `klodi_escalate_to_user`)
-        // decides on the fallback path (typically: write to the
-        // dedicated klodi session). No queuing in the dashboard
-        // channel — the routing decision lives with the caller.
-        let destination = self.resolve_destination(recipient).await?;
-        let session_id = match destination {
-            Some(id) => id,
-            None => {
-                tracing::info!(
-                    correlation_id = %correlation_id,
-                    event_kind = %payload.event_kind,
-                    "klodi_zeroclaw_dashboard_no_active_session"
-                );
-                bail!(
-                    "DashboardChannel: T3 resolved no operator-typed session \
-                     (correlation_id={correlation_id}, event_kind={kind}); \
-                     caller is expected to fall back to the dedicated klodi \
-                     session.",
-                    kind = payload.event_kind,
-                );
-            }
-        };
-
-        // Stale-session pre-write check: list-membership AND message_count
-        // verification. We picked the session because it had operator
-        // activity. If the session is missing or has zero count, it's
-        // deletion-in-progress (silent recreation per T5) — log,
-        // ledger, and let the next poll tick re-resolve.
-        let final_session = self
-            .verify_or_reroute_destination(&session_id)
-            .await
-            .unwrap_or_else(|err| {
-                tracing::warn!(
-                    error = %format!("{err:#}"),
-                    session_id = %session_id,
-                    "klodi_zeroclaw_dashboard_session_verify_failed_writing_anyway"
-                );
-                Some(session_id.clone())
-            });
-
-        let session_id = match final_session {
-            Some(id) => id,
-            None => {
-                bail!(
-                    "DashboardChannel: resurrection detected and re-resolve \
-                     found no replacement session (correlation_id={correlation_id}); \
-                     caller is expected to fall back to the dedicated klodi session."
-                );
-            }
-        };
-
-        send_session_message(
-            &self.inner.ws_config,
-            &session_id,
-            &rendered,
-            SendAckPolicy::OnAgentObservation,
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "posting dashboard notification {correlation_id} to session {session_id}"
-            )
-        })?;
-        // Record the adjacency entry so a bare affirmation within
-        // [`ADJACENCY_WINDOW`] correlates to this notification.
-        self.record_adjacency(&correlation_id, &session_id).await;
-        // NB: deliberately do NOT record the destination session in
-        // the created-sessions ledger — that's where the operator's
-        // chat lives, not klodi's own. The ledger only grows when the
-        // verify step above detected a resurrection.
+            .unwrap_or_else(short_token);
         tracing::info!(
             correlation_id = %correlation_id,
-            session_id = %session_id,
             event_kind = %payload.event_kind,
-            "klodi_zeroclaw_dashboard_notified"
+            severity = %payload.severity.as_str(),
+            "klodi_zeroclaw_dashboard_write_disabled_falling_through_to_dedicated"
         );
-        Ok(NotificationId(correlation_id))
+        bail!(
+            "DashboardChannel write surface is disabled (post-§5.6 of \
+             docs/plans/2026-05-12-klodi-inbox-self-hosted-ui.md). The \
+             klodi inbox is the operator-visibility surface for \
+             escalations; the registry falls through to the dedicated \
+             klodi session, which the inbox polls. \
+             correlation_id={correlation_id}, event_kind={kind}",
+            kind = payload.event_kind,
+        );
     }
 
     fn replies(&self) -> Pin<Box<dyn Stream<Item = OperatorReply> + Send + 'static>> {
@@ -1151,6 +1118,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ch.name(), "dashboard");
+    }
+
+    /// Regression: the dashboard write surface was retired in §5.6 of
+    /// `docs/plans/2026-05-12-klodi-inbox-self-hosted-ui.md`. `notify`
+    /// must always return `Err` — that's the signal the registry uses
+    /// to fall through to the dedicated klodi session (where the
+    /// inbox polls). A future change that reintroduces the write would
+    /// silently re-break the operator-visibility contract; this test
+    /// pins the contract.
+    #[tokio::test]
+    async fn notify_is_disabled_returns_err_to_trigger_fallthrough() {
+        let dir = tempfile::tempdir().unwrap();
+        let ch = DashboardChannel::new(
+            ws_config(),
+            ledger(),
+            cursor_path(dir.path()),
+        )
+        .unwrap();
+        let payload = Notification {
+            event_kind: "klodi_escalate_to_user".into(),
+            summary: "need pickup spot".into(),
+            details: None,
+            severity: Severity::OperatorImportant,
+            structured: None,
+            correlation_id: Some("abc12345".into()),
+            reply_hint: None,
+        };
+        let err = ch
+            .notify(&Recipient::AutoActiveSession, &payload)
+            .await
+            .expect_err("dashboard.notify must Err to trigger registry fall-through");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("disabled") || msg.contains("inbox"),
+            "error must explain the disabled state; got: {msg}"
+        );
+        // No WS call hit the network (the test ws_config points at
+        // 127.0.0.1:7070 which isn't bound) — the `notify` body
+        // short-circuited cleanly without attempting a connect.
     }
 
     /// Regression: the gateway returns `session_id` (not `id`) per the

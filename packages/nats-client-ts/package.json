@@ -1,6 +1,6 @@
 {
   "name": "@klodi/nats-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Klodi NATS-WS client for TS host adapters: tool calls, durable wake consumers, channel publish.",
   "type": "module",

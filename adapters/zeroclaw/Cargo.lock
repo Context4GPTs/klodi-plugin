@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "klodi-logger"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "klodi-nats-client",
@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "klodi-nats-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-nats",
  "futures-util",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "klodi-rust-host"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1022,7 +1022,7 @@ dependencies = [
 
 [[package]]
 name = "klodi-zeroclaw"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "anyhow",
  "clap",

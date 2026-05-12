@@ -62,6 +62,8 @@ pub mod mcp;
 #[cfg(feature = "zeroclaw_session")]
 pub mod channels;
 #[cfg(feature = "zeroclaw_session")]
+pub mod inbox;
+#[cfg(feature = "zeroclaw_session")]
 pub mod zeroclaw_approval;
 #[cfg(feature = "zeroclaw_session")]
 pub mod zeroclaw_bootstrap_note;
@@ -96,6 +98,8 @@ pub use channels::{
     session_health::SessionHealth, session_health::check_session_alive,
     session_health::resurrection_breadcrumb,
 };
+#[cfg(feature = "zeroclaw_session")]
+pub use inbox::InboxState;
 #[cfg(feature = "zeroclaw_session")]
 pub use zeroclaw_browser_pairing::{
     BrowserPairConfig, BrowserPairError, MinterImpl, ZeroclawCliMinter,

@@ -12,7 +12,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "klodi-logger"
-version = "0.1.0"
+version = "0.1.1"
 description = "Klodi unified logger (Python) — emits NDJSON matching the @klodi/tool-catalog/logging contract."
 readme = "README.md"
 license = { text = "Apache-2.0" }

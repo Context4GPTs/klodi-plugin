@@ -6,6 +6,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.12] — 2026-05-12
+
+Two slices in this release. **Every adapter republishes** for the schema change; **klodi-zeroclaw** additionally ships the operator-visibility surface for `klodi_escalate_to_user`.
+
+**Universal — `klodi_list_*` schema.** Listings can now have no expiry. `expires_at` becomes nullable on every reply that carries a listing (klodi_list_create, _update, _get, _mine, _withdraw, _relist), and `klodi_list_update` gains an `expires_hours` parameter that lets the agent set a fresh TTL from now or pass `null` to clear the expiry entirely. Wire-level change — agent code that dereferences `expires_at` without a null check breaks.
+
+**klodi-zeroclaw — Klodi inbox surface.** On 0.2.11 the `DashboardChannel::notify` write into `/ws/chat` was the only way `klodi_escalate_to_user` reached an operator looking at a dashboard tab. The empirical report `docs/reports/2026-05-12-zeroclaw-ws-broadcast-topology-and-escalation-surface.md` shows that path never actually delivers the frame to the operator's already-open browser tab (the gateway's `/ws/chat` is request-scoped, not a broadcast bus), and every write fired a wasted server-side agent loop in the operator's session. 0.2.12 retires that write and ships the **klodi inbox** instead: a loopback-served SPA mounted on the existing pairing-shim listener that polls the dedicated session's REST history for open escalations, renders them to the operator, and threads replies back via `zeroclaw_ws::send_session_message`. Design rationale: `docs/plans/2026-05-12-klodi-inbox-self-hosted-ui.md`.
+
+### Added (every adapter — `klodi_list_*` schema)
+
+- **`expires_at` is nullable on every listing reply.** Affected tools: `klodi_list_create`, `klodi_list_update`, `klodi_list_get`, `klodi_list_mine` (each element of `listings[]`), `klodi_list_withdraw`, `klodi_list_relist`. JSON Schema becomes `{"anyOf": [{"description": "ISO 8601 timestamp", "type": "string"}, {"type": "null"}]}`; the field remains `required`, only its value type widens.
+- **`klodi_list_update` accepts `expires_hours`.** Optional nullable integer (`minimum: 1`). A positive integer sets a fresh TTL from the time the update lands; `null` clears the expiry on a listing that previously had one. Omitting the field leaves the existing expiry untouched.
+
+### Changed (every adapter — `klodi_list_*` schema)
+
+- **`klodi_list_create.expires_hours` description rewritten.** Was "Hours until expiry (default 1440)"; now "Hours until expiry. Omit (or pass null) for no expiry — the default. Set a positive integer to give the listing a TTL." Conveys the new server-side semantics: listings without a TTL are now first-class, not the 60-day fallback they used to be.
+- **`klodi_list_update` tool description extended.** Appends the `expires_hours`/clear-expiry contract so agents reading the tool description (rather than only the param schema) discover the new affordance.
+
+### Added (`klodi-zeroclaw` 0.2.12)
+
+- **Klodi inbox module** (`klodi_rust_host::inbox`, gated on `zeroclaw_session`). New sibling of `klodi_rust_host::channels` containing:
+  - `parser.rs` — parses the canonical `── klodi · req=<id> · klodi_escalate_to_user ──` frame `dashboard::render_payload` produces back into a structured `Escalation`. Other plugin-prefixed event kinds (`offer.accepted`, `channel.opened`, …) share the frame header but a different middle slot — they are rejected here so the filter doesn't surface them as escalations.
+  - `filter.rs` — `open_escalations(session_messages, klodi_home)` returns `Vec<OpenEscalation>` by walking the dedicated session's REST history, parsing every `klodi_escalate_to_user` frame, and filtering out ones whose reply was already persisted to `${KLODI_HOME}/approvals/<rid>.reply.json` by the existing approval bridge.
+  - `civil.rs` — internal helpers for rendering reply prefixes; kept private so the inbox UI doesn't need to know the wire format.
+  - `handlers.rs` — `InboxState`, `build_escalations_response`, `handle_escalations_request`, `handle_reply_request`, and the embedded `INBOX_HTML` SPA (read at compile time via `include_str!("../../assets/inbox.html")`). Handlers stay HTTP-agnostic; the shim handles wire framing.
+- **`packages/klodi-rust-host/assets/inbox.html`** — single-file SPA the embedded `INBOX_HTML` references. Loopback-only delivery; no external CDN.
+- **Three new HTTP routes on the pairing-shim listener:**
+  - `GET /inbox/` — serves `INBOX_HTML` with `Content-Type: text/html; charset=utf-8`.
+  - `GET /inbox/api/escalations` — JSON list of open escalations from `open_escalations(...)`.
+  - `POST /inbox/api/reply` — writes the operator's reply into the dedicated klodi session via `zeroclaw_ws::send_session_message(..., SendAckPolicy::OnAgentObservation, ...)`.
+- **`ShimHandle::serve_with_inbox(minter, Option<InboxState>)`** — new entry point. `ShimHandle::serve(minter)` is retained as a thin wrapper that delegates with `None`, leaving `/inbox/*` routes returning 404 for hosts that don't want the inbox.
+- **`InboxState` re-export from `klodi_rust_host`** (feature-gated on `zeroclaw_session`). Adapters constructing the daemon binary build it from the resolved `ZeroClawWsConfig` + `klodi_home`.
+- **`${KLODI_HOME}/zeroclaw.inbox-url`** — the daemon writes the inbox URL (`http://127.0.0.1:<port>/inbox/`) to this file on every boot so the demo `up` script and future bookmark integrations can surface it without grepping logs. Non-fatal on write failure; the URL also prints in the human-readable pair block.
+- **Pair-block prints the inbox URL.** `print_pair_block` now takes an optional `inbox_url` and surfaces it alongside the pairing-helper URL so the operator sees both at boot.
+- **Tracing breadcrumbs** for the inbox lifecycle: `klodi_zeroclaw_inbox_state_build_failed_disabling_inbox` (warn — `InboxState::new` failed, daemon falls back to inbox-less `serve`), `klodi_zeroclaw_inbox_url_persisted` (info — URL file written), `klodi_zeroclaw_inbox_url_persist_failed` (warn — non-fatal). `klodi_zeroclaw_shim_listening` gains an `inbox_mounted` field.
+
+### Changed (`klodi-zeroclaw` 0.2.12)
+
+- **`DashboardChannel::notify` always returns `Err`.** The function body is gone; calls fall through the registry's agent-chain to the next-highest-floor agent surface (the dedicated klodi session). `agent_surface()` deliberately keeps returning `true` so the registry still threads the dashboard into its agent chain — reverting to `false` would push the channel into the non-agent fan-out path and re-introduce the write we are explicitly removing.
+- **`DashboardChannel::replies()` polling stays alive.** Capturing operator-typed replies for `${KLODI_HOME}/approvals/<rid>.reply.json` (used by the approval gate) is orthogonal to writes and survives this change unchanged.
+- **Five `DashboardChannel` helpers retained but annotated `#[allow(dead_code)]`:** `resolve_destination`, `verify_or_reroute_destination`, `record_adjacency`, `list_sessions`, `list_messages`. Slated for reuse by the inbox surface when future cuts wire T3 active-session resolution + stale-session pre-checks into the inbox poll loop (see §5.6 of the inbox plan).
+- **Pairing-shim request buffer cap: 2 KiB → 16 KiB.** The pairing routes only need request line + Host header (a few hundred bytes); the inbox `POST /inbox/api/reply` accepts a JSON body containing the operator's free-form reply. 16 KiB comfortably covers a multi-paragraph reply without permitting an attacker to make us alloc much.
+- **`BodyShape::Debug` derived once with a cfg-gated match arm** instead of two cfg-split impls (positive `zeroclaw_session` + negative). The split confused `adapters/zeroclaw/scripts/vendor.py`, which strips `#[cfg(feature = "zeroclaw_session")]` lines but leaves `#[cfg(not(feature = "zeroclaw_session"))]` intact — at publish time the staged crate ended up with both impls live, conflicting. Mirrors the `mcp/tools.rs::dispatch` convention.
+- **`adapters/zeroclaw/scripts/vendor.py` stages `assets/inbox.html`** at `<staged>/src/assets/inbox.html` so the `include_str!("../../assets/inbox.html")` in `inbox/handlers.rs` resolves inside the staged crate.
+
+### Migrating from 0.2.x to 0.2.12
+
+**Schema change — every adapter, every agent.** Treat `expires_at` as `string | null` on every klodi listing reply. Agents that compare `expires_at` to a deadline, parse it as a date, or surface it in UI must null-check first. To pass through the new affordance: `klodi_list_create` keeps the old "omit for default TTL" behaviour but now defaults to no expiry instead of 1440 hours; pass `expires_hours: <positive int>` for the old behaviour, or `null` (or omit) for indefinite. `klodi_list_update` agents can now refresh or clear a listing's TTL without withdrawing and relisting — `{listing_id, expires_hours: 720}` resets the TTL to 30 days from now; `{listing_id, expires_hours: null}` removes the expiry.
+
+**klodi-zeroclaw operators.** Drop-in. The inbox auto-mounts on the existing pairing-helper listener — the operator visits `http://127.0.0.1:<port>/inbox/` (URL surfaced in the pair-block and persisted to `${KLODI_HOME}/zeroclaw.inbox-url`). Approval-gate replies still land in `${KLODI_HOME}/approvals/<rid>.reply.json` via `DashboardChannel::replies()`; no changes there.
+
+**Out-of-tree consumers of `klodi_rust_host` building a daemon.** `ShimHandle::serve(minter)` continues to work — same behaviour as before, no inbox routes. Hosts that want the inbox surface call `ShimHandle::serve_with_inbox(minter, Some(InboxState::new(ws_config, klodi_home)?))` instead. `InboxState` is feature-gated on `zeroclaw_session`; non-zeroclaw hosts can ignore the new symbol entirely.
+
+### Out of scope (follow-ups tracked separately)
+
+- **Server-side TTL default.** The schema description for `klodi_list_create.expires_hours` now reads "Omit (or pass null) for no expiry — the default", which matches the new wire contract but only takes effect once the marketplace handler stops imposing the 1440-hour fallback. The handler change is tracked in the marketplace repo, not here.
+- **Inbox T3 active-session resolution.** The inbox today polls the dedicated klodi session. The retained `DashboardChannel::resolve_destination` / `verify_or_reroute_destination` helpers wire into the inbox poll loop in a follow-up so the inbox can additionally surface escalations targeted at the operator's most recently active dashboard session. Tracked in §5.6 of `docs/plans/2026-05-12-klodi-inbox-self-hosted-ui.md`.
+- **Inbox auth.** The inbox listener is loopback-only and inherits the pairing-shim's threat model (workstation owner is the trust anchor — see `SECURITY.md` and the `feedback_trust_scope_workstation_owner.md` memory). A future cut may add an `Authorization: Bearer` check against the same pair-code the helper mints, for hardened deployments where the loopback assumption is too generous.
+- **Inbox reply correlation in the dedicated session.** Today the reply lands in the dedicated session as a plain operator message; the autonomous agent recognises it via conversational context. A `req=<id>` echo in the reply body would let the agent correlate replies to their originating escalation when many are in flight.
+
 ## [0.2.11] — 2026-05-11
 
 **klodi-zeroclaw only.** OpenClaw, the Python adapters (klodi-hermes, klodi-nanobot), and the other Rust adapters (klodi-moltis, klodi-ironclaw) are unaffected and not republished at this version.

@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "klodi-nats-client"
-version = "0.1.0"
+version = "0.1.1"
 description = "Klodi NATS-WS client for Python host adapters: tool calls, durable wake consumers, channel publish."
 readme = "README.md"
 license = { text = "Apache-2.0" }
