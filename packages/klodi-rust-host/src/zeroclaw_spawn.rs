@@ -92,20 +92,17 @@ struct NativeSpawnResponse {
 
 #[derive(Serialize)]
 struct CronCreateBody<'a> {
-    schedule: CronSchedule,
+    /// Upstream zeroclaw wants `schedule` as a bare string (`"now"` for
+    /// fire-on-next-tick) — serialising it as `{ "at": "now" }` makes the
+    /// gateway 422 with `invalid type: map, expected a string`. The
+    /// daemon also explicitly calls `/run` after create to avoid relying
+    /// on the gateway's tick latency.
+    schedule: &'static str,
     agent: bool,
     command: &'a str,
     session_target: &'static str,
     delete_after_run: bool,
     delivery: CronDelivery,
-}
-
-#[derive(Serialize)]
-struct CronSchedule {
-    /// `"now"` triggers the cron immediately on the gateway side; the
-    /// daemon also explicitly calls `/run` after create to avoid
-    /// relying on the gateway's tick latency.
-    at: &'static str,
 }
 
 #[derive(Serialize)]
@@ -229,7 +226,7 @@ impl SpawnClient {
     async fn create_cron(&self, prompt: &str) -> Result<String, SpawnError> {
         let url = format!("{}/api/cron", self.http_base);
         let body = CronCreateBody {
-            schedule: CronSchedule { at: "now" },
+            schedule: "now",
             agent: true,
             command: prompt,
             session_target: "isolated",
@@ -288,7 +285,7 @@ impl SpawnClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path as wm_path};
+    use wiremock::matchers::{body_partial_json, header, method, path as wm_path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client_for(server: &MockServer) -> SpawnClient {
@@ -321,8 +318,17 @@ mod tests {
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
+        // Asserts the wire shape upstream zeroclaw expects: `schedule` as a
+        // bare string, not `{ "at": "now" }`. A regression here would 422
+        // every wake against the live gateway.
         Mock::given(method("POST"))
             .and(wm_path("/api/cron"))
+            .and(body_partial_json(serde_json::json!({
+                "schedule": "now",
+                "agent": true,
+                "session_target": "isolated",
+                "delete_after_run": true,
+            })))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(serde_json::json!({ "id": "cron-1" })),

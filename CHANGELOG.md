@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.15] — 2026-05-13 — klodi-zeroclaw cron-fallback `schedule` is a bare string
+
+**klodi-zeroclaw only.** Every NATS wake against gateways that ship `/api/cron` but not `/api/agent/spawn` was 422-ing because the cron-fallback `POST /api/cron` body serialised `schedule` as `{ "at": "now" }` — upstream zeroclaw expects a bare `"now"` string. The demo (`demo/zeroclaw-live.Dockerfile` tier) froze on the first `channel.opened` / `channel.message` / `offer.proposed` wake; the daemon couldn't get a single agent turn off the ground. Pure runtime fix — no surface change.
+
+### Fixed (`klodi-zeroclaw` 0.2.15)
+
+- **`CronCreateBody.schedule` is `&'static str = "now"`** in `packages/klodi-rust-host/src/zeroclaw_spawn.rs`. The `CronSchedule { at: "now" }` wrapper struct was deleted; `create_cron` now constructs the body with `schedule: "now"` directly. Symptom on 0.2.13 / 0.2.14: `spawn returned non-2xx: 422 Unprocessable Entity Failed to deserialize the JSON body into the target type: schedule: invalid type: map, expected a string at line 1 column 12`, repeated on every wake. Native `/api/agent/spawn` was never affected — only the cron fallback path hit this.
+- **Regression coverage.** `falls_back_to_cron_on_404` now asserts the `POST /api/cron` body via `wiremock::matchers::body_partial_json` (`schedule: "now"`, `agent: true`, `session_target: "isolated"`, `delete_after_run: true`). A future refactor back to a wrapper struct fails the test instead of silently shipping.
+
+### Migration
+
+None. Update `klodi-zeroclaw` from 0.2.14 → 0.2.15 (e.g. rebuild `demo/zeroclaw-live.Dockerfile` to pick up the new `max_stable_version`). No config, env, or wire-shape changes for operators.
+
 ## [0.2.14] — 2026-05-13 — klodi-zeroclaw register is idempotent + `--force-register` repair primitive
 
 **klodi-zeroclaw only.** Two paired changes. The shipping fix: `klodi-zeroclaw-register` no longer opens browser OAuth on every container restart when `${KLODI_HOME}/{nats.creds,config.json}` are already on disk — making the demo-container boot loop survivable and the human first-run flow idempotent. The paired addition: a new `--force-register` CLI flag on every Rust adapter's register binary, surfacing the repair primitive that Hermes's `klodi_setup_repair` MCP tool provides for Python adapters but that Rust hosts deliberately cannot expose on the agent's MCP surface.
