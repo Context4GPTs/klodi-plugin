@@ -35,6 +35,13 @@ struct Cli {
     /// adapter target that doesn't run IronClaw locally.
     #[arg(long)]
     skip_ironclaw_config: bool,
+    /// Bypass the "creds already on disk → skip" short-circuit in the
+    /// shared register flow and mint a fresh klodi session via browser
+    /// OAuth even when `${KLODI_HOME}/{nats.creds,config.json}` are
+    /// present. Operator-side equivalent of Hermes's
+    /// `klodi_setup_repair` MCP tool.
+    #[arg(long)]
+    force_register: bool,
 }
 
 #[tokio::main]
@@ -56,6 +63,7 @@ async fn main() -> Result<()> {
             env!("CARGO_PKG_VERSION")
         ),
         binary_name: "klodi-ironclaw-register".into(),
+        force_register: cli.force_register,
     })
     .await
     .context("running klodi-ironclaw-register")?;

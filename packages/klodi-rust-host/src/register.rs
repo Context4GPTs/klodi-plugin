@@ -37,6 +37,17 @@ pub struct RegisterArgs {
     /// Name printed in error / re-run instructions when polling times
     /// out. Example: `"klodi-moltis-register"`.
     pub binary_name: String,
+    /// When `true`, bypass the "creds already on disk → skip" branch
+    /// and run a fresh OAuth flow even if `${KLODI_HOME}/nats.creds` +
+    /// `config.json` are already populated. Wired to the
+    /// `--force-register` flag on every Rust adapter's register binary
+    /// — the operator-side equivalent of Hermes's `klodi_setup_repair`
+    /// MCP tool. The Rust hosts can't expose an in-agent repair tool
+    /// (the wake agent's MCP server runs on top of the very creds the
+    /// repair would delete), so this flag is the runtime-native
+    /// repair primitive for `klodi-zeroclaw`, `klodi-moltis`, and
+    /// `klodi-ironclaw`.
+    pub force_register: bool,
 }
 
 #[derive(Deserialize)]
@@ -56,7 +67,38 @@ struct ErrorEnvelope {
 
 /// Run the registration flow. Returns once creds + config are written
 /// to disk, or after `POLL_DEADLINE` of unproductive polling.
+///
+/// Short-circuits with `Ok(())` when `${KLODI_HOME}/nats.creds` is
+/// non-empty and `${KLODI_HOME}/config.json` parses with a `handle` +
+/// `user_id` — the operator already registered on a prior run, and a
+/// fresh browser flow would just churn the marketplace `sessions` row.
+/// This keeps non-interactive container boots alive on every restart
+/// after the one-time setup.
+///
+/// Pass `force_register: true` (wired to the `--force-register` CLI
+/// flag) to bypass the short-circuit and mint fresh credentials even
+/// when creds already exist. That flag is the Rust-host equivalent of
+/// Hermes's `klodi_setup_repair` MCP tool — operator-driven repair,
+/// not an in-agent tool, because the Rust wake agent's MCP server
+/// holds the very creds the repair would delete.
 pub async fn run_register(args: RegisterArgs) -> Result<()> {
+    if !args.force_register {
+        if let Some(handle) = existing_creds_handle(&args.klodi_home) {
+            println!(
+                "Reusing existing klodi credentials at {} (handle @{}). \
+                 Pass --force-register to mint fresh credentials.",
+                args.klodi_home.display(),
+                handle,
+            );
+            return Ok(());
+        }
+    } else if existing_creds_handle(&args.klodi_home).is_some() {
+        println!(
+            "--force-register set: minting fresh klodi credentials at {} \
+             even though valid creds already exist there.",
+            args.klodi_home.display(),
+        );
+    }
     let session_id = Uuid::new_v4().to_string();
     let auth_url = format!(
         "{}/authorize?session={}",
@@ -238,6 +280,18 @@ fn trim_slash(url: &str) -> &str {
     url.trim_end_matches('/')
 }
 
+/// Returns the cached handle when `${KLODI_HOME}/nats.creds` is
+/// non-empty AND `config.json` parses with both `handle` + `user_id`
+/// populated. Used by [`run_register`] to short-circuit the OAuth flow
+/// on container restarts where the operator has already registered.
+fn existing_creds_handle(klodi_home: &Path) -> Option<String> {
+    let creds = klodi_home.join("nats.creds");
+    if !creds.exists() || std::fs::metadata(&creds).ok()?.len() == 0 {
+        return None;
+    }
+    read_config_identity(klodi_home).ok().map(|id| id.handle)
+}
+
 /// Read the `handle` + `user_id` fields from `${KLODI_HOME}/config.json`.
 /// Used by adapter binaries that need them on the startup path before
 /// `KlodiClient::new` has been called.
@@ -303,5 +357,184 @@ mod tests {
         .unwrap();
         let err = read_config_identity(dir.path()).unwrap_err().to_string();
         assert!(err.contains("handle"), "got: {err}");
+    }
+
+    fn write_valid_creds(dir: &Path) {
+        std::fs::write(dir.join("nats.creds"), b"-----BEGIN NATS USER JWT-----\nstub\n").unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"handle":"alice","user_id":"u1","nkey_public":"UAAA","nats_url":"wss://x"}"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn existing_creds_handle_returns_handle_when_present() {
+        let dir = tempdir().unwrap();
+        write_valid_creds(dir.path());
+        assert_eq!(existing_creds_handle(dir.path()).as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn existing_creds_handle_rejects_missing_creds() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"handle":"alice","user_id":"u1"}"#,
+        )
+        .unwrap();
+        assert!(existing_creds_handle(dir.path()).is_none());
+    }
+
+    #[test]
+    fn existing_creds_handle_rejects_empty_creds() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("nats.creds"), b"").unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"handle":"alice","user_id":"u1"}"#,
+        )
+        .unwrap();
+        assert!(existing_creds_handle(dir.path()).is_none());
+    }
+
+    #[test]
+    fn existing_creds_handle_rejects_malformed_config() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("nats.creds"), b"stub").unwrap();
+        // Missing `user_id` — `read_config_identity` errors, helper
+        // swallows the Err and returns None so registration proceeds.
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"handle":"alice"}"#,
+        )
+        .unwrap();
+        assert!(existing_creds_handle(dir.path()).is_none());
+    }
+
+    #[tokio::test]
+    async fn run_register_short_circuits_when_creds_exist() {
+        use wiremock::MockServer;
+
+        let dir = tempdir().unwrap();
+        write_valid_creds(dir.path());
+
+        // No mocks installed: any HTTP hit would 404 from wiremock and
+        // the polling loop would either bail or run for 10 min. The
+        // short-circuit branch must return before any request goes out.
+        let server = MockServer::start().await;
+        let api_url = server.uri();
+
+        run_register(RegisterArgs {
+            api_url,
+            klodi_home: dir.path().to_path_buf(),
+            user_agent: "klodi-test/0".into(),
+            binary_name: "klodi-test".into(),
+            force_register: false,
+        })
+        .await
+        .expect("short-circuit should return Ok");
+
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "run_register hit the network despite valid creds being on disk",
+        );
+    }
+
+    #[tokio::test]
+    async fn run_register_force_register_bypasses_short_circuit() {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // The operator-side repair primitive: creds exist on disk, but
+        // --force-register is set, so the OAuth path must run anyway.
+        let dir = tempdir().unwrap();
+        write_valid_creds(dir.path());
+
+        // Stub the first poll as "expired" — that exits the loop fast
+        // with a known error so we can assert the OAuth path actually
+        // ran without driving the full completed-session response.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/sessions/.+$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "status": "expired" })),
+            )
+            .mount(&server)
+            .await;
+
+        let err = run_register(RegisterArgs {
+            api_url: server.uri(),
+            klodi_home: dir.path().to_path_buf(),
+            user_agent: "klodi-test/0".into(),
+            binary_name: "klodi-test".into(),
+            force_register: true,
+        })
+        .await
+        .expect_err("expired-session response should propagate as Err");
+        assert!(
+            err.to_string().contains("expired"),
+            "expected expired-session error, got: {err}",
+        );
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().any(|r| r.url.path().starts_with("/api/sessions/")),
+            "force_register=true must run the OAuth+poll path, but wiremock saw paths: {:?}",
+            requests.iter().map(|r| r.url.path()).collect::<Vec<_>>(),
+        );
+
+        // The pre-existing creds on disk are untouched — the failed
+        // OAuth attempt returned `Err(Expired)` before `persist_session`
+        // had a chance to overwrite them. Operators who hit a transient
+        // failure during repair don't lose their previous identity.
+        assert!(dir.path().join("nats.creds").exists());
+        assert!(dir.path().join("config.json").exists());
+    }
+
+    #[tokio::test]
+    async fn run_register_after_creds_deleted_runs_full_flow() {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Covers the alternative repair flow: operator manually rm's
+        // creds before re-running register. After the delete the
+        // short-circuit must NOT fire even with force_register=false.
+        let dir = tempdir().unwrap();
+        write_valid_creds(dir.path());
+        std::fs::remove_file(dir.path().join("nats.creds")).unwrap();
+        std::fs::remove_file(dir.path().join("config.json")).unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/sessions/.+$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "status": "expired" })),
+            )
+            .mount(&server)
+            .await;
+
+        let err = run_register(RegisterArgs {
+            api_url: server.uri(),
+            klodi_home: dir.path().to_path_buf(),
+            user_agent: "klodi-test/0".into(),
+            binary_name: "klodi-test".into(),
+            force_register: false,
+        })
+        .await
+        .expect_err("expired-session response should propagate as Err");
+        assert!(
+            err.to_string().contains("expired"),
+            "expected expired-session error, got: {err}",
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().any(|r| r.url.path().starts_with("/api/sessions/")),
+            "expected at least one GET /api/sessions/<id> after creds were deleted, \
+             got paths: {:?}",
+            requests.iter().map(|r| r.url.path()).collect::<Vec<_>>(),
+        );
     }
 }

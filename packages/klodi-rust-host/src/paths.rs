@@ -102,74 +102,75 @@ fn home() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
-    #[test]
-    fn klodi_home_honors_env_override() {
-        // SAFETY: tests are run sequentially per-process by cargo test; the
-        // env-var swap-and-restore pattern is the standard way to test
-        // env-driven path resolution and matches `nats-client-rs` and the
-        // adapters' previous test files.
+    // KLODI_HOME is process-global. Cargo runs tests in parallel by
+    // default, so two tests that both swap-and-restore the env var
+    // racily clobber each other's writes. Serialize them by acquiring
+    // this mutex for the whole swap → assert → restore window.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_klodi_home<F: FnOnce()>(value: &str, body: F) {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prior = std::env::var("KLODI_HOME").ok();
-        // SAFETY: see test comment above.
+        // SAFETY: mutex above serializes every test that touches
+        // KLODI_HOME within this process, and no production code in
+        // klodi-rust-host spawns threads that read env during tests.
         unsafe {
-            std::env::set_var("KLODI_HOME", "/tmp/klodi-home-override-test");
+            std::env::set_var("KLODI_HOME", value);
         }
-        let home = klodi_home();
-        assert_eq!(home, PathBuf::from("/tmp/klodi-home-override-test"));
-        // SAFETY: see test comment above.
+        body();
+        // SAFETY: see set_var above.
         unsafe {
             match prior {
-                Some(value) => std::env::set_var("KLODI_HOME", value),
+                Some(v) => std::env::set_var("KLODI_HOME", v),
                 None => std::env::remove_var("KLODI_HOME"),
             }
         }
     }
 
     #[test]
+    fn klodi_home_honors_env_override() {
+        with_klodi_home("/tmp/klodi-home-override-test", || {
+            assert_eq!(klodi_home(), PathBuf::from("/tmp/klodi-home-override-test"));
+        });
+    }
+
+    #[test]
     fn config_path_appends_filename() {
-        let prior = std::env::var("KLODI_HOME").ok();
-        // SAFETY: see klodi_home_honors_env_override().
-        unsafe {
-            std::env::set_var("KLODI_HOME", "/tmp/klodi-home-config-test");
-        }
-        assert_eq!(
-            config_path(),
-            PathBuf::from("/tmp/klodi-home-config-test/config.json")
-        );
-        assert_eq!(
-            creds_path(),
-            PathBuf::from("/tmp/klodi-home-config-test/nats.creds")
-        );
-        assert_eq!(
-            negotiation_style_path(),
-            PathBuf::from("/tmp/klodi-home-config-test/negotiation_style.md")
-        );
-        assert_eq!(
-            buy_dir(),
-            PathBuf::from("/tmp/klodi-home-config-test/buy")
-        );
-        assert_eq!(
-            sell_dir(),
-            PathBuf::from("/tmp/klodi-home-config-test/sell")
-        );
-        assert_eq!(
-            buy_file_path("gaming-laptop-abc123"),
-            PathBuf::from(
-                "/tmp/klodi-home-config-test/buy/gaming-laptop-abc123.md",
-            )
-        );
-        assert_eq!(
-            sell_file_path("kindle-paperwhite-9c5f12"),
-            PathBuf::from(
-                "/tmp/klodi-home-config-test/sell/kindle-paperwhite-9c5f12.md",
-            )
-        );
-        // SAFETY: see klodi_home_honors_env_override().
-        unsafe {
-            match prior {
-                Some(value) => std::env::set_var("KLODI_HOME", value),
-                None => std::env::remove_var("KLODI_HOME"),
-            }
-        }
+        with_klodi_home("/tmp/klodi-home-config-test", || {
+            assert_eq!(
+                config_path(),
+                PathBuf::from("/tmp/klodi-home-config-test/config.json")
+            );
+            assert_eq!(
+                creds_path(),
+                PathBuf::from("/tmp/klodi-home-config-test/nats.creds")
+            );
+            assert_eq!(
+                negotiation_style_path(),
+                PathBuf::from("/tmp/klodi-home-config-test/negotiation_style.md")
+            );
+            assert_eq!(
+                buy_dir(),
+                PathBuf::from("/tmp/klodi-home-config-test/buy")
+            );
+            assert_eq!(
+                sell_dir(),
+                PathBuf::from("/tmp/klodi-home-config-test/sell")
+            );
+            assert_eq!(
+                buy_file_path("gaming-laptop-abc123"),
+                PathBuf::from(
+                    "/tmp/klodi-home-config-test/buy/gaming-laptop-abc123.md",
+                )
+            );
+            assert_eq!(
+                sell_file_path("kindle-paperwhite-9c5f12"),
+                PathBuf::from(
+                    "/tmp/klodi-home-config-test/sell/kindle-paperwhite-9c5f12.md",
+                )
+            );
+        });
     }
 }

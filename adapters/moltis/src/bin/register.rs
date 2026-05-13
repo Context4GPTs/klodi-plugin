@@ -39,6 +39,13 @@ struct Cli {
     /// host that only forwards wakes).
     #[arg(long)]
     skip_moltis_config: bool,
+    /// Bypass the "creds already on disk → skip" short-circuit in the
+    /// shared register flow and mint a fresh klodi session via browser
+    /// OAuth even when `${KLODI_HOME}/{nats.creds,config.json}` are
+    /// present. Operator-side equivalent of Hermes's
+    /// `klodi_setup_repair` MCP tool.
+    #[arg(long)]
+    force_register: bool,
 }
 
 #[tokio::main]
@@ -58,6 +65,7 @@ async fn main() -> Result<()> {
         klodi_home: klodi_home.clone(),
         user_agent: format!("klodi-moltis-register/{}", env!("CARGO_PKG_VERSION")),
         binary_name: "klodi-moltis-register".into(),
+        force_register: cli.force_register,
     })
     .await
     .context("running klodi-moltis-register")?;

@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.14] — 2026-05-13 — klodi-zeroclaw register is idempotent + `--force-register` repair primitive
+
+**klodi-zeroclaw only.** Two paired changes. The shipping fix: `klodi-zeroclaw-register` no longer opens browser OAuth on every container restart when `${KLODI_HOME}/{nats.creds,config.json}` are already on disk — making the demo-container boot loop survivable and the human first-run flow idempotent. The paired addition: a new `--force-register` CLI flag on every Rust adapter's register binary, surfacing the repair primitive that Hermes's `klodi_setup_repair` MCP tool provides for Python adapters but that Rust hosts deliberately cannot expose on the agent's MCP surface.
+
+### Fixed (`klodi-zeroclaw` 0.2.14)
+
+- **`klodi_rust_host::register::run_register` short-circuits when valid creds already exist.** If `${KLODI_HOME}/nats.creds` is non-empty AND `${KLODI_HOME}/config.json` parses with `handle` + `user_id` populated, the function prints a one-line "Reusing existing klodi credentials at <home> (handle @<handle>)" notice and returns `Ok(())` without minting a session UUID, printing the `authorize?session=…` URL, or polling. The downstream pair + session-bootstrap steps in `klodi-zeroclaw-register` run unchanged (they already had their own cached-bearer fast paths via `${KLODI_HOME}/zeroclaw.token` and `${KLODI_HOME}/zeroclaw.session`), so the full restart flow is now idempotent end-to-end.
+- The same fix lands automatically for `klodi-moltis-register` and `klodi-ironclaw-register` since they share `run_register`, but those adapters did not exhibit the boot-loop symptom (they don't write `zeroclaw.token` / `zeroclaw.session`), so no version bump for them.
+
+### Added (`klodi-zeroclaw` 0.2.14)
+
+- **`--force-register` flag on `klodi-zeroclaw-register` (also wired into `klodi-moltis-register` and `klodi-ironclaw-register` for parity).** Bypasses the short-circuit and runs a fresh OAuth flow even when creds already exist on disk — the operator-side equivalent of Hermes's `klodi_setup_repair` MCP tool. The flag is set on the CLI rather than the MCP catalog because the Rust wake agent's `klodi-*-mcp` server is itself running on top of `${KLODI_HOME}/nats.creds` (cf. the `assert!(!names.contains(&"klodi_setup_repair"))` invariant at `packages/klodi-rust-host/src/mcp/tools.rs:521`, comment "Register-only tools never appear on the agent's MCP surface") — an in-agent repair tool would saw off the branch the agent is sitting on mid-call. Operator-driven CLI repair sidesteps the constraint.
+- A failed `--force-register` attempt (e.g. OAuth session expired before the operator clicked through) leaves the pre-existing `${KLODI_HOME}/{nats.creds,config.json}` untouched — `persist_session` only writes on the completed-session branch, so transient failures during repair do not strand the operator without an identity.
+
+### Repair workflows
+
+- **Rust adapters (zeroclaw / moltis / ironclaw):** `klodi-zeroclaw-register --force-register` (or the matching `klodi-moltis-register --force-register` / `klodi-ironclaw-register --force-register`). Equivalent manual flow: `rm ${KLODI_HOME}/{nats.creds,config.json}` and re-run `klodi-zeroclaw-register` with no flags.
+- **OpenClaw (Python via Hermes):** `klodi_setup_repair` MCP tool — unchanged.
+
+### Migration
+
+None. Existing `${KLODI_HOME}` layouts work as-is; subsequent `klodi-zeroclaw-register` invocations now no-op the OAuth step instead of churning a fresh `sessions` row on the marketplace. Operators rotating accounts or recovering from a bad `config.json` use `--force-register`.
+
 ## [0.2.13] — 2026-05-12 — klodi-zeroclaw clean break
 
 **klodi-zeroclaw only — every other adapter is untouched.** This release rebuilds the zeroclaw adapter against the new wake-agent-spawn architecture described in `docs/plans/2026-05-12-klodi-wake-agent-spawn.md`. It entirely supersedes the 0.2.6 → 0.2.12 wake-routing + operator-visibility series. Wire-shape changes are breaking despite the patch-level bump — see Migration.

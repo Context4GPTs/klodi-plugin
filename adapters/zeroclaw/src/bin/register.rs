@@ -75,6 +75,15 @@ struct Cli {
     /// has already paired manually (e.g. via a previous register run).
     #[arg(long)]
     skip_pair: bool,
+    /// Bypass the "creds already on disk → skip" short-circuit in the
+    /// shared register flow and mint a fresh klodi session via browser
+    /// OAuth even when `${KLODI_HOME}/{nats.creds,config.json}` are
+    /// present. Operator-side equivalent of Hermes's
+    /// `klodi_setup_repair` MCP tool — repair lives at the CLI here
+    /// because the Rust wake agent's MCP server holds the very creds
+    /// the repair would delete.
+    #[arg(long)]
+    force_register: bool,
 }
 
 #[tokio::main]
@@ -93,6 +102,7 @@ async fn main() -> Result<()> {
         klodi_home: klodi_home.clone(),
         user_agent: format!("klodi-zeroclaw-register/{}", env!("CARGO_PKG_VERSION")),
         binary_name: "klodi-zeroclaw-register".into(),
+        force_register: cli.force_register,
     })
     .await
     .context("running klodi-zeroclaw-register")?;
