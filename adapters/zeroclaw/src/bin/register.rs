@@ -1,6 +1,7 @@
-//! `klodi-zeroclaw-register` — one-shot registration + ZeroClaw pairing.
+//! `klodi-zeroclaw-register` — one-shot registration + ZeroClaw pairing
+//! + Telegram pairing.
 //!
-//! Per `docs/plans/2026-05-12-klodi-wake-agent-spawn.md` §3 the binary:
+//! Per `docs/plans/2026-05-14-klodi-telegram-bridge.md` the binary:
 //!
 //! 1. Mints NATS creds + `config.json` via the shared `run_register`
 //!    flow (browser auth → poll → atomic write).
@@ -12,35 +13,36 @@
 //!    single hello line, persisting the minted UUID at
 //!    `${KLODI_HOME}/zeroclaw.session`.
 //! 4. Idempotently wires the `klodi-zeroclaw-mcp` entry into ZeroClaw's
-//!    `config.toml` so the marketplace tool catalog is reachable from
-//!    every spawned agent session.
-//!
-//! On re-runs the marketplace flow rewrites `nats.creds` + `config.json`
-//! atomically; pairing reuses the cached bearer when present (so
-//! `gateway.paired_tokens` doesn't accumulate); the session is
-//! resumed/probed if a prior id is on disk.
+//!    `config.toml`.
+//! 5. NEW: pairs Telegram — validates the bot token via `getMe`, picks
+//!    the operator's chat_id from a recent `/start`, persists
+//!    `${KLODI_HOME}/telegram.json`, and sends a hello line so the
+//!    operator's phone shows the bot is alive.
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use klodi_nats_client::{KLODI_DEFAULT_API_URL, klodi_secret_write};
 use klodi_rust_host::{
-    BrowserPairConfig, HostMcpEntry, MinterImpl, RegisterArgs, ZeroClawWsConfig,
-    ZeroclawCliMinter, apply_host_mcp_entry, bootstrap_session_with_first_message,
-    default_host_config_path, paths, persist_session_id, read_session_id, register,
-    run_register, send_session_message,
+    BrowserPairConfig, HostMcpEntry, MinterImpl, RegisterArgs, TelegramClient,
+    TelegramConfig, TelegramError, ZeroClawWsConfig, ZeroclawCliMinter, apply_host_mcp_entry,
+    bootstrap_session_with_first_message, default_host_config_path, paths,
+    persist_session_id, read_session_id, read_telegram_config, register, run_register,
+    send_session_message, write_telegram_config,
 };
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
 const ZEROCLAW_CLI_TIMEOUT: Duration = Duration::from_secs(5);
 const PAIR_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+const TELEGRAM_FIRST_POLL_TIMEOUT_SECS: u32 = 2;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "klodi-zeroclaw-register",
-    about = "Register klodi for the ZeroClaw adapter, pair with the gateway, and bootstrap the operator chat session.",
+    about = "Register klodi for the ZeroClaw adapter, pair with the gateway, and onboard Telegram.",
     version = env!("CARGO_PKG_VERSION"),
 )]
 struct Cli {
@@ -72,18 +74,29 @@ struct Cli {
     #[arg(long, env = "ZEROCLAW_CLI", default_value = "zeroclaw")]
     zeroclaw_cli: PathBuf,
     /// Skip the pair + session-bootstrap step. Use when the operator
-    /// has already paired manually (e.g. via a previous register run).
+    /// has already paired manually.
     #[arg(long)]
     skip_pair: bool,
     /// Bypass the "creds already on disk → skip" short-circuit in the
-    /// shared register flow and mint a fresh klodi session via browser
-    /// OAuth even when `${KLODI_HOME}/{nats.creds,config.json}` are
-    /// present. Operator-side equivalent of Hermes's
-    /// `klodi_setup_repair` MCP tool — repair lives at the CLI here
-    /// because the Rust wake agent's MCP server holds the very creds
-    /// the repair would delete.
+    /// shared register flow.
     #[arg(long)]
     force_register: bool,
+    /// Telegram bot token. Non-interactive override; otherwise the
+    /// binary prompts on stdin when no `telegram.json` is present.
+    #[arg(long, env = "TELEGRAM_BOT_TOKEN")]
+    bot_token: Option<String>,
+    /// Telegram chat id. Non-interactive override; otherwise the binary
+    /// long-polls `getUpdates` after the operator sends `/start`.
+    #[arg(long, env = "TELEGRAM_CHAT_ID")]
+    chat_id: Option<i64>,
+    /// Force re-running the Telegram pairing even if telegram.json
+    /// exists. Re-uses --bot-token / --chat-id if passed.
+    #[arg(long)]
+    re_pair_telegram: bool,
+    /// Skip Telegram onboarding entirely. Use for hosts that genuinely
+    /// don't want a bot (headless CI).
+    #[arg(long)]
+    skip_telegram: bool,
 }
 
 #[tokio::main]
@@ -118,10 +131,11 @@ async fn main() -> Result<()> {
     } else {
         let config_path = cli
             .zeroclaw_config
+            .clone()
             .unwrap_or_else(|| default_host_config_path("zeroclaw"));
         let entry = HostMcpEntry {
             config_path: config_path.clone(),
-            command: cli.mcp_command,
+            command: cli.mcp_command.clone(),
             klodi_home: klodi_home.clone(),
         };
         apply_host_mcp_entry(&entry)
@@ -132,6 +146,13 @@ async fn main() -> Result<()> {
             config_path.display(),
         );
     }
+
+    if cli.skip_telegram {
+        println!("Skipping Telegram pairing (--skip-telegram).");
+    } else {
+        pair_telegram(&cli, &klodi_home).await?;
+    }
+
     Ok(())
 }
 
@@ -144,9 +165,6 @@ async fn pair_and_bootstrap(cli: &Cli, klodi_home: &std::path::Path) -> Result<(
 
     match read_session_id(klodi_home)? {
         Some(existing) => {
-            // Best-effort resume: append the hello line to the existing
-            // session so the operator's chat reflects the re-pair. If
-            // the session was GC'd we fall through to a fresh bootstrap.
             match send_session_message(&ws_cfg, &existing, &hello).await {
                 Ok(_) => {
                     println!(
@@ -173,8 +191,7 @@ async fn pair_and_bootstrap(cli: &Cli, klodi_home: &std::path::Path) -> Result<(
         .context("bootstrapping operator chat session via WS /ws/chat")?;
     persist_session_id(klodi_home, &outcome.session_id)?;
     println!(
-        "Operator chat session bootstrapped ({}). Open the ZeroClaw \
-         dashboard to see the hello line.",
+        "Operator chat session bootstrapped ({}). The daemon will resume this on every wake.",
         outcome.session_id,
     );
     Ok(())
@@ -200,9 +217,6 @@ async fn pair(cli: &Cli, klodi_home: &std::path::Path) -> Result<String> {
         return Ok(cached);
     }
 
-    // Mint a pairing code via the gateway CLI. We do not fall through to
-    // a sidecar code file here — register is interactive and we'd rather
-    // fail loud than silently leave the operator un-paired.
     let cfg = BrowserPairConfig {
         cli_path: cli.zeroclaw_cli.clone(),
         timeout: ZEROCLAW_CLI_TIMEOUT,
@@ -292,4 +306,207 @@ fn persist_token(target: &std::path::Path, token: &str) -> Result<()> {
     }
     klodi_secret_write(target, token.as_bytes(), 0o600)
         .with_context(|| format!("klodi_secret_write {}", target.display()))
+}
+
+// ----- Telegram pairing -----------------------------------------------------
+
+async fn pair_telegram(cli: &Cli, klodi_home: &std::path::Path) -> Result<()> {
+    if !cli.re_pair_telegram {
+        if let Some(existing) = read_telegram_config(klodi_home)? {
+            println!(
+                "Reusing existing telegram.json (bot=@{} chat_id={}). \
+                 Pass --re-pair-telegram to redo.",
+                existing.bot_username.as_deref().unwrap_or("unknown"),
+                existing.chat_id,
+            );
+            // Even on reuse, send a hello line so the operator sees the
+            // bot is alive after register.
+            send_telegram_hello(&existing).await;
+            return Ok(());
+        }
+    }
+
+    let bot_token = match cli.bot_token.clone() {
+        Some(t) => {
+            let trimmed = t.trim().to_string();
+            if trimmed.is_empty() {
+                bail!("--bot-token / TELEGRAM_BOT_TOKEN was set but empty");
+            }
+            trimmed
+        }
+        None => prompt_for_bot_token()?,
+    };
+
+    let client = TelegramClient::new(bot_token.clone());
+    let bot = match client.get_me().await {
+        Ok(b) => b,
+        Err(TelegramError::BadToken) => {
+            bail!(
+                "Telegram rejected the bot token (401). Re-check what you pasted from \
+                 @BotFather and run again."
+            );
+        }
+        Err(err) => bail!("Telegram getMe failed: {err}"),
+    };
+    let bot_username = bot.username.clone().unwrap_or_else(|| bot.first_name.clone());
+    println!(
+        "Bot validated: @{} (id={}). Now open Telegram, search @{}, and send /start.",
+        bot_username, bot.id, bot_username,
+    );
+
+    let chat_id = match cli.chat_id {
+        Some(id) => id,
+        None => {
+            print!("Press Enter once you've sent /start in Telegram... ");
+            std::io::stdout().flush().ok();
+            let mut buf = String::new();
+            std::io::stdin()
+                .lock()
+                .read_line(&mut buf)
+                .context("reading stdin for /start gate")?;
+            discover_chat_id(&client).await?
+        }
+    };
+
+    if cli.chat_id.is_none() {
+        print!(
+            "Pair with chat_id {chat_id} (from @{bot_username})? [y/N] "
+        );
+        std::io::stdout().flush().ok();
+        let mut buf = String::new();
+        std::io::stdin()
+            .lock()
+            .read_line(&mut buf)
+            .context("reading stdin for chat_id confirmation")?;
+        if !matches!(buf.trim(), "y" | "Y" | "yes" | "YES") {
+            bail!("operator declined chat_id {chat_id}; re-run with --chat-id to override");
+        }
+    }
+
+    let cfg = TelegramConfig {
+        bot_token: bot_token.clone(),
+        chat_id,
+        bot_username: Some(bot_username.clone()),
+        paired_at: Some(iso_now()),
+    };
+    write_telegram_config(klodi_home, &cfg).context("writing telegram.json")?;
+    println!(
+        "Telegram paired: bot=@{bot_username} chat_id={chat_id} \
+         (written to {}).",
+        klodi_home.join("telegram.json").display(),
+    );
+
+    send_telegram_hello(&cfg).await;
+    Ok(())
+}
+
+fn prompt_for_bot_token() -> Result<String> {
+    print!(
+        "Paste your Telegram bot token (from @BotFather): "
+    );
+    std::io::stdout().flush().ok();
+    let mut buf = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut buf)
+        .context("reading bot token from stdin")?;
+    let trimmed = buf.trim().to_string();
+    if trimmed.is_empty() {
+        bail!("empty bot token");
+    }
+    Ok(trimmed)
+}
+
+async fn discover_chat_id(client: &TelegramClient) -> Result<i64> {
+    let (updates, _) = client
+        .poll_updates(0, TELEGRAM_FIRST_POLL_TIMEOUT_SECS)
+        .await
+        .context("polling getUpdates for the operator's /start message")?;
+    let chat_id = updates
+        .into_iter()
+        .filter_map(|u| u.message)
+        .max_by_key(|m| m.date)
+        .map(|m| m.chat.id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no recent updates from the bot — make sure you sent /start in Telegram and try again",
+            )
+        })?;
+    Ok(chat_id)
+}
+
+async fn send_telegram_hello(cfg: &TelegramConfig) {
+    let client = TelegramClient::new(cfg.bot_token.clone());
+    let bot = cfg.bot_username.as_deref().unwrap_or("klodi");
+    let body = format!(
+        "Klodi paired with @{bot}. I'll surface marketplace events here.",
+    );
+    match client.send(cfg.chat_id, &body).await {
+        Ok(_) => {
+            println!("Hello message sent to chat_id={}.", cfg.chat_id);
+        }
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                chat_id = cfg.chat_id,
+                "klodi_zeroclaw_register_telegram_hello_failed"
+            );
+            println!(
+                "Telegram hello send failed ({err}); pairing file was still written.",
+            );
+        }
+    }
+}
+
+fn iso_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let mut secs = now.as_secs() as i64;
+    let mut y: i64 = 1970;
+    loop {
+        let days = if is_leap_year(y) { 366 } else { 365 };
+        let year_secs = days * 86400;
+        if secs < year_secs {
+            break;
+        }
+        secs -= year_secs;
+        y += 1;
+    }
+    let month_lengths = [
+        31,
+        if is_leap_year(y) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut m: usize = 0;
+    while m < 12 {
+        let len = month_lengths[m] as i64 * 86400;
+        if secs < len {
+            break;
+        }
+        secs -= len;
+        m += 1;
+    }
+    let day = (secs / 86400) as u32 + 1;
+    secs %= 86400;
+    let hour = (secs / 3600) as u32;
+    secs %= 3600;
+    let min = (secs / 60) as u32;
+    let sec = (secs % 60) as u32;
+    format!(
+        "{y:04}-{:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z",
+        m + 1,
+    )
+}
+
+fn is_leap_year(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
 }

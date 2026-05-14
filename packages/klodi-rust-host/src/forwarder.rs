@@ -7,9 +7,9 @@
 //!
 //! - Moltis / IronClaw — POST a structured envelope to a local agent
 //!   wake URL. See [`HttpStructuredHandler`].
-//! - ZeroClaw — spawn an isolated agent session via
-//!   `POST /api/cron` + `POST /api/cron/{id}/run`. See
-//!   [`crate::zeroclaw_spawn::SpawnClient`].
+//! - ZeroClaw — dispatch the event into an [`crate::operator_session::OperatorInbox`]
+//!   so the per-operator worker can run one zeroclaw `/ws/chat` turn
+//!   per event and forward the agent's reply to Telegram.
 //!
 //! Failure semantics: a handler that returns `Err` causes a JetStream
 //! NAK and redelivery per the consumer's `max_deliver`. The forwarder

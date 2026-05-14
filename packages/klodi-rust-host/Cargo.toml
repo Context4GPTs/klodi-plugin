@@ -44,11 +44,13 @@ default = []
 # whose host acts as an MCP client pull this in; daemon-only adapters
 # keep the lean dependency tree.
 mcp = ["dep:rmcp", "dep:toml_edit"]
-# Enables the ZeroClaw-specific path: wake-prompt builder, spawn-via-cron
-# client (`zeroclaw_spawn`), minimal WS client for register-time session
-# bootstrap, `${KLODI_HOME}/zeroclaw.{token,session}` persistence helpers,
-# and the gateway-CLI pairing-code minter. Only the ZeroClaw adapter
-# enables this — Moltis/IronClaw stay on the structured-wake HTTP path.
+# Enables the ZeroClaw-specific path: wake-prompt builder,
+# operator-session controller, `/ws/chat` single-flight client
+# (`zeroclaw_chat`), Telegram Bot API client + persistence helpers,
+# minimal WS client for register-time session bootstrap,
+# `${KLODI_HOME}/zeroclaw.{token,session}` persistence helpers, and the
+# gateway-CLI pairing-code minter. Only the ZeroClaw adapter enables
+# this — Moltis/IronClaw stay on the structured-wake HTTP path.
 zeroclaw = ["dep:tokio-tungstenite", "dep:http"]
 
 [dependencies]

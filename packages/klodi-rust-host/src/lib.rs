@@ -33,12 +33,17 @@
 //! - [`zeroclaw_browser_pairing`] — minter that shells out to
 //!   `zeroclaw gateway get-paircode --new` so `register` can pair
 //!   without operator copy-paste.
-//! - [`zeroclaw_spawn`] — the wake-time HTTP client. Composes the
-//!   prompt, calls `POST /api/cron` + `POST /api/cron/{id}/run`,
-//!   returns when ZeroClaw has accepted the spawn (decoupled from the
-//!   agent turn).
+//! - [`zeroclaw_chat`] — `/ws/chat` single-flight client. One turn per
+//!   event; the daemon waits for `done.full_response` and forwards it
+//!   to Telegram.
+//! - [`telegram`] — Telegram Bot API client used by the daemon for
+//!   outbound `sendMessage` + inbound `getUpdates` polling.
+//! - [`telegram_config`] — `${KLODI_HOME}/telegram.json` (bot_token +
+//!   chat_id), the offset file, and the last-send sidecar.
+//! - [`operator_session`] — per-operator coordinator that fan-ins NATS
+//!   wakes + Telegram messages into the single zeroclaw session.
 //! - [`wake_prompt`] — pure builder for the canonical wake prompt the
-//!   spawned agent reads on every NATS event.
+//!   operator session agent reads on every NATS event.
 
 pub mod buy_sell_files;
 pub mod forwarder;
@@ -53,20 +58,27 @@ pub mod host_mcp_config;
 pub mod mcp;
 
 #[cfg(feature = "zeroclaw")]
+pub mod operator_session;
+#[cfg(feature = "zeroclaw")]
+pub mod telegram;
+#[cfg(feature = "zeroclaw")]
+pub mod telegram_config;
+#[cfg(feature = "zeroclaw")]
 pub mod wake_prompt;
 #[cfg(feature = "zeroclaw")]
 pub mod zeroclaw_browser_pairing;
 #[cfg(feature = "zeroclaw")]
-pub mod zeroclaw_session;
+pub mod zeroclaw_chat;
 #[cfg(feature = "zeroclaw")]
-pub mod zeroclaw_spawn;
+pub mod zeroclaw_session;
 #[cfg(feature = "zeroclaw")]
 pub mod zeroclaw_ws;
 
 pub use forwarder::{ForwarderConfig, run_forwarder};
 pub use register::{RegisterArgs, run_register};
 pub use setup_status::{
-    IssueSeverity, NextAction, SetupIssue, SetupPhase, SetupStatus, klodi_setup_status,
+    IssueSeverity, NextAction, SetupIssue, SetupPhase, SetupStatus, SetupStatusOptions,
+    klodi_setup_status, klodi_setup_status_with_options,
     klodi_setup_status_with_register_cli,
 };
 
@@ -76,15 +88,32 @@ pub use host_mcp_config::{HostMcpEntry, apply_host_mcp_entry, default_host_confi
 pub use mcp::{McpConfig, run_mcp_server};
 
 #[cfg(feature = "zeroclaw")]
+pub use operator_session::{
+    DispatchError, InboundEvent, OperatorInbox, OperatorSessionController,
+};
+#[cfg(feature = "zeroclaw")]
+pub use telegram::{
+    TelegramBot, TelegramChat, TelegramClient, TelegramError, TelegramMessage, TelegramUpdate,
+    TelegramUser,
+};
+#[cfg(feature = "zeroclaw")]
+pub use telegram_config::{
+    TelegramConfig, TelegramLastSend, TelegramOffset, config_path as telegram_config_path,
+    last_send_path as telegram_last_send_path, offset_path as telegram_offset_path,
+    read_config as read_telegram_config, read_last_send as read_telegram_last_send,
+    read_offset as read_telegram_offset, write_config as write_telegram_config,
+    write_last_send as write_telegram_last_send, write_offset as write_telegram_offset,
+};
+#[cfg(feature = "zeroclaw")]
 pub use wake_prompt::{WakePromptInputs, build_wake_prompt};
 #[cfg(feature = "zeroclaw")]
 pub use zeroclaw_browser_pairing::{
     BrowserPairConfig, BrowserPairError, MinterImpl, ZeroclawCliMinter,
 };
 #[cfg(feature = "zeroclaw")]
-pub use zeroclaw_session::{persist_session_id, read_session_id, session_path};
+pub use zeroclaw_chat::{ChatClient, ChatError, TurnOutcome};
 #[cfg(feature = "zeroclaw")]
-pub use zeroclaw_spawn::{SpawnClient, SpawnError, SpawnOutcome};
+pub use zeroclaw_session::{persist_session_id, read_session_id, session_path};
 #[cfg(feature = "zeroclaw")]
 pub use zeroclaw_ws::{
     SessionOutcome, ZeroClawWsConfig, bootstrap_session_with_first_message,

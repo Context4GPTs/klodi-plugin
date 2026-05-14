@@ -108,6 +108,18 @@ pub struct SetupStatus {
     /// the persisted operator-session UUID that gets interpolated into
     /// every wake prompt. Same caveat as `zeroclaw_token_present`.
     pub zeroclaw_session_present: bool,
+    /// `${KLODI_HOME}/telegram.json` exists with a non-empty body —
+    /// the per-operator bot token + chat id. Only load-bearing for the
+    /// ZeroClaw daemon (gated via `require_telegram`).
+    pub telegram_config_present: bool,
+    /// Bot username from telegram.json. `None` when absent / unreadable.
+    pub telegram_bot_username: Option<String>,
+    /// Chat id from telegram.json. `None` when absent / unreadable.
+    pub telegram_chat_id: Option<i64>,
+    /// Most recent successful sendMessage timestamp read from the
+    /// sidecar `telegram.last-send.json`. Debug-only; `None` when
+    /// absent.
+    pub telegram_last_send_ts: Option<String>,
     /// Stable issue codes the agent / operator should surface. Order is
     /// significance-first (registration before perms); `next_action`
     /// defaults to `issues[0].fix`.
@@ -116,6 +128,26 @@ pub struct SetupStatus {
     pub issue_codes: Vec<String>,
     /// Recommended single next step. `None` when phase is `Ready`.
     pub next_action: Option<NextAction>,
+}
+
+/// Optional knobs for [`klodi_setup_status_with_options`]. Adapters that
+/// want to require Telegram-pairing before `phase: "ready"` pass
+/// `require_telegram: true`; ZeroClaw's setup-status binary does. Other
+/// adapters keep the default `false` so their phase machine is
+/// unaffected.
+#[derive(Debug, Clone)]
+pub struct SetupStatusOptions<'a> {
+    pub register_cli: &'a str,
+    pub require_telegram: bool,
+}
+
+impl<'a> Default for SetupStatusOptions<'a> {
+    fn default() -> Self {
+        Self {
+            register_cli: "klodi-register",
+            require_telegram: false,
+        }
+    }
 }
 
 /// Inspect `${klodi_home}` and produce a [`SetupStatus`]. Never panics
@@ -132,6 +164,22 @@ pub fn klodi_setup_status(klodi_home: &Path) -> SetupStatus {
 pub fn klodi_setup_status_with_register_cli(
     klodi_home: &Path,
     register_cli: &str,
+) -> SetupStatus {
+    klodi_setup_status_with_options(
+        klodi_home,
+        SetupStatusOptions {
+            register_cli,
+            require_telegram: false,
+        },
+    )
+}
+
+/// Full-featured variant. ZeroClaw's setup-status binary passes
+/// `require_telegram: true` so a missing `telegram.json` keeps the
+/// phase out of `Ready` and surfaces a Telegram-pairing next-action.
+pub fn klodi_setup_status_with_options(
+    klodi_home: &Path,
+    options: SetupStatusOptions<'_>,
 ) -> SetupStatus {
     let creds_path = klodi_home.join("nats.creds");
     let config_path = klodi_home.join("config.json");
@@ -154,6 +202,13 @@ pub fn klodi_setup_status_with_register_cli(
     let config_unreadable =
         config_present && user_id.is_none() && handle.is_none() && nats_url.is_none();
 
+    let (telegram_config_present, telegram_bot_username, telegram_chat_id) =
+        match read_telegram_config(klodi_home) {
+            Ok(Some(cfg)) => (true, cfg.bot_username, Some(cfg.chat_id)),
+            _ => (false, None, None),
+        };
+    let telegram_last_send_ts = read_telegram_last_send_ts(klodi_home);
+
     let issues = derive_issues(
         &Checks {
             creds_present,
@@ -161,13 +216,21 @@ pub fn klodi_setup_status_with_register_cli(
             creds_mode_secure,
             config_unreadable,
             creds_path: &creds_path,
+            telegram_config_present,
+            require_telegram: options.require_telegram,
         },
-        register_cli,
+        options.register_cli,
     );
     let issue_codes = issues.iter().map(|i| i.code.clone()).collect();
     let next_action = issues.first().map(|i| i.fix.clone());
 
-    let phase = derive_phase(creds_present, config_present, config_unreadable);
+    let phase = derive_phase(
+        creds_present,
+        config_present,
+        config_unreadable,
+        telegram_config_present,
+        options.require_telegram,
+    );
 
     SetupStatus {
         phase,
@@ -180,10 +243,53 @@ pub fn klodi_setup_status_with_register_cli(
         nats_url,
         zeroclaw_token_present,
         zeroclaw_session_present,
+        telegram_config_present,
+        telegram_bot_username,
+        telegram_chat_id,
+        telegram_last_send_ts,
         issues,
         issue_codes,
         next_action,
     }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ParsedTelegramConfig {
+    chat_id: i64,
+    #[serde(default)]
+    bot_username: Option<String>,
+}
+
+fn read_telegram_config(klodi_home: &Path) -> std::io::Result<Option<ParsedTelegramConfig>> {
+    let path = klodi_home.join("telegram.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path)?;
+    if bytes.iter().all(|b| b.is_ascii_whitespace()) {
+        return Ok(None);
+    }
+    let parsed: ParsedTelegramConfig = serde_json::from_slice(&bytes)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    Ok(Some(parsed))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ParsedLastSend {
+    ts: String,
+}
+
+fn read_telegram_last_send_ts(klodi_home: &Path) -> Option<String> {
+    let path = klodi_home.join("telegram.last-send.json");
+    if !path.is_file() {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    if bytes.iter().all(|b| b.is_ascii_whitespace()) {
+        return None;
+    }
+    let parsed: ParsedLastSend = serde_json::from_slice(&bytes).ok()?;
+    Some(parsed.ts)
 }
 
 fn file_with_body_present(path: &Path) -> bool {
@@ -202,13 +308,24 @@ struct Checks<'a> {
     creds_mode_secure: bool,
     config_unreadable: bool,
     creds_path: &'a Path,
+    telegram_config_present: bool,
+    require_telegram: bool,
 }
 
-fn derive_phase(creds_present: bool, config_present: bool, config_unreadable: bool) -> SetupPhase {
+fn derive_phase(
+    creds_present: bool,
+    config_present: bool,
+    config_unreadable: bool,
+    telegram_config_present: bool,
+    require_telegram: bool,
+) -> SetupPhase {
     if !creds_present && !config_present {
         return SetupPhase::Unconfigured;
     }
     if creds_present != config_present || config_unreadable {
+        return SetupPhase::Registering;
+    }
+    if require_telegram && !telegram_config_present {
         return SetupPhase::Registering;
     }
     SetupPhase::Ready
@@ -282,6 +399,23 @@ fn derive_issues(c: &Checks<'_>, register_cli: &str) -> Vec<SetupIssue> {
             fix: NextAction::Shell {
                 shell: format!("chmod 600 {}", c.creds_path.display()),
                 message: "Tighten nats.creds permissions to 0600.".to_string(),
+            },
+        });
+    }
+
+    if c.require_telegram && !c.telegram_config_present {
+        out.push(SetupIssue {
+            code: "telegram_unpaired".to_string(),
+            severity: IssueSeverity::Error,
+            message: format!(
+                "telegram.json missing — run {register_cli} to pair Telegram (operator-facing surface for the ZeroClaw daemon).",
+                register_cli = register_cli,
+            ),
+            fix: NextAction::Cli {
+                command: register_cli.to_string(),
+                message: format!(
+                    "Run {register_cli} to pair Telegram — bot token + chat id are written to ${{KLODI_HOME}}/telegram.json (mode 0600).",
+                ),
             },
         });
     }
@@ -435,6 +569,87 @@ mod tests {
         assert!(
             msg.contains("klodi-ironclaw-register"),
             "expected per-host CLI name in message, got: {msg}",
+        );
+    }
+
+    fn write_valid_telegram(dir: &Path) {
+        let cfg = serde_json::json!({
+            "bot_token": "tok",
+            "chat_id": 42,
+            "bot_username": "DemoKlodiBot",
+            "paired_at": "2026-05-14T07:25:00Z",
+        });
+        fs::write(dir.join("telegram.json"), cfg.to_string()).unwrap();
+    }
+
+    #[test]
+    fn require_telegram_blocks_ready_when_missing() {
+        let dir = tempdir().unwrap();
+        write_valid_config(dir.path());
+        let status = klodi_setup_status_with_options(
+            dir.path(),
+            SetupStatusOptions {
+                register_cli: "klodi-zeroclaw-register",
+                require_telegram: true,
+            },
+        );
+        assert_eq!(status.phase, SetupPhase::Registering);
+        let codes: Vec<&str> = status.issues.iter().map(|i| i.code.as_str()).collect();
+        assert!(codes.contains(&"telegram_unpaired"), "got {codes:?}");
+        assert!(!status.telegram_config_present);
+    }
+
+    #[test]
+    fn require_telegram_ready_when_present() {
+        let dir = tempdir().unwrap();
+        write_valid_config(dir.path());
+        write_valid_telegram(dir.path());
+        let status = klodi_setup_status_with_options(
+            dir.path(),
+            SetupStatusOptions {
+                register_cli: "klodi-zeroclaw-register",
+                require_telegram: true,
+            },
+        );
+        assert_eq!(status.phase, SetupPhase::Ready);
+        assert!(status.telegram_config_present);
+        assert_eq!(status.telegram_bot_username.as_deref(), Some("DemoKlodiBot"));
+        assert_eq!(status.telegram_chat_id, Some(42));
+    }
+
+    #[test]
+    fn telegram_fields_surface_without_require() {
+        // Even without `require_telegram`, the fields are populated for
+        // observability so `setup_status` is a single source of truth.
+        let dir = tempdir().unwrap();
+        write_valid_config(dir.path());
+        write_valid_telegram(dir.path());
+        let status = klodi_setup_status(dir.path());
+        assert_eq!(status.phase, SetupPhase::Ready);
+        assert!(status.telegram_config_present);
+        assert_eq!(status.telegram_chat_id, Some(42));
+    }
+
+    #[test]
+    fn telegram_last_send_ts_is_read() {
+        let dir = tempdir().unwrap();
+        write_valid_config(dir.path());
+        write_valid_telegram(dir.path());
+        fs::write(
+            dir.path().join("telegram.last-send.json"),
+            serde_json::json!({ "ts": "2026-05-14T07:33:00Z" }).to_string(),
+        )
+        .unwrap();
+        let status = klodi_setup_status_with_options(
+            dir.path(),
+            SetupStatusOptions {
+                register_cli: "klodi-zeroclaw-register",
+                require_telegram: true,
+            },
+        );
+        assert_eq!(
+            status.telegram_last_send_ts.as_deref(),
+            Some("2026-05-14T07:33:00Z"),
         );
     }
 }
