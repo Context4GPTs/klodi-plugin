@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.16] — 2026-05-14 — klodi-zeroclaw Telegram bridge (supersedes wake-agent-spawn)
+
+**klodi-zeroclaw only.** zeroclaw 0.7.4 silently no-ops `sessions_send` from a concurrent operator dashboard tab and removed `/api/agent/spawn` and `/api/cron/{id}/run`. The wake-agent-spawn plan (`docs/plans/2026-05-12-klodi-wake-agent-spawn.md`) cannot be delivered as designed against shipped zeroclaw. This release pivots to Telegram as the operator surface — zeroclaw becomes the agent runtime only, never the operator UX. See `docs/plans/2026-05-14-klodi-telegram-bridge.md` for the design.
+
+Wire-shape changes are breaking despite the patch-level bump — see Migration.
+
+### The architecture, in one sentence
+
+NATS event → daemon → `OperatorSessionController` inbox → single-flight `/ws/chat` turn against one persistent zeroclaw session per operator → agent's `done.full_response` shipped verbatim to Telegram via `sendMessage`. Inbound Telegram messages from the operator fan into the same inbox.
+
+### What this delivers
+
+- **Operator visibility is the LLM's job.** Same as 0.2.13 — but the delivery primitive moves from `sessions_send` (broken on shipped zeroclaw) to Telegram `sendMessage` driven by the daemon. The agent's closing sentence IS the notification.
+- **One zeroclaw session per operator, resumed on every wake.** `sessions_history` works for in-session continuity → the agent has memory across turns. Failure recovery: daemon restart re-resumes via `/ws/chat?session_id=<X>`; the gateway's `session_start` returns `resumed:true, message_count:N`.
+- **NATS ack < 50ms regardless of agent-turn duration.** ACK happens at *dispatch* time — when the event lands in the controller's mpsc inbox, not when the LLM finishes. Operator bursts beyond inbox capacity (64) NAK the JetStream message for redelivery.
+- **Single-flight per session.** A `tokio::sync::Mutex` in `ChatClient` serialises concurrent `send_and_wait` calls so the gateway never sees two in-flight turns on the same session_id.
+- **Telegram poll offset survives crashes.** `${KLODI_HOME}/telegram.offset.json` is written atomically after every successful dispatch; on restart the daemon resumes from `last_acked_update_id + 1`. Worst case: one update gets redelivered after a crash mid-write.
+
+### Removed in 0.2.16
+
+- `klodi_rust_host::zeroclaw_spawn::{SpawnClient, SpawnError, SpawnOutcome, SpawnPath}` and the underlying `NativeSpawnBody` / `CronCreateBody` / `CronRunResponse` / `CronDelivery` types. The `zeroclaw_spawn.rs` module is deleted in full (~430 LOC).
+- `klodi-zeroclaw-daemon --force-cron-fallback` flag + `ZEROCLAW_FORCE_CRON_FALLBACK` env var — there is no cron fallback path to force.
+- `klodi-zeroclaw-daemon --zeroclaw-token` flag + `ZEROCLAW_AGENT_TOKEN` env override — the daemon reads `${KLODI_HOME}/zeroclaw.token` exclusively now (operators wanting to move tokens around re-run `klodi-zeroclaw-register`).
+- `sessions_send` and `sessions_history` from the canonical wake prompt — neither path reaches the operator's Telegram chat.
+- The `operator_session_id` field on `WakePromptInputs` — replaced with `chat_id`.
+
+### Added in 0.2.16
+
+- `klodi_rust_host::zeroclaw_chat::{ChatClient, TurnOutcome, ChatError}` — single-flight WS chat client. One turn per event, 600s ceiling, drops `chunk` buffers on `chunk_reset`, returns the agent's `done.full_response`.
+- `klodi_rust_host::telegram::{TelegramClient, TelegramError, TelegramBot, TelegramUpdate, TelegramMessage}` — thin Telegram Bot API client: `get_me` for token validation, `send` with 4096-char newline splitting + 429 retry-honouring + 5xx exponential backoff, `poll_updates` for inbound long-poll.
+- `klodi_rust_host::operator_session::{OperatorSessionController, OperatorInbox, InboundEvent, DispatchError}` — per-operator coordinator. NATS and Telegram fan into one mpsc inbox (capacity 64); the worker task drains serially, one zeroclaw turn per event, forwarding replies to Telegram.
+- `klodi_rust_host::telegram_config::{TelegramConfig, TelegramOffset, TelegramLastSend}` + read/write helpers — atomic persistence of `${KLODI_HOME}/telegram.json` (mode 0600), `${KLODI_HOME}/telegram.offset.json` (mode 0644, debug-readable), `${KLODI_HOME}/telegram.last-send.json` sidecar.
+- `klodi-zeroclaw-register` Telegram onboarding flow — validates the bot token via `getMe`, picks chat_id by polling `getUpdates` for the operator's `/start`, writes `telegram.json`, sends a hello line. New flags: `--bot-token <TOKEN>` / `TELEGRAM_BOT_TOKEN` (scripted setup), `--chat-id <N>` / `TELEGRAM_CHAT_ID` (non-interactive chat selection), `--re-pair-telegram` (rotate the bot), `--skip-telegram` (headless CI).
+- `klodi-zeroclaw-daemon --telegram-config <path>` / `TELEGRAM_CONFIG` — override the default `${KLODI_HOME}/telegram.json` location. Tests-only; production reads the default.
+- `klodi_setup_status` JSON gains `telegram_config_present`, `telegram_bot_username`, `telegram_chat_id`, `telegram_last_send_ts`. `klodi-zeroclaw-setup-status` requires `telegram.json` for `phase: "ready"`; missing surfaces `next_action: { kind: "cli", command: "klodi-zeroclaw-register" }` with a `telegram_unpaired` issue code. Other adapters' setup-status binaries keep their existing phase machine via the new opt-in `SetupStatusOptions { require_telegram: false }`.
+- `SetupStatusOptions` + `klodi_setup_status_with_options(klodi_home, options)` — the legacy `klodi_setup_status_with_register_cli` continues to work and defaults to `require_telegram: false`.
+- `klodi-zeroclaw 0.2.16` version bump (other adapters stay on 0.2.12). The internal `klodi-rust-host` crate stays on 0.2.0 — surface added, none removed from the public re-exports beyond the dropped `SpawnClient`.
+
+### Migration
+
+**klodi-zeroclaw operators.** Stop the 0.2.15 daemon. Talk to `@BotFather` on Telegram to create a fresh bot, copy the token, then run `klodi-zeroclaw-register --re-pair-telegram` (or the first-time `klodi-zeroclaw-register` if upgrading from before this series). The interactive prompt asks for the bot token, validates it, then asks you to send `/start` to your new bot and confirms the chat_id. Persists `${KLODI_HOME}/telegram.json` (mode 0600). The daemon now fails to start without `telegram.json` — pass `--skip-telegram` on register only for headless CI hosts that genuinely have no operator surface.
+
+Existing `${KLODI_HOME}/{nats.creds,config.json,zeroclaw.token,zeroclaw.session}` are preserved. The persistent operator session resumes via `WS /ws/chat?session_id=<existing>`; `sessions_history` carries forward.
+
+**Operator-side env changes.** `ZEROCLAW_AGENT_TOKEN` and `ZEROCLAW_FORCE_CRON_FALLBACK` are gone. `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_CONFIG` are added. `KLODI_HOME`, `KLODI_CREDS`, `KLODI_CONFIG`, `ZEROCLAW_HTTP_BASE`, `ZEROCLAW_HEALTH_PORT`, `KLODI_API_URL`, `ZEROCLAW_CONFIG`, `ZEROCLAW_CLI` continue to work as before.
+
+**Other adapters.** No migration. Moltis/IronClaw daemons still POST structured envelopes to their local wake URLs. `klodi_setup_status_with_register_cli` keeps the previous behaviour; only the new `klodi_setup_status_with_options` with `require_telegram: true` blocks `Ready` on `telegram.json`.
+
+**Out-of-tree consumers of `klodi_rust_host`.** The crate is internal-only (`publish = false`), so this surface change does not affect crates.io consumers. The vendored copy inside the `klodi-zeroclaw` .crate ships the new modules.
+
 ## [0.2.15] — 2026-05-13 — klodi-zeroclaw cron-fallback `schedule` is a bare string
 
 **klodi-zeroclaw only.** Every NATS wake against gateways that ship `/api/cron` but not `/api/agent/spawn` was 422-ing because the cron-fallback `POST /api/cron` body serialised `schedule` as `{ "at": "now" }` — upstream zeroclaw expects a bare `"now"` string. The demo (`demo/zeroclaw-live.Dockerfile` tier) froze on the first `channel.opened` / `channel.message` / `offer.proposed` wake; the daemon couldn't get a single agent turn off the ground. Pure runtime fix — no surface change.
