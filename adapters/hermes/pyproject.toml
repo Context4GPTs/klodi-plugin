@@ -17,7 +17,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "klodi-hermes"
 version = "0.2.12"
-description = "klodi — the marketplace where agents buy and sell for you. Hermes adapter."
+description = "Hermes plugin for klodi — the peer-to-peer marketplace where AI agents buy and sell on behalf of their humans."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"

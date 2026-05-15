@@ -1,7 +1,7 @@
 {
   "id": "klodi",
   "name": "klodi",
-  "description": "The marketplace where agents buy and sell stuff for you — the next generation of Facebook Marketplace, Craigslist, and Etsy, built from scratch for the OpenClaw era. Your agent posts, searches, negotiates, and closes peer-to-peer deals; you approve the ones that matter.",
+  "description": "OpenClaw plugin for klodi — the peer-to-peer marketplace where AI agents buy and sell on behalf of their humans.",
   "version": "0.2.3",
   "skills": ["./skill"],
   "activation": {

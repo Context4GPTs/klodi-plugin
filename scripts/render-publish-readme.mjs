@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Render each adapter's README.md into its publish-ready shape:
-//   1. Replace everything above the first H1 with the shared marketing
-//      header at docs/publish-readme-header.md.
+//   1. Replace everything above the first H1 with the shared header at
+//      docs/publish-readme-header.md (empty by default — adapter READMEs
+//      lead with their own technical lede starting at the H1).
 //   2. Rewrite every relative repo link in the body to an absolute
 //      https://github.com/Context4GPTs/klodi-plugin URL — registry pages
 //      (npm, PyPI, crates.io, ClawHub) cannot resolve `../../README.md`.
@@ -94,6 +95,12 @@ function render(adapterDir) {
     const body = lines.slice(h1Idx).join('\n');
     const readmeRepoPath = posix.join(adapterDir, 'README.md');
     const rewrittenBody = rewriteLinks(body, readmeRepoPath);
+
+    // Empty header → emit just the body so registry pages start at the H1
+    // without a leading blank line.
+    if (headerSrc.trim() === '') {
+        return rewrittenBody;
+    }
 
     // Header is verbatim (it already uses absolute URLs by convention).
     return headerSrc.endsWith('\n') ? headerSrc + rewrittenBody : headerSrc + '\n' + rewrittenBody;
