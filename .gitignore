@@ -154,8 +154,22 @@ klodi-plugin/packages/tool-catalog/dist/*
 # TernJS port file
 .tern-port
 
-# Claude Code worktrees
+# Claude Code harness (cc-setup, gitignored mode)
+# klodi-plugin runs the harness locally only — the entire .claude/ tree,
+# the cards/ substrate, BOARD.md, and INDEX.base stay out of git. See
+# .claude/skills/repo-bootstrap/SKILL.md for the cheat sheet.
+.claude/
 .claude/worktrees/
+.claude/worktree-description.txt
+.claude/board-state.md
+.claude/sync.log
+.claude/scheduled_tasks.lock
+.obsidian/
+cards/
+BOARD.md
+CLAUDE.md
+INDEX.base
+.mcp.json
 
 # Build-time skill copy — canonical source is klodi-plugin/skill/; each
 # adapter's publish pipeline copies it into its own adapter root via
@@ -168,10 +182,17 @@ klodi-plugin/adapters/*/skill/
 # pnpm build:vendored — never commit.
 adapters/*/.publish-stage/
 
-# Internal design docs / build plans — local-only, not shipped with the
-# repo or any release artefact. Public-facing context lives in
-# docs/decisions/ (ADRs), docs/specs/hosts/ (per-host adapter specs),
-# SECURITY.md, and docs/THREAT_MODEL.md.
+# Internal docs — local-only, not shipped with the repo or any release
+# artefact. Public-facing context lives in docs/decisions/ (ADRs),
+# docs/specs/hosts/ (per-host adapter specs), SECURITY.md, and
+# docs/THREAT_MODEL.md.
+#
+# knowledge/ and product/ are kanban-harness distillation surfaces (see
+# .claude/skills/distillation/SKILL.md) — their content is repo-internal
+# context that would leak implementation detail / unshipped product
+# thinking if published.
+docs/knowledge/
+docs/product/
 docs/plans/
 docs/reports/
 

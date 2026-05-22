@@ -96,7 +96,7 @@ ${klodi_home}/                       # mode 0700
   # IronClaw spawns klodi-ironclaw-mcp on demand per agent session.
   ```
 - **Required runtime version:** IronClaw core ≥ current (specific minimum TBD when Phase 7 ratifies).
-- **Required env / pre-existing files:** `IRONCLAW_EVENT_URL` and `IRONCLAW_AGENT_TOKEN`; `KLODI_NATS_URL`. See `docs/ENVIRONMENT.md` for the full env contract.
+- **Required env / pre-existing files:** `IRONCLAW_EVENT_URL` and `IRONCLAW_AGENT_TOKEN`; `KLODI_NATS_URL`.
 
 ## 10. Open questions
 

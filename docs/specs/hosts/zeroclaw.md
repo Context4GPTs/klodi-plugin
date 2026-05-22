@@ -113,7 +113,7 @@ ${klodi_home}/                       # mode 0700
   # Or pre-pair manually and pass ZEROCLAW_AGENT_TOKEN=<zc_…> instead.
   ```
 - **Required runtime version:** ZeroClaw core ≥ 0.7.4 (introduces the `/webhook` + `/pair` routes; older builds shipped `/hooks/wake` which is no longer supported).
-- **Required env / pre-existing files:** `ZEROCLAW_WEBHOOK_URL` and a bearer source (either `ZEROCLAW_AGENT_TOKEN` or a sidecar pairing-code file at `${KLODI_HOME}/zeroclaw.pairing-code`); `KLODI_NATS_URL`. See `docs/ENVIRONMENT.md` for the full env contract.
+- **Required env / pre-existing files:** `ZEROCLAW_WEBHOOK_URL` and a bearer source (either `ZEROCLAW_AGENT_TOKEN` or a sidecar pairing-code file at `${KLODI_HOME}/zeroclaw.pairing-code`); `KLODI_NATS_URL`.
 
 ## 10. Open questions
 

@@ -1,9 +1,20 @@
+---
+id: 0008-bundled-deps-host-ignore-scripts
+title: Runtime deps via `bundleDependencies` + host-enforced `--ignore-scripts`
+tags: [publish, supply-chain, superseded]
+card: pre-harness
+commit: 07522fc
+updated_at: 2026-04-30
+updated_by_card: pre-harness
+---
+
 # ADR-0008 — Runtime deps via `bundleDependencies` + host-enforced `--ignore-scripts`
 
-- **Status:** Superseded by [ADR-0009](./0009-vendored-ts-workspace-deps.md) (2026-04-30)
-- **Date:** 2026-04-27
-- **Supersedes:** [ADR-0003](./0003-vendored-runtime-dependencies.md)
-- **Review concern addressed:** *Install Mechanism — the previous packaging (ADR-0003) maintained two parallel sources of truth for the runtime dependency graph and depended on ClawHub-specific ingest behaviour. The plugin must boot identically through every supported install path while preserving the no-install-time-code-execution guarantee.*
+## Status
+
+**Superseded** by [ADR-0009](./0009-vendored-ts-workspace-deps.md) on 2026-04-30. Supersedes [ADR-0003](./0003-vendored-runtime-dependencies.md). Original date: 2026-04-27.
+
+Addressed *Install Mechanism — the previous packaging (ADR-0003) maintained two parallel sources of truth for the runtime dependency graph and depended on ClawHub-specific ingest behaviour. The plugin must boot identically through every supported install path while preserving the no-install-time-code-execution guarantee.*
 
 > **Why superseded.** The decision below assumed ClawHub's ingest preserved the top-level `node_modules/` while stripping only `dist/node_modules/`. Inspection of `clawhub@<version>/dist/cli/commands/packages.js` (lines 517 and 542) showed `node_modules/` is hardcoded into the publish-time ignore list — it is stripped from every depth of the tree at upload, with no `bundleDependencies` awareness. The published 0.2.0 tarball reached users without the workspace deps, and `npm install` on the user's host failed to resolve `@klodi/nats-client@0.1.0` and `@klodi/tool-catalog@0.1.0` against the public registry (where they do not exist). ADR-0009 ports the cross-language vendor pattern (see `adapters/{hermes,ironclaw,moltis,nanobot,zeroclaw}/scripts/vendor.py`) to the TypeScript adapter: workspace deps ride into the tarball as inlined source under `dist/_vendor/_klodi_openclaw_<pkg>/` rather than as nested `node_modules/<pkg>/` packages.
 

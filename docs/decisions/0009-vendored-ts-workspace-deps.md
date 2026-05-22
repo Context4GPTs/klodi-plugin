@@ -1,9 +1,18 @@
+---
+id: 0009-vendored-ts-workspace-deps
+title: Workspace TS deps vendored into `dist/_vendor/` at publish time
+tags: [publish, vendoring, typescript]
+card: pre-harness
+commit: 07522fc
+updated_at: 2026-04-30
+updated_by_card: pre-harness
+---
+
 # ADR-0009 — Workspace TS deps vendored into `dist/_vendor/` at publish time
 
-- **Status:** Accepted
-- **Date:** 2026-04-30
-- **Supersedes:** [ADR-0008](./0008-bundled-deps-host-ignore-scripts.md)
-- **Review concern addressed:** *Install Mechanism — ADR-0008 assumed ClawHub's ingest preserved top-level `node_modules/` while stripping only `dist/node_modules/`. That assumption was wrong; the published 0.2.0 tarball arrived at users without the workspace deps and `npm install` failed against the public registry.*
+## Status
+
+Accepted (2026-04-30). Supersedes [ADR-0008](./0008-bundled-deps-host-ignore-scripts.md). Addresses *Install Mechanism — ADR-0008 assumed ClawHub's ingest preserved top-level `node_modules/` while stripping only `dist/node_modules/`. That assumption was wrong; the published 0.2.0 tarball arrived at users without the workspace deps and `npm install` failed against the public registry.*
 
 ## Context
 

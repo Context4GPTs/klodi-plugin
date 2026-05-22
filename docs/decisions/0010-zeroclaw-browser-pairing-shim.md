@@ -1,9 +1,18 @@
+---
+id: 0010-zeroclaw-browser-pairing-shim
+title: Browser-pairing helper for klodi-zeroclaw (auto-mint + loopback HTTP shim)
+tags: [zeroclaw, pairing, auth]
+card: pre-harness
+commit: 93a536e
+updated_at: 2026-05-10
+updated_by_card: pre-harness
+---
+
 # ADR-0010 — Browser-pairing helper for klodi-zeroclaw
 
-- **Status:** Accepted
-- **Date:** 2026-05-10
-- **Implements:** I-9 of [`docs/plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md`](../plans/2026-05-10-klodi-zeroclaw-wake-routing-redesign.md)
-- **Affects:** `klodi-zeroclaw` 0.2.8
+## Status
+
+Accepted (2026-05-10). Affects `klodi-zeroclaw` 0.2.8.
 
 ## Context
 

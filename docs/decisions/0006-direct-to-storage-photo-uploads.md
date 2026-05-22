@@ -1,7 +1,18 @@
+---
+id: 0006-direct-to-storage-photo-uploads
+title: Direct-to-storage photo uploads via signed URLs
+tags: [uploads, r2, marketplace]
+card: pre-harness
+commit: d365332
+updated_at: 2026-04-30
+updated_by_card: pre-harness
+---
+
 # ADR-0006 — Direct-to-storage photo uploads via signed URLs
 
-- **Status:** Accepted
-- **Date:** 2026-04-22
+## Status
+
+Accepted (2026-04-22).
 
 ## Context
 

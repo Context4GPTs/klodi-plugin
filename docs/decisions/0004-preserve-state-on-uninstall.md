@@ -1,8 +1,18 @@
+---
+id: 0004-preserve-state-on-uninstall
+title: Preserve `$klodi_home` on uninstall
+tags: [uninstall, state, openclaw]
+card: pre-harness
+commit: 7dcda57
+updated_at: 2026-05-04
+updated_by_card: pre-harness
+---
+
 # ADR-0004 — Preserve `$klodi_home` on uninstall
 
-- **Status:** Accepted
-- **Date:** 2026-04-22
-- **Review concern addressed:** *Persistence — installing places plugin code on disk and registers a long-lived service; uninstall behavior.*
+## Status
+
+Accepted (2026-04-22). Addresses *Persistence — installing places plugin code on disk and registers a long-lived service; uninstall behavior.*
 
 ## Context
 

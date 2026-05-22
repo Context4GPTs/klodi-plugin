@@ -1,7 +1,18 @@
+---
+id: 0005-client-side-floor-price-enforcement
+title: Floor-price enforcement client-side only
+tags: [pricing, marketplace]
+card: pre-harness
+commit: d365332
+updated_at: 2026-04-30
+updated_by_card: pre-harness
+---
+
 # ADR-0005 — Floor-price enforcement client-side only
 
-- **Status:** Accepted
-- **Date:** 2026-04-22 (revised 2026-04-30 to reflect 0.2.0 server-side `auto_reject_below` enforcement; the floor-secrecy posture is unchanged)
+## Status
+
+Accepted (2026-04-22; revised 2026-04-30 to reflect 0.2.0 server-side `auto_reject_below` enforcement — the floor-secrecy posture is unchanged).
 
 ## Context
 

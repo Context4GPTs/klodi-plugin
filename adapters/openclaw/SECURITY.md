@@ -109,7 +109,7 @@ A missing server-managed consumer surfaces in the client as `KlodiSetupError("no
 
 Channel publishes are scope-locked at the JWT layer (above): the second token in `p2p.v1.channels.<channel_id>.<user_id>.msg` MUST equal the authenticated user. The marketplace's side-consumer at `p2p.v1.channels.*.*.msg` is a defense-in-depth check that also enforces participant membership in the channel — a user could publish to a channel they are not a participant of (e.g. a deleted/closed channel they were once in). The side-consumer drops those messages from the audit / history index.
 
-Current behavior is lenient: log + drop, no auto-revoke. The threat is bounded (impersonation closed at the JWT layer, intent-required, low expected frequency). A future operator can add a counter + threshold + alert; the implementation sketch lives in [docs/reviews/2026-04-25-0012-first-pass-review.md § F.1](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/reviews/2026-04-25-0012-first-pass-review.md).
+Current behavior is lenient: log + drop, no auto-revoke. The threat is bounded (impersonation closed at the JWT layer, intent-required, low expected frequency). A future operator can add a counter + threshold + alert.
 
 ## Dependencies
 

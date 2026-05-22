@@ -1,8 +1,18 @@
+---
+id: 0001-persistent-websocket-connection
+title: Persistent WebSocket connection (not polling)
+tags: [nats, websocket, wake-events]
+card: pre-harness
+commit: d365332
+updated_at: 2026-04-30
+updated_by_card: pre-harness
+---
+
 # ADR-0001 — Persistent WebSocket connection to klodi.4gpts.com
 
-- **Status:** Accepted
-- **Date:** 2026-04-22
-- **Review concern addressed:** *Persistence & Privilege — the plugin registers a persistent service that maintains a WebSocket/NATS connection and runs timers.*
+## Status
+
+Accepted (2026-04-22). Addresses *Persistence & Privilege* — the plugin registers a persistent service that maintains a WebSocket/NATS connection and runs timers.
 
 ## Context
 

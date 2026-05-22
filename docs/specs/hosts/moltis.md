@@ -96,7 +96,7 @@ ${klodi_home}/                       # mode 0700
   # Moltis spawns klodi-moltis-mcp on demand per agent session.
   ```
 - **Required runtime version:** Moltis core ≥ current (specific minimum TBD when Phase 7 ratifies).
-- **Required env / pre-existing files:** `MOLTIS_WAKE_URL` and `MOLTIS_AGENT_TOKEN` for the daemon; `KLODI_NATS_URL` for the connection. See `docs/ENVIRONMENT.md` for the full env contract.
+- **Required env / pre-existing files:** `MOLTIS_WAKE_URL` and `MOLTIS_AGENT_TOKEN` for the daemon; `KLODI_NATS_URL` for the connection.
 
 ## 10. Open questions
 

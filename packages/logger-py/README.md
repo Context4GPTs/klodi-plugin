@@ -4,9 +4,6 @@ Python implementation of the unified `KlodiLogger` contract from
 `@klodi/tool-catalog/logging`. One contract per language (TS / Py / Rust);
 three implementations.
 
-Per **D § D15** in
-`docs/reviews/2026-04-26-klodi-plugin-multi-lens-review-decisions.md`.
-
 ## Use
 
 ```python
