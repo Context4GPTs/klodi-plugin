@@ -5,7 +5,7 @@ slug: fold-uploads-into-listing-tools
 work_type: feature
 tiers: [unit, integration, e2e]
 status: review
-agents: [expert-developer, qa-developer]
+agents: [code-quality-guardian]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
