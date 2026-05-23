@@ -4,8 +4,8 @@ title: Remove standalone upload tool, fold uploads into listing tools
 slug: fold-uploads-into-listing-tools
 work_type: feature
 tiers: [unit, integration, e2e]
-status: review
-agents: [code-quality-guardian]
+status: in-dev
+agents: [expert-developer, qa-developer]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -456,11 +456,71 @@ For the orchestrator + future audit:
 
 ## Review round 1 — code-quality-guardian
 
-<!-- verdict + issues; runs against the open PR's diff (PR was opened by expert-developer at the in-dev → review transition) -->
+**Verdict: FAIL.**
 
-### → Handoff back to In Dev (if FAIL/REVIEW)
+The implementation is sound on most axes — type safety holds across all four language stacks, secrets are absent, no `any` leaks, no `unwrap()` in Rust without explicit fallbacks, no hardcoded environment-specific values, the magic-byte tables agree across TS/Python/Rust, the sensitive-prefix lists match, the path validation is symmetric, and the per-language helpers correctly fan out to mint + concurrent PUT with index-preserving substitution. ADR-0006 is updated to describe the new flow. The skill rewrite (`photos.md`) lands cleanly. The plugin manifest, README, SECURITY.md, threat model, and tool-catalog deletions are all coherent.
 
-<!-- fix list -->
+But one P1 defect breaks the architect's chief e2e safety net: the cross-language catalog-removal grep is vacuously passing. The dev pair flagged cross-language drift as the primary risk in Discovery; the only programmatic check for that drift is broken. Fix list is short and surgical — no need to re-architect.
+
+### P1 — blocking
+
+**P1.1 `packages/tool-catalog/tests/catalog-removal.test.ts` repo-wide grep tests pass vacuously.** Three assertions ("no file under adapters/, packages/, skill/, or root code contains the tool name", "no file outside docs/decisions/0006-*.md mentions the NATS subject", "no file mentions the Rust enum variant KlodiAssetsUploadUrl") all rely on `execSync` returning the rg output. In practice, `rg` exits 1 (because of either the worktree's `.git` file pointer, missing PATH propagation to Node's `/bin/sh`, or argument quoting via `JSON.stringify`), the catch block swallows the failure, and the test returns `[]` → always passes. Reproducible with:
+
+```
+cd packages/tool-catalog && node -e "
+const { execSync } = require('node:child_process');
+const out = execSync(\`rg -lF 'p2p.v1.assets.upload-url' || true\`, { cwd: require('node:path').join(process.cwd(), '..', '..'), encoding: 'utf8' });
+console.log('OUT length:', out.length);  // → 0
+"
+```
+
+Run directly from the shell, the same `rg` invocation finds 9 matches (the new helpers + tests legitimately mention the subject, which is fine — the test's exclusion glob list is also wrong, see below). Both axes fail:
+
+1. The grep harness is broken — fix so it actually finds matches when they exist. Options: (a) read files with `node:fs.readdirSync` + ignore globs in JS instead of shelling out to rg; (b) shell out to `rg` with `shell: '/bin/zsh'` or explicit PATH inheritance; (c) call `rg` with absolute path `/opt/homebrew/bin/rg` and require the binary at lint time. Option (a) is the most robust and removes the runtime dependency on rg.
+2. The exclusion globs need updating — the new helpers + test files DO mention `p2p.v1.assets.upload-url` legitimately (as the mint subject the helpers call internally). Either: (a) tighten the assertion to only fail on `klodi_assets_upload_url` (the agent-facing tool name), not the subject literal; or (b) keep the subject-literal check but add the helper paths to the allow-list. The grep that should be RED is the agent-facing tool name being declared as a callable tool — not the NATS subject string the adapter calls internally.
+
+Without this, the e2e cross-language parity claim ("Given a fresh install of any adapter ... klodi_assets_upload_url is not in the list") has no programmatic enforcement. The next person to re-add the tool will see green CI.
+
+### P2 — non-blocking
+
+- **P2.1 `formatPhotoError` (openclaw/src/tools/listings.ts:277-284) has a dead-code ternary.** Both branches of `err.path ? ... : ...` produce the identical string `` `${err.stage}: ${err.message}` ``. The docstring claims "which path failed, at which stage, and the human explanation" but `err.path` is discarded — the agent only sees the path via interpolation in `err.message`. Either delete the dead branch and document that the path lives in the message text, or expose `err.path` as a structured field (which would also fix P2.2 below).
+- **P2.2 Cross-language error-envelope shape divergence.** openclaw returns a plain string in `result.content[0].text`; hermes / nanobot return `json.dumps({"error": stage, "message": str(err), "path": err.path})`; the Rust host wraps it in `McpError::invalid_request(message, Some({"error": stage, "message": ..., "path": ...}))`. The qa tests pin only "path appears in message text" + "stage tag is mentioned" so they don't catch this, but the architect's Discovery flagged envelope-shape parity as the primary cross-language risk. The agent's downstream parsing logic will differ adapter-by-adapter. Recommend either: lift openclaw to emit the same JSON-object shape (parallel to hermes), or normalise hermes/nanobot/Rust to a plain string (parallel to openclaw). Pick one — but don't ship three.
+- **P2.3 No structured logging on photo failures in any adapter.** Per `code-logging` skill: errors needing operator attention (mint failed, PUT failed) must be logged with structured fields. The agent gets the envelope; the operator sees nothing. Recommend `api.logger.warn("klodi_photos_resolution_failed", { stage, path, error: err.message })` in openclaw's `applyPhotos`/`formatPhotoError`, equivalent `log.warning` calls in hermes/nanobot, equivalent `tracing::warn!` in Rust's `apply_photos`. Particularly important for the `mint` and `put` stages — these are network failures that ops needs visibility on.
+- **P2.4 `applyPhotos` (openclaw/src/tools/listings.ts:265) silently passes through non-array `params.photos`.** `if (!Array.isArray(photos)) return params;` early-returns when `photos` is e.g. `42` or `{}`, but the Python and Rust adapters error explicitly on non-list/non-array inputs. Cross-language parity violation. Recommend rejecting with a `PhotoResolutionError(..., "type")` in openclaw to match.
+- **P2.5 ADR-0006 frontmatter `updated_at: 2026-04-30` is stale.** Body was rewritten for this card; the frontmatter date and the row in `docs/decisions/INDEX.md` still show the pre-card date. Bump to `2026-05-23` and update INDEX.md (the distillation pass would catch this — recommend the dev pair handle it before re-review since the docs are already in the diff).
+- **P2.6 Hermes/nanobot `except BaseException as err  # noqa: BLE001 — boundary` catches `KeyboardInterrupt` / `SystemExit` / `GeneratorExit`.** Three sites in hermes (`tools.py:129`, `tools.py:155`, `photos.py:223`); three in nanobot (`nanobot_tools.py:188`, `nanobot_tools.py:202`, `nanobot_tools.py:221`, `nanobot_tools.py:241`, `nanobot_photos.py:204`). The `noqa` comment documents the intent but Python convention argues against this — `except Exception` is the boundary-catching idiom; `BaseException` is for re-raising at the very top of a signal-handling loop. Recommend tightening to `except Exception` unless there is a specific reason to swallow shutdown signals through a NATS or HTTP boundary.
+
+### P3 — minor
+
+- **P3.1 Helper file size at the upper end.** `packages/klodi-rust-host/src/mcp/photos.rs` at 646 lines; `adapters/openclaw/src/tools/photos.ts` at 426. Within the 100-line/function cap (no individual function exceeds it), but the modules carry significant surface — sniff + path predicates + sensitive-prefix list + element types + error type + the main resolve + per-stage helpers + http client init. If the magic-byte table or sensitive-prefix list grows (HEIC, AVIF, additional sensitive roots), recommend factoring `sniff` and `path_predicates` into separate sub-modules. Not blocking — flagged for future work, distillation may want to capture this as a "next-touch" inline TODO.
+- **P3.2 Per-adapter Rust binaries (moltis/ironclaw/zeroclaw) not exercised under `cargo test`.** qa-developer flagged this in In Dev. Each adapter binary compiles clean (verified via `cargo build -p klodi-moltis` from this review session). The shared host that all three delegate to (`klodi-rust-host`) is fully green at 61/61. Risk is low — the per-binary plumbing is unchanged by this card. Recommend running `cargo test -p klodi-moltis -p klodi-ironclaw -p klodi-zeroclaw` once disk space is restored, before merge.
+- **P3.3 Live-verification deferred.** Known gap on the card; no host runtime was available during the dev session. Founder discretion on whether to gate merge on a live boot.
+
+### What's good — for the record
+
+- Type safety holds across all four implementations (no `any` in TS, full Python type hints, no `unwrap()` in Rust without justified fallbacks).
+- The magic-byte table, sensitive-prefix list, and stage tag vocabulary agree byte-for-byte across openclaw / hermes / nanobot / klodi-rust-host.
+- Index-preserving substitution is robust: each helper builds the `(index, local_path, upload_url, asset_url)` mapping before fanning out concurrent PUTs and assembles by index in the final array.
+- Mint-before-PUT atomicity is correctly implemented (one NATS call for the full batch; PUT failures abort the remaining; no listing dispatch on any rejection).
+- Tool descriptions in the catalog use the locked canonical phrase ("image URLs or absolute local file paths") consistently.
+- `klodi_assets_upload_url` is fully gone from the catalog, plugin manifest, all READMEs, the skill, and the threat model. `ToolName::KlodiAssetsUploadUrl` is no longer a variant; the Rust `from_name("klodi_assets_upload_url")` returns `None`.
+- Build artifacts are clean: openclaw `pnpm build` green; klodi-rust-host `cargo build --features mcp` green; klodi-moltis adapter `cargo build` green; vendored Python `schemas.json` copies do not contain the removed tool.
+
+### → Handoff back to In Dev (FAIL)
+
+Priority fix list for the dev pair, smallest to largest:
+
+1. **(P1.1, ~30 minutes)** Replace the `execSync rg ...` harness in `packages/tool-catalog/tests/catalog-removal.test.ts` with a Node-native file walk. Read `node:fs.readdirSync` recursively from the repo root, filter against the existing ignore globs, and `readFileSync` each candidate to check for the needle. The current `try { execSync(...) } catch { return []; }` is silently always-empty in this worktree environment. Verify the fix: deliberately re-add `klodi_assets_upload_url: { subject: "..." }` to `packages/tool-catalog/src/index.ts` and confirm the test goes RED.
+   - When you fix this, also tighten the exclusion list: the new helpers and tests DO legitimately reference the NATS subject `p2p.v1.assets.upload-url` (as the internal mint subject), so the subject-literal check should EITHER exclude the helper paths (`adapters/*/src/**/photos.{ts,py}`, `packages/klodi-rust-host/src/mcp/photos.rs`, all `*photos*.test.ts` / `*test_tools_photos.py`) explicitly, OR scope down to just the agent-facing tool name `klodi_assets_upload_url`. Pick one and document the choice in the test file's comment block.
+2. **(P2.4, ~5 minutes)** In `adapters/openclaw/src/tools/listings.ts:265`, change `applyPhotos` to throw `PhotoResolutionError` on a non-array `photos` value (matching hermes/nanobot/Rust). Add a unit test asserting the rejection of `photos: 42`.
+3. **(P2.1, ~5 minutes)** Delete the dead ternary in `formatPhotoError` (openclaw/src/tools/listings.ts:277-284). Either drop the `err.path` reference entirely or use it to enrich the envelope (per P2.2).
+4. **(P2.5, ~2 minutes)** Bump `docs/decisions/0006-direct-to-storage-photo-uploads.md` frontmatter `updated_at: 2026-05-23` and the matching INDEX.md row.
+5. **(P2.2, ~30 minutes)** Decide cross-language envelope shape: either (a) lift openclaw to emit `{error, message, path}` JSON like hermes/nanobot — recommended, since the Python and Rust adapters already do this and the agent can parse structured envelopes more reliably — or (b) normalise everyone to a plain string. Update the qa tests to pin the chosen shape across all three language stacks.
+6. **(P2.3, ~30 minutes)** Add structured logging for `mint` and `put` failure stages in all three language helpers. Use the stage tag as the log event name (`klodi_photos_mint_failed`, `klodi_photos_put_failed`), include the path, listing-call subject, and the underlying error.
+7. **(P2.6, ~5 minutes)** Where it doesn't compromise specific shutdown-handling logic, tighten `except BaseException` to `except Exception` in hermes/nanobot. Where `BaseException` IS deliberate (e.g. propagating a shutdown signal cleanly), comment the rationale specific to that site.
+8. **(P3.2, ~10 minutes once disk is free)** Run `cargo test -p klodi-moltis -p klodi-ironclaw -p klodi-zeroclaw` and report the result.
+
+When the dev pair pushes the fixes, re-trigger review by flipping the card back to `status: review`. The same Review will reopen against the new diff.
 
 ## Distillation — solutions-architect
 
