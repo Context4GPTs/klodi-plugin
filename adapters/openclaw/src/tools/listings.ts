@@ -21,6 +21,7 @@ import {
   onListingWithdrawn,
 } from "../service/state.js";
 import { getSellFilePath } from "../lib/paths.js";
+import { PhotoResolutionError, resolvePhotos } from "./photos.js";
 
 const SELL_FILE_HINT =
   "Write private context (floor price, logistics, private facts) into"
@@ -47,9 +48,16 @@ function registerCreate(api: PluginAPI): void {
       const err = requireCreds();
       if (err) return errorResult(err);
 
+      let resolvedPayload: Record<string, unknown>;
+      try {
+        resolvedPayload = await applyPhotos(params);
+      } catch (e) {
+        return errorResult(formatPhotoError(e));
+      }
+
       let result: Record<string, unknown>;
       try {
-        result = await rawRequest(tool.subject, params);
+        result = await rawRequest(tool.subject, resolvedPayload);
       } catch (e) {
         return errorResult(formatError(e));
       }
@@ -134,9 +142,17 @@ function registerUpdate(api: PluginAPI): void {
     async execute(_id, params) {
       const err = requireCreds();
       if (err) return errorResult(err);
+
+      let resolvedPayload: Record<string, unknown>;
+      try {
+        resolvedPayload = await applyPhotos(params);
+      } catch (e) {
+        return errorResult(formatPhotoError(e));
+      }
+
       let result: Record<string, unknown>;
       try {
-        result = await rawRequest(tool.subject, params);
+        result = await rawRequest(tool.subject, resolvedPayload);
       } catch (e) {
         return errorResult(formatError(e));
       }
@@ -234,4 +250,35 @@ function registerComments(api: PluginAPI): void {
       }
     },
   });
+}
+
+/**
+ * Resolve any local paths in `params.photos` to asset_urls and return
+ * the substituted payload. A no-op when `photos` is absent or empty.
+ * Throws PhotoResolutionError on any validation / mint / PUT failure;
+ * callers map that to errorResult via formatPhotoError().
+ */
+async function applyPhotos(
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const photos = params["photos"];
+  if (!Array.isArray(photos)) return params;
+  const resolved = await resolvePhotos(photos);
+  if (resolved === undefined) return params;
+  return { ...params, photos: resolved };
+}
+
+/**
+ * Format a PhotoResolutionError so the agent sees a structured
+ * envelope: which path failed, at which stage, and the human
+ * explanation. Non-PhotoResolutionError errors fall back to
+ * formatError().
+ */
+function formatPhotoError(err: unknown): string {
+  if (err instanceof PhotoResolutionError) {
+    return err.path
+      ? `${err.stage}: ${err.message}`
+      : `${err.stage}: ${err.message}`;
+  }
+  return formatError(err);
 }
