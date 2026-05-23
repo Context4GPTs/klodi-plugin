@@ -223,6 +223,16 @@ async fn dispatch_passthrough(
     args: JsonObject,
 ) -> Result<CallToolResult, McpError> {
     let client = handler.klodi_client().await?;
+    // For photos-aware listing tools, run params.photos through the
+    // adapter-internal validate / sniff / mint / PUT pipeline before
+    // the listing request is dispatched. The pipeline rewrites every
+    // local path into a durable asset_url, preserving index order;
+    // URL-only inputs pass through unchanged. See ADR-0006.
+    let args = if matches!(tool, ToolName::KlodiListCreate | ToolName::KlodiListUpdate) {
+        super::photos::apply_photos(client, args).await?
+    } else {
+        args
+    };
     let payload = Value::Object(args);
     let result: Value = client
         .request(tool.subject(), &payload, None)

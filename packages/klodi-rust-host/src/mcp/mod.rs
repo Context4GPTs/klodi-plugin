@@ -15,6 +15,7 @@
 //! every passthrough call within the same MCP session.
 
 mod handler;
+mod photos;
 mod resources;
 mod schemas;
 mod tools;
