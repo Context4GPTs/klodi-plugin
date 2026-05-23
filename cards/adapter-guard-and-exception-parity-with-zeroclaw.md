@@ -4,8 +4,8 @@ title: Adapter guard and exception parity with zeroclaw
 slug: adapter-guard-and-exception-parity-with-zeroclaw
 work_type: feature
 tiers: [unit, integration, e2e]
-status: stand-by
-agents: []
+status: in-dev
+agents: [expert-developer, qa-developer]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
