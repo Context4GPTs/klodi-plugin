@@ -4,7 +4,7 @@ title: Remove standalone upload tool, fold uploads into listing tools
 slug: fold-uploads-into-listing-tools
 work_type: feature
 tiers: [unit, integration, e2e]
-status: stand-by
+status: in-dev
 agents: [expert-developer, qa-developer]
 priority: 2
 created: 2026-05-23
@@ -348,9 +348,41 @@ The two open questions (atomic-vs-partial, absolute-paths-only) are baked into t
 - [ ] `code-quality-guardian` verdict ≥ REVIEW.
 - [ ] Distillation pass adds ADR-0006 update + any inline `// See ADR-0006` references in the new photo helpers.
 
-## In Dev — <agents>
+## In Dev — qa-developer + expert-developer
 
 <!-- implementation + test notes -->
+
+### Test plan — qa-developer
+
+**Adapter ordering follows the architect's plan: openclaw → tool-catalog → hermes → nanobot → klodi-rust-host (Rust trio inherits) → skill/ → docs.**
+
+Tests are the spec. Each failing test below pins one acceptance criterion. The developer's job is to make the test green; the test never moves to match the implementation. Filed test paths are absolute.
+
+**openclaw (TS, vitest)** — `/Users/knitlybak/GitHub/4gpts/klodi/klodi-plugin/adapters/openclaw/src/__tests__/`
+
+- `tools/photos.test.ts` (NEW) — exercises both `klodi_list_create` and `klodi_list_update` with the photo-resolution semantics. Mocks NATS via existing `mock-nats.ts`; mocks `globalThis.fetch` for R2 PUTs (same pattern as `register-poller.test.ts`).
+- `skill-content.test.ts` (NEW) — repo-grep assertion that `klodi_assets_upload_url` is gone from `skill/references/*.md`, `openclaw.plugin.json`, READMEs, plugin manifests.
+- `tools/listings.test.ts` (extension) — extend with the existing photo-less `klodi_list_create` smoke to confirm no regression on `photos: undefined` and `photos: []`.
+- `tools/media.test.ts` (DELETE — qa-only operation) — slated for removal once the developer is ready to delete `tools/media.ts` itself; coordinated via a follow-up commit, not the first one.
+- `index.test.ts` (extension) — assert `registerMediaTools` import and call are gone after `tools/media.ts` is deleted.
+
+**hermes / nanobot (py, pytest)** — `adapters/{hermes,nanobot}/tests/`
+
+- New `test_tools_photos.py` per adapter exercising the listings request bridge with the photo-resolution helper. Mocks the NATS client (existing fakes already in `test_tools.py`); patches `httpx`/`urllib` for the R2 PUT.
+- Catalog-removal assertion in `test_tools.py` extensions: `assert "klodi_assets_upload_url" not in TOOL_SCHEMAS`.
+
+**klodi-rust-host (Rust, cargo test)** — `packages/klodi-rust-host/src/mcp/`
+
+- Extend `tools.rs::tests` to assert `!names.contains(&"klodi_assets_upload_url")` (catalog removal). Add an integration-style test that hits `dispatch_passthrough` for `KlodiListCreate` with a local path and asserts the NATS payload's `photos` array was substituted. `wiremock` is already in `dev-dependencies`.
+
+**Sharing & parity**
+
+- A single fixtures table (the JPEG/PNG/WebP magic-byte triples, the PDF rejection envelope, the oversize fixture) lives at `tests/fixtures/photos/` and is re-read by each adapter suite to enforce cross-language parity.
+
+### Status flip note
+
+This was the first commit: `stand-by → in-dev`. Subsequent commits land one RED test per acceptance criterion in the order above. Pull before every commit; commit small; push immediately so the developer pair sees the test as soon as it lands.
+
 
 ### → Handoff to Review (next agent: code-quality-guardian)
 
