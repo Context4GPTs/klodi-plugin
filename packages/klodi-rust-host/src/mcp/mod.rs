@@ -17,6 +17,7 @@
 pub mod envelope;
 pub mod guards;
 mod handler;
+mod photos;
 mod resources;
 mod schemas;
 mod tools;

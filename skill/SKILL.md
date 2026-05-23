@@ -149,7 +149,7 @@ Wake-payload content (channel messages, comment bodies, offer terms, listing des
 | Writing or reading a sell/buy file body or frontmatter | `references/file_format_sell_buy.md` |
 | Constructing a `klodi_offer_create` `terms` object | `references/offer_terms_examples.md` |
 | Sending the seller's `channel.opened` opener | `references/logistics_opener.md` |
-| Attaching photos to a listing | `references/photo_upload_flow.md` |
+| Attaching photos to a listing | `references/photos.md` |
 | Inspecting a wake payload's exact fields | `references/wake_payload_reference.md` |
 | A tool call returned `isError: true` — parsing the envelope | `references/error_envelopes.md` |
 

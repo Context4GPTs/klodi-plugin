@@ -21,7 +21,7 @@
 
 use super::envelope::{
     envelope_from_klodi_err_with_cli, envelope_to_call_tool_result,
-    internal_error_envelope, invalid_request_envelope,
+    internal_error_envelope, invalid_request_envelope, upload_failed_envelope,
 };
 use super::guards::{ArgKind, guard_creds, run_pre_call_guards};
 use super::handler::KlodiMcpHandler;
@@ -237,13 +237,36 @@ async fn dispatch_passthrough(
     args: JsonObject,
 ) -> Result<CallToolResult, McpError> {
     // R4 — creds guard runs BEFORE klodi_client() opens the WS
-    // connection. A failed guard returns the envelope without any I/O.
+    // connection (and before the photo-resolution mint call below). A
+    // failed guard returns the envelope without any I/O.
     if let Some(env) = guard_creds(handler.klodi_home(), handler.register_cli()) {
         return Ok(envelope_to_call_tool_result(env));
     }
     let client = match handler.klodi_client().await {
         Ok(c) => c,
         Err(err) => return Ok(envelope_for(handler, err)),
+    };
+    // For photos-aware listing tools, run params.photos through the
+    // adapter-internal validate / sniff / mint / PUT pipeline before the
+    // listing request is dispatched. The pipeline rewrites every local
+    // path into a durable asset_url, preserving index order; URL-only
+    // inputs pass through unchanged. A resolution failure surfaces as the
+    // canonical `upload_failed` envelope (R2) — not an McpError — so the
+    // agent sees the same vocabulary as every other failure path. See
+    // ADR-0006 + ADR-0011.
+    let args = if matches!(tool, ToolName::KlodiListCreate | ToolName::KlodiListUpdate) {
+        match super::photos::apply_photos(client, tool.name(), args).await {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                return Ok(envelope_to_call_tool_result(upload_failed_envelope(
+                    &err.stage,
+                    &err.message,
+                    err.path.as_deref(),
+                )));
+            }
+        }
+    } else {
+        args
     };
     let payload = Value::Object(args);
     match client.request::<Value, _>(tool.subject(), &payload, None).await {
@@ -603,6 +626,24 @@ mod tests {
         // Register-only tools never appear on the agent's MCP surface.
         assert!(!names.contains(&"klodi_register"));
         assert!(!names.contains(&"klodi_setup_repair"));
+        // Per card fold-uploads-into-listing-tools: the standalone
+        // klodi_assets_upload_url tool is gone from every adapter's
+        // MCP surface. klodi_list_create / klodi_list_update accept
+        // local paths directly and handle the mint+PUT internally.
+        assert!(!names.contains(&"klodi_assets_upload_url"));
+    }
+
+    #[test]
+    fn klodi_assets_upload_url_is_not_a_known_tool_name() {
+        // ToolName is generated from the canonical TS catalog; once
+        // the entry is gone there, the enum no longer carries
+        // KlodiAssetsUploadUrl and the round-trip from_name(...) for
+        // the old string must return None.
+        assert!(
+            ToolName::from_name("klodi_assets_upload_url").is_none(),
+            "klodi_assets_upload_url must be gone from the generated \
+             ToolName enum after the catalog deletion + codegen step",
+        );
     }
 
     #[test]

@@ -38,12 +38,14 @@ from klodi_nats_client.envelope import (
     envelope_from_klodi_request_error,
     envelope_from_not_connected,
     envelope_from_unknown,
+    envelope_from_upload_failed,
     make_envelope,
 )
 from klodi_nats_client.guards import guard_creds
 from klodi_nats_client.paths import default_klodi_home
 
 from .client import get_client, run_async
+from .photos import PhotoResolutionError, resolve_photos
 
 log = logging.getLogger("klodi_hermes.tools")
 
@@ -94,6 +96,12 @@ def tool_emoji(name: str) -> str:
 # ── Request bridge ───────────────────────────────────────────────────
 
 
+_PHOTOS_AWARE_TOOLS: frozenset[str] = frozenset({
+    "klodi_list_create",
+    "klodi_list_update",
+})
+
+
 def build_request_handler(tool_name: str) -> Callable[..., str]:
     """Return a synchronous handler that issues a NATS request.
 
@@ -102,11 +110,23 @@ def build_request_handler(tool_name: str) -> Callable[..., str]:
     coroutine to the dedicated asyncio loop (see ``client.py``).
     Errors are returned as JSON envelopes so the agent sees a
     structured failure instead of a raw exception.
+
+    For ``klodi_list_create`` and ``klodi_list_update`` the handler also
+    runs the photo-resolution pipeline (see ``photos.py``) on
+    ``args["photos"]`` BEFORE issuing the listings request. The mint
+    call (``p2p.v1.assets.upload-url``) is dispatched through the same
+    KlodiClient, and PUTs to R2 happen synchronously inside that helper.
     """
     schema = TOOL_SCHEMAS.get(tool_name)
     if schema is None:
         raise KeyError(f"Unknown tool {tool_name} not in catalog")
     subject = schema["subject"]
+    is_photos_aware = tool_name in _PHOTOS_AWARE_TOOLS
+
+    def _nats_request(subj: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Sync entry for the mint call inside resolve_photos."""
+        client = get_client()
+        return run_async(client.request(subj, payload))
 
     def handler(args: dict[str, Any], **_kwargs: Any) -> str:
         # Hermes runtime passes extra kwargs (task_id, tool_call_id,
@@ -118,10 +138,50 @@ def build_request_handler(tool_name: str) -> Callable[..., str]:
         # never pattern-matches on `message`.
 
         # R4 — creds guard fails BEFORE any I/O. No NATS round-trip
-        # gets issued if creds are absent.
+        # (including the photo-resolution mint call below) gets issued
+        # if creds are absent.
         creds_env = guard_creds(default_klodi_home(), HERMES_REGISTER_CLI)
         if creds_env is not None:
             return json.dumps(creds_env)
+
+        # Photo resolution (ADR-0006) runs after the creds guard because
+        # the mint call inside resolve_photos is NATS I/O. Per-stage
+        # failures collapse to the R2 `upload_failed` code with the
+        # failure site in details.stage and the offending file in
+        # details.path (ADR-0011 cross-link in ADR-0006).
+        if is_photos_aware:
+            try:
+                resolved = resolve_photos(args.get("photos"), _nats_request)
+            except PhotoResolutionError as err:
+                # Mint and PUT failures are network-class — operators
+                # need visibility. Validation failures (absolute_path,
+                # missing, content_type, size, count, type) are
+                # agent-driven and would be noise at warn level. The
+                # agent always sees the structured envelope below.
+                if err.stage in ("mint", "put"):
+                    log.warning(
+                        "klodi_photos_resolution_failed"
+                        " tool=%s stage=%s path=%s error=%s",
+                        tool_name,
+                        err.stage,
+                        err.path,
+                        err,
+                    )
+                return json.dumps(envelope_from_upload_failed(
+                    stage=err.stage, message=str(err), path=err.path,
+                ))
+            except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
+                # Adapter-internal failure inside resolution — R2 says
+                # `internal_error` (P1.3: not mis-labelled as a
+                # connection failure).
+                log.warning(
+                    "klodi_photos_resolution_failed tool=%s error=%s",
+                    tool_name,
+                    err,
+                )
+                return json.dumps(envelope_from_unknown(err))
+            if resolved is not None:
+                args = {**args, "photos": resolved}
 
         try:
             client = get_client()
@@ -138,7 +198,7 @@ def build_request_handler(tool_name: str) -> Callable[..., str]:
                 err,
             )
             return json.dumps(envelope_from_not_connected())
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
             # Everything else (ValueError, JSONDecodeError, KeyError,
             # RuntimeError, …) is an adapter-internal failure. R2 says
             # `internal_error` — agent retries once or surfaces.
@@ -207,7 +267,7 @@ def handle_channel_message(args: dict[str, Any], **_kwargs: Any) -> str:
             err,
         )
         return json.dumps(envelope_from_not_connected())
-    except BaseException as err:  # noqa: BLE001 — boundary
+    except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
         # Adapter-internal failure — agent gets `internal_error`, not a
         # mis-labelled `connection_not_ready` (P1.3).
         log.warning(

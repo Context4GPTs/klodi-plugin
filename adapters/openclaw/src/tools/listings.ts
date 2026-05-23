@@ -6,13 +6,14 @@
  * deciding how to negotiate.
  */
 
-import type { PluginAPI } from "openclaw/plugin-sdk";
+import type { PluginAPI, ToolResult } from "openclaw/plugin-sdk";
 import { klodiTools } from "@klodi/tool-catalog";
 import {
   envelopeToolResult,
   jsonResult,
   rawRequest,
 } from "../lib/tool-result.js";
+import { envelopeToToolResult, makeEnvelope } from "../lib/envelope.js";
 import { runPreCallGuardsResult } from "../lib/guards.js";
 import {
   onListingCreated,
@@ -20,6 +21,7 @@ import {
   onListingWithdrawn,
 } from "../service/state.js";
 import { getSellFilePath } from "../lib/paths.js";
+import { PhotoResolutionError, resolvePhotos } from "./photos.js";
 
 // Per-host register CLI surfaced in `not_registered` recovery hints (R8).
 const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
@@ -49,9 +51,17 @@ function registerCreate(api: PluginAPI): void {
       const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
 
+      let resolvedPayload: Record<string, unknown>;
+      try {
+        resolvedPayload = await applyPhotos(params);
+      } catch (e) {
+        logPhotoFailure(api, "klodi_list_create", e);
+        return photoErrorResult(e);
+      }
+
       let result: Record<string, unknown>;
       try {
-        result = await rawRequest(tool.subject, params);
+        result = await rawRequest(tool.subject, resolvedPayload);
       } catch (e) {
         return envelopeToolResult(e);
       }
@@ -134,11 +144,22 @@ function registerUpdate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
+      // R4 — pre-call guard chain runs before any I/O, including the
+      // photo-resolution mint call in applyPhotos below.
       const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
+
+      let resolvedPayload: Record<string, unknown>;
+      try {
+        resolvedPayload = await applyPhotos(params);
+      } catch (e) {
+        logPhotoFailure(api, "klodi_list_update", e);
+        return photoErrorResult(e);
+      }
+
       let result: Record<string, unknown>;
       try {
-        result = await rawRequest(tool.subject, params);
+        result = await rawRequest(tool.subject, resolvedPayload);
       } catch (e) {
         return envelopeToolResult(e);
       }
@@ -235,5 +256,84 @@ function registerComments(api: PluginAPI): void {
         return envelopeToolResult(e);
       }
     },
+  });
+}
+
+/**
+ * Resolve any local paths in `params.photos` to asset_urls and return
+ * the substituted payload. A no-op when `photos` is absent (undefined).
+ *
+ * Non-array `photos` values (number, string, object) are rejected with
+ * `PhotoResolutionError(..., "type")` so the contract matches the
+ * Python and Rust helpers — every adapter raises rather than silently
+ * passing a malformed payload through to the marketplace.
+ *
+ * Throws PhotoResolutionError on any validation / mint / PUT failure;
+ * callers map that to the canonical `upload_failed` envelope via
+ * photoErrorResult().
+ */
+async function applyPhotos(
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const photos = params["photos"];
+  if (photos === undefined) return params;
+  if (!Array.isArray(photos)) {
+    throw new PhotoResolutionError(
+      `photos must be an array, got ${typeof photos}.`,
+      "type",
+    );
+  }
+  const resolved = await resolvePhotos(photos);
+  if (resolved === undefined) return params;
+  return { ...params, photos: resolved };
+}
+
+/**
+ * Map a photo-resolution failure to the canonical four-key envelope
+ * `ToolResult` (ADR-0011). ADR-0006's per-stage vocabulary
+ * (`absolute_path`, `missing`, `sensitive_dir`, `size`, `content_type`,
+ * `count`, `type`, `mint`, `put`) collapses into the single R2 code
+ * `upload_failed`; the failure site rides in `details.stage` and the
+ * offending file in `details.path` (ADR-0011 cross-link in ADR-0006).
+ * `recovery_hint` is `null` — the agent retries with corrected files.
+ *
+ * Parity with hermes / nanobot (`envelope_from_upload_failed`) and the
+ * Rust host: the agent sees the same `upload_failed` envelope regardless
+ * of which adapter served the call. The `path` field is `null` for
+ * failures not bound to a specific input element (count cap, non-array
+ * photos).
+ *
+ * Non-PhotoResolutionError throws (unexpected) fall through to
+ * `envelopeToolResult` → `internal_error`; they carry no stage tag.
+ */
+function photoErrorResult(err: unknown): ToolResult {
+  if (err instanceof PhotoResolutionError) {
+    return envelopeToToolResult(makeEnvelope({
+      error: "upload_failed",
+      message: err.message,
+      details: { stage: err.stage, path: err.path ?? null },
+      recovery_hint: null,
+    }));
+  }
+  return envelopeToolResult(err);
+}
+
+/**
+ * Emit a structured log line when photo resolution fails. Mint and PUT
+ * failures are network-driven and matter to operators (R2 outage, NATS
+ * timeout, credential rotation); validation failures (absolute_path,
+ * missing, content_type, size) are agent-driven and noise at warn.
+ *
+ * The agent always sees the structured envelope from `photoErrorResult`;
+ * the operator gets visibility on the network-class stages here.
+ */
+function logPhotoFailure(api: PluginAPI, tool: string, err: unknown): void {
+  if (!(err instanceof PhotoResolutionError)) return;
+  if (err.stage !== "mint" && err.stage !== "put") return;
+  api.logger.warn("klodi_photos_resolution_failed", {
+    tool,
+    stage: err.stage,
+    path: err.path ?? null,
+    error: err.message,
   });
 }

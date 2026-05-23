@@ -210,6 +210,23 @@ pub fn invalid_request_envelope(field: &str, problem: &str) -> ToolEnvelope {
     }
 }
 
+/// Photo-resolution failure — R2 `upload_failed`. Mirrors the Python
+/// `envelope_from_upload_failed` and the openclaw `photoErrorResult`.
+/// ADR-0006's per-stage vocabulary (`absolute_path`, `missing`,
+/// `sensitive_dir`, `size`, `content_type`, `count`, `type`, `mint`,
+/// `put`) collapses into the single R2 code `upload_failed`; the failure
+/// site rides in `details.stage` and the offending file in
+/// `details.path` (ADR-0011 cross-link in ADR-0006). `recovery_hint` is
+/// `None` — the agent retries with corrected files.
+pub fn upload_failed_envelope(stage: &str, message: &str, path: Option<&str>) -> ToolEnvelope {
+    ToolEnvelope {
+        error: "upload_failed".to_string(),
+        message: message.to_string(),
+        details: Some(json!({ "stage": stage, "path": path })),
+        recovery_hint: None,
+    }
+}
+
 /// Adapter-internal catch-all — R2 `internal_error`. Mirrors the Python
 /// `envelope_from_unknown` and the openclaw uncategorised-Error arm.
 /// `details.exception_class` lets operators triage; the agent retries

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 from klodi_nats_client import (
@@ -42,6 +43,7 @@ from klodi_nats_client.envelope import (
     envelope_from_klodi_request_error,
     envelope_from_not_connected,
     envelope_from_unknown,
+    envelope_from_upload_failed,
     make_envelope,
 )
 from klodi_nats_client.guards import guard_creds
@@ -53,6 +55,9 @@ from nanobot_local_tools import (
     LOCAL_TOOL_NAMES,
     dispatch_local_tool,
 )
+from nanobot_photos import PhotoResolutionError, resolve_photos
+
+log = logging.getLogger("klodi_nanobot.tools")
 
 # Per-host register CLI surfaced in `not_registered` recovery hints (R8).
 NANOBOT_REGISTER_CLI = "klodi-nanobot-register"
@@ -73,6 +78,14 @@ _PUBLISH_TOOLS: frozenset[str] = frozenset({
     # Per **D § D4** (P3-3): canonical name is `klodi_channel_message`;
     # the legacy `klodi_channel_send` was removed in 0012.
     "klodi_channel_message",
+})
+
+# Tools whose `photos` parameter is run through the adapter-internal
+# photo-resolution pipeline before the listing request is dispatched.
+# See `nanobot_photos.resolve_photos` and ADR-0006.
+_PHOTOS_AWARE_TOOLS: frozenset[str] = frozenset({
+    "klodi_list_create",
+    "klodi_list_update",
 })
 
 # Names that must NEVER reach `call_tool` (the request/reply path) —
@@ -211,7 +224,7 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             return json.dumps(envelope_from_unknown(err))
         except _CONNECTION_ERROR_TYPES:
             return json.dumps(envelope_from_not_connected())
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
             # Adapter-internal failure — R2 says `internal_error`, not
             # `connection_not_ready` (P1.3 fix).
             return json.dumps(envelope_from_unknown(err))
@@ -229,14 +242,53 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             # the same module, but degrade safely to internal_error so
             # the agent sees the canonical envelope.
             return json.dumps(envelope_from_unknown(err))
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
             return json.dumps(envelope_from_unknown(err))
         return json.dumps(local_result)
 
     # R4 — creds guard fails BEFORE any I/O for the request/reply path.
+    # This also gates the photo-resolution mint call below.
     creds_env = guard_creds(default_klodi_home(), NANOBOT_REGISTER_CLI)
     if creds_env is not None:
         return json.dumps(creds_env)
+
+    # Photo resolution (ADR-0006) runs after the creds guard because the
+    # mint call inside resolve_photos is NATS I/O. Per-stage failures
+    # collapse to the R2 `upload_failed` code with the failure site in
+    # details.stage and the offending file in details.path (ADR-0011
+    # cross-link in ADR-0006).
+    if name in _PHOTOS_AWARE_TOOLS:
+        try:
+            resolved = await resolve_photos(
+                args.get("photos"),
+                _client_request,
+            )
+        except PhotoResolutionError as err:
+            # Mint and PUT failures are network-class — operators need
+            # visibility. Validation failures (absolute_path, missing,
+            # content_type, size, count, type) are agent-driven and
+            # would be noise at warn level. The agent always sees the
+            # structured envelope below.
+            if err.stage in ("mint", "put"):
+                log.warning(
+                    "klodi_photos_resolution_failed"
+                    " tool=%s stage=%s path=%s error=%s",
+                    name,
+                    err.stage,
+                    err.path,
+                    err,
+                )
+            return json.dumps(envelope_from_upload_failed(
+                stage=err.stage, message=str(err), path=err.path,
+            ))
+        except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
+            # Adapter-internal failure inside resolution — R2 says
+            # `internal_error` (P1.3: not mis-labelled as a connection
+            # failure).
+            return json.dumps(envelope_from_unknown(err))
+        if resolved is not None:
+            args = {**args, "photos": resolved}
+
     try:
         result = await call_tool(name, args)
     except KeyError as err:
@@ -245,7 +297,7 @@ async def handle(name: str, args: dict[str, Any]) -> str:
         return json.dumps(envelope_from_klodi_request_error(err))
     except _CONNECTION_ERROR_TYPES:
         return json.dumps(envelope_from_not_connected())
-    except BaseException as err:  # noqa: BLE001 — boundary
+    except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
         # Adapter-internal failure — R2 says `internal_error` (P1.3 fix).
         return json.dumps(envelope_from_unknown(err))
     return json.dumps(result)
@@ -259,6 +311,13 @@ def _invalid_request(field: str, problem: str) -> dict[str, Any]:
         details={"field": field, "problem": problem},
         recovery_hint=None,
     )
+
+
+async def _client_request(
+    subject: str, payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Bridge ``resolve_photos`` to the shared KlodiClient singleton."""
+    return await get_client().request(subject, payload)
 
 
 __all__ = [

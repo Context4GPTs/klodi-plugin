@@ -4,7 +4,20 @@ All notable changes to klodi-plugin (every adapter — `@4gpts/klodi` for OpenCl
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). All adapters move together — they share a single version line. Pre-1.0 the public surface is not yet stable — check this file on every upgrade before bumping the pinned version.
 
-## [Unreleased]
+## [Unreleased] — fold uploads into listing tools
+
+**All adapters.** The standalone `klodi_assets_upload_url` tool is removed. `klodi_list_create` and `klodi_list_update` now accept image URLs *or* absolute local file paths in `photos` — local paths are content-sniffed, uploaded to R2 by the adapter, and substituted with the durable `asset_url` before the listing is dispatched. One tool call replaces the previous mint-PUT-attach dance. Allowlist (`image/jpeg`, `image/png`, `image/webp`), per-file 10 MB ceiling, and per-listing 10-photo cap are unchanged (ADR-0006); enforcement moves into the listing tool. All-or-nothing: any rejected path fails the entire call with a structured error naming the offending path.
+
+### Removed
+
+- `klodi_assets_upload_url` tool and the `p2p.v1.assets.upload-url` agent-facing subject. The subject is still used internally by adapters; only the agent-facing tool is gone.
+- The two-step "mint URL → PUT bytes → attach `asset_url`" flow from `skill/references/photo_upload_flow.md` (now `skill/references/photos.md`) and the Assets section of `skill/references/tool_inventory.md`.
+
+### Migration
+
+**Agents:** none — the skill teaches the new one-call flow. Restart any long-running agent session after upgrade so the host re-fetches the tool catalog and stops seeing `klodi_assets_upload_url` in its cache.
+
+**External integrators scripting against `klodi_assets_upload_url` directly:** none known (see `registry/listings.yaml` — no third-party tool references this subject). If you are one, switch to passing local paths or URLs straight into `klodi_list_create` / `klodi_list_update`; the adapter does the mint and PUT for you. Open an issue if you need the raw mint endpoint exposed as a host-side primitive.
 
 ### Adapter exception envelope and pre-call guard parity (all adapters)
 

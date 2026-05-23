@@ -42,6 +42,7 @@ __all__ = [
     "envelope_from_setup_error",
     "envelope_from_unknown",
     "envelope_from_invalid_request",
+    "envelope_from_upload_failed",
 ]
 
 
@@ -186,6 +187,27 @@ def envelope_from_invalid_request(field: str, problem: str) -> dict[str, Any]:
         error="invalid_request",
         message=f"argument `{field}` is {problem}; re-call with a corrected value",
         details={"field": field, "problem": problem},
+        recovery_hint=None,
+    )
+
+
+def envelope_from_upload_failed(
+    *, stage: str, message: str, path: str | None,
+) -> dict[str, Any]:
+    """Photo-resolution failure (R2 ``upload_failed``).
+
+    ADR-0006's per-stage error vocabulary (``absolute_path``, ``missing``,
+    ``sensitive_dir``, ``size``, ``content_type``, ``count``, ``type``,
+    ``mint``, ``put``) collapses into the single R2 code ``upload_failed``;
+    the failure site rides in ``details.stage`` and the offending file in
+    ``details.path`` (see ADR-0011 cross-link in ADR-0006). ``recovery_hint``
+    is ``None`` — the agent retries with corrected files; ``details.path``
+    names the file to fix.
+    """
+    return make_envelope(
+        error="upload_failed",
+        message=message,
+        details={"stage": stage, "path": path},
         recovery_hint=None,
     )
 
