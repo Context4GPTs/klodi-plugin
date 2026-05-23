@@ -4,8 +4,8 @@ title: Adapter guard and exception parity with zeroclaw
 slug: adapter-guard-and-exception-parity-with-zeroclaw
 work_type: feature
 tiers: [unit, integration, e2e]
-status: pr-ready
-agents: []
+status: in-dev
+agents: [expert-developer, qa-developer]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -1213,5 +1213,42 @@ The dev pair did meaningful integration work in round 2 — the libs are now the
 ## PR Ready
 
 <!-- PR url; founder notification fires here -->
+
+### → Handoff back to In Dev (base drift) — next agents: expert-developer, qa-developer
+
+<!-- Auto-appended by /board-tick freshness check when origin/<base_branch> advanced and the card branch no longer merges cleanly. Same branch, same PR — reconcile and bounce back to Review. -->
+
+**Why this bounced.** PR #3 was sitting at pr-ready. After distillation, `card/fold-uploads-into-listing-tools` (PR #2) merged into `main` as `3ca5d2f feat: fold uploads into listing tools (klodi_list_create/update accept local paths)`. GitHub now reports PR #3 as `mergeStateStatus: DIRTY, mergeable: CONFLICTING`. `git merge-tree HEAD origin/main` confirms real conflicting hunks across the tool surface — not a trivially reconcilable drift.
+
+**Base divergence.**
+
+- Card branch HEAD: `32c8586` (`card/<slug>: distilling → pr-ready`)
+- Common ancestor with `main`: `2ed1671`
+- `main` is now `34b2c96`; the load-bearing commit is `3ca5d2f` (PR #2).
+
+**What `main` introduced that this card needs to absorb.**
+
+PR #2 deletes the `klodi_assets_upload_url` tool entirely and folds upload semantics into `klodi_list_create` / `klodi_list_update` (they now accept absolute local file paths alongside URLs, resolved through a path → mint → PUT → substitute pipeline; atomic all-or-nothing; sniff-not-extension; allowlist + size + count ceilings; sensitive-dir + symlink defences). It rewrites ADR-0006 around the new one-step semantics and rewires the skill / manifests / READMEs across openclaw. The Python and Rust adapter surfaces drop the upload-url tool and gain the folded signatures. `adapters/openclaw/src/tools/media.ts` is gone in `main`.
+
+**Conflicting paths (from `git merge-tree --write-tree HEAD origin/main`).**
+
+- `adapters/hermes/src/klodi_hermes/tools.py` — both branches edit the tool surface. PR #3 added per-tool exception envelopes; `main` reshaped `klodi_list_create/update` signatures and removed the upload-url tool.
+- `adapters/nanobot/nanobot_tools.py` — same shape of conflict as hermes.
+- `adapters/openclaw/src/tools/listings.ts` — PR #3 wrapped this in the envelope + pre-call guard chain; `main` added the photo-resolution pipeline (URL pass-through, local-path resolution, mixed-array ordering, atomic failure) inside the same functions.
+- `adapters/openclaw/src/tools/media.ts` — PR #3 modified this; `main` deleted the file when the upload-url tool was removed. Decide whether any envelope/guard code from PR #3's edits belongs anywhere now (likely no — the tool is gone).
+- `adapters/openclaw/src/__tests__/tools/media.test.ts` — same shape: PR #3 added envelope coverage; `main` likely deleted or rewrote the file when the tool was removed.
+- `packages/klodi-rust-host/src/mcp/tools.rs` — PR #3 rewired the Rust host tool catalog through `envelope_for` / `envelope_from_klodi_err_with_cli`; `main` reshaped the same catalog around the folded list tools.
+- `docs/decisions/0006-direct-to-storage-photo-uploads.md` — PR #3 added a forward cross-link to ADR-0011 + `updated_at: 2026-05-23` + `updated_by_card`; `main` rewrote the ADR body for the new one-step semantics. The forward-link + metadata edits need to be re-applied on top of `main`'s new body.
+- `docs/decisions/INDEX.md` — both branches added rows at the top (ADR-0011 from this card, ADR-0006 update from `main`). Reorder so ADR-0011 sits at top, ADR-0006's updated row follows.
+
+**Reconciliation guidance (not prescription — the dev pair calls the shots).**
+
+- The product-owner Open Question §346 already flagged this exact scenario: *"the envelope shape this card defines supersedes whatever shape the sibling lands."* That ratification still holds. The folded `klodi_list_create/update` signatures from `main` are the surface; PR #3's envelope + pre-call guard chain wraps that new surface, not the pre-fold one.
+- The `upload_failed` code in ADR-0011's R2 vocabulary (added during distillation to cover ADR-0006's photo-upload stage errors) already absorbs the new path-resolution failure modes — no new code needed, but the per-tool envelope wiring inside `klodi_list_create/update` must cover the new failure modes (`absolute_path`, `not_readable`, `oversized`, `over_count`, sensitive-dir / symlink defences, allowlist rejection, atomic-failure rollback).
+- `media.ts` / `media.test.ts` deletions on `main` likely mean PR #3's envelope edits to those files are dead — drop them rather than restoring the file.
+- The drift-gate test that asserts UUID-v4 regex triplication across Rust / Python / TS (added during distillation per ADR-0011) must still run green after reconcile.
+- After reconcile lands locally, push `card/<slug>` and let CI re-validate against the new tip. CI is what catches semantic drift the textual reconcile can't see.
+
+**Status flipped.** `pr-ready → in-dev`. Same branch (`card/adapter-guard-and-exception-parity-with-zeroclaw`), same PR (#3). The next `## In Dev round 3 — expert-developer, qa-developer` section is where round-3 implementation notes / test deltas land before the next handoff to Review.
 
 <!-- Abandoned section: appended by /board-close. Records date, reason, PR state at close, worktree teardown. Heading is "## Abandoned — founder". -->
