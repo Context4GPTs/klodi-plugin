@@ -4,8 +4,8 @@ title: Remove standalone upload tool, fold uploads into listing tools
 slug: fold-uploads-into-listing-tools
 work_type: feature
 tiers: [unit, integration, e2e]
-status: discovery
-agents: [solutions-architect, product-owner, product-marketer]
+status: stand-by
+agents: [expert-developer, qa-developer]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
