@@ -65,6 +65,12 @@ const IGNORED_DIRS: ReadonlySet<string> = new Set([
   ".publish-stage",
   ".obsidian",        // contains plenty of unrelated content
   ".claude",          // hooks, agents, skills — not shipped code
+  "cards",            // gitignored kanban substrate (see repo .gitignore);
+                      // card prose discusses removed tools by name and is
+                      // never shipped. On `main` this dir does not exist —
+                      // it only materialises inside a card/<slug> worktree
+                      // (card-resident model), so the removal grep must
+                      // scope to shipped code/artifacts, not kanban prose.
 ]);
 
 /**

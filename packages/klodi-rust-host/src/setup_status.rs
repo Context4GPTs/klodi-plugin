@@ -409,7 +409,6 @@ fn derive_issues(c: &Checks<'_>, register_cli: &str) -> Vec<SetupIssue> {
             severity: IssueSeverity::Error,
             message: format!(
                 "telegram.json missing — run {register_cli} to pair Telegram (operator-facing surface for the ZeroClaw daemon).",
-                register_cli = register_cli,
             ),
             fix: NextAction::Cli {
                 command: register_cli.to_string(),

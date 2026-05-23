@@ -28,6 +28,7 @@ fails when nanobot stops registering one.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -38,16 +39,38 @@ from klodi_nats_client import (
     TOOL_SCHEMAS,
     ToolSchema,
 )
+from klodi_nats_client.envelope import (
+    envelope_from_klodi_request_error,
+    envelope_from_not_connected,
+    envelope_from_unknown,
+    envelope_from_upload_failed,
+    make_envelope,
+)
+from klodi_nats_client.guards import guard_creds
+from klodi_nats_client.paths import default_klodi_home
 
 from nanobot_client import get_client
-
-log = logging.getLogger("klodi_nanobot.tools")
 from nanobot_local_tools import (
     LOCAL_TOOL_DEFINITIONS,
     LOCAL_TOOL_NAMES,
     dispatch_local_tool,
 )
 from nanobot_photos import PhotoResolutionError, resolve_photos
+
+log = logging.getLogger("klodi_nanobot.tools")
+
+# Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+NANOBOT_REGISTER_CLI = "klodi-nanobot-register"
+
+# Exception types that signal "transport / connection is not ready".
+# Catching these specifically routes non-connection failures to
+# `internal_error` instead of the round-1 mis-labelling as
+# `connection_not_ready` (P1.3, R2).
+_CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    ConnectionError,
+    asyncio.TimeoutError,
+    TimeoutError,
+)
 
 
 _PUBLISH_TOOLS: frozenset[str] = frozenset({
@@ -174,41 +197,66 @@ async def handle(name: str, args: dict[str, Any]) -> str:
          :mod:`nanobot_local_tools` (filesystem state, browser OAuth).
       3. Anything else — generic catalog request/reply via
          :func:`call_tool`.
+
+    R4 — every state-mutating arm runs the creds guard BEFORE any I/O.
+    The two local diagnostic tools (`klodi_setup_status`, `klodi_health`)
+    are exempt per R5 (they are the *target* of recovery hints and must
+    always return their diagnostic payload). The guard chain is checked
+    on the non-exempt local-tool path too — agents see `not_registered`
+    when creds are absent, not whatever the local handler raises.
     """
+    # All error paths return the canonical four-key envelope (ADR-0011).
+    # The agent reads `error`, follows `recovery_hint`, never
+    # pattern-matches on `message`.
     if name == "klodi_channel_message":
+        # R4 — creds guard fails BEFORE any I/O.
+        creds_env = guard_creds(default_klodi_home(), NANOBOT_REGISTER_CLI)
+        if creds_env is not None:
+            return json.dumps(creds_env)
         try:
             channel_id = args["channel_id"]
             content = args["content"]
         except KeyError as err:
-            return json.dumps({
-                "error": "INVALID_REQUEST",
-                "message": f"missing required field: {err.args[0]}",
-            })
+            return json.dumps(_invalid_request(err.args[0], "missing"))
         try:
             result = await publish_channel_message(channel_id, content)
         except ValueError as err:
-            return json.dumps({"error": "INVALID_REQUEST", "message": str(err)})
-        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
-            return json.dumps({
-                "error": "transport_error",
-                "message": str(err),
-            })
+            return json.dumps(envelope_from_unknown(err))
+        except _CONNECTION_ERROR_TYPES:
+            return json.dumps(envelope_from_not_connected())
+        except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
+            # Adapter-internal failure — R2 says `internal_error`, not
+            # `connection_not_ready` (P1.3 fix).
+            return json.dumps(envelope_from_unknown(err))
         return json.dumps(result)
 
     if name in LOCAL_TOOL_NAMES:
+        # R5 — diagnostic targets of recovery hints must always return
+        # their diagnostic payload, even when creds are missing.
+        # nanobot_local_tools owns the per-tool diagnostic logic; it
+        # surfaces structured diagnostics that drive the recovery loop.
         try:
             local_result = dispatch_local_tool(name, args)
         except KeyError as err:
             # Defensive — LOCAL_TOOL_NAMES + dispatch_local_tool are in
-            # the same module, but keep the envelope shape consistent.
-            return json.dumps({"error": "UNKNOWN_TOOL", "message": str(err)})
-        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
-            return json.dumps({
-                "error": "transport_error",
-                "message": str(err),
-            })
+            # the same module, but degrade safely to internal_error so
+            # the agent sees the canonical envelope.
+            return json.dumps(envelope_from_unknown(err))
+        except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
+            return json.dumps(envelope_from_unknown(err))
         return json.dumps(local_result)
 
+    # R4 — creds guard fails BEFORE any I/O for the request/reply path.
+    # This also gates the photo-resolution mint call below.
+    creds_env = guard_creds(default_klodi_home(), NANOBOT_REGISTER_CLI)
+    if creds_env is not None:
+        return json.dumps(creds_env)
+
+    # Photo resolution (ADR-0006) runs after the creds guard because the
+    # mint call inside resolve_photos is NATS I/O. Per-stage failures
+    # collapse to the R2 `upload_failed` code with the failure site in
+    # details.stage and the offending file in details.path (ADR-0011
+    # cross-link in ADR-0006).
     if name in _PHOTOS_AWARE_TOOLS:
         try:
             resolved = await resolve_photos(
@@ -230,37 +278,39 @@ async def handle(name: str, args: dict[str, Any]) -> str:
                     err.path,
                     err,
                 )
-            return json.dumps({
-                "error": err.stage,
-                "message": str(err),
-                "path": err.path,
-            })
-        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
-            return json.dumps({
-                "error": "transport_error",
-                "message": str(err),
-            })
+            return json.dumps(envelope_from_upload_failed(
+                stage=err.stage, message=str(err), path=err.path,
+            ))
+        except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
+            # Adapter-internal failure inside resolution — R2 says
+            # `internal_error` (P1.3: not mis-labelled as a connection
+            # failure).
+            return json.dumps(envelope_from_unknown(err))
         if resolved is not None:
             args = {**args, "photos": resolved}
 
     try:
         result = await call_tool(name, args)
     except KeyError as err:
-        return json.dumps({
-            "error": "UNKNOWN_TOOL",
-            "message": str(err),
-        })
+        return json.dumps(envelope_from_unknown(err))
     except KlodiRequestError as err:
-        return json.dumps({
-            "error": err.code or "request_failed",
-            "message": str(err),
-        })
-    except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
-        return json.dumps({
-            "error": "transport_error",
-            "message": str(err),
-        })
+        return json.dumps(envelope_from_klodi_request_error(err))
+    except _CONNECTION_ERROR_TYPES:
+        return json.dumps(envelope_from_not_connected())
+    except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
+        # Adapter-internal failure — R2 says `internal_error` (P1.3 fix).
+        return json.dumps(envelope_from_unknown(err))
     return json.dumps(result)
+
+
+def _invalid_request(field: str, problem: str) -> dict[str, Any]:
+    """Local envelope for adapter-side schema rejections (R2 invalid_request)."""
+    return make_envelope(
+        error="invalid_request",
+        message=f"argument `{field}` is {problem}; re-call with a corrected value",
+        details={"field": field, "problem": problem},
+        recovery_hint=None,
+    )
 
 
 async def _client_request(

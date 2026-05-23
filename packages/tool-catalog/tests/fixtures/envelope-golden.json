@@ -1,0 +1,140 @@
+{
+  "_doc": "Cross-language envelope parity oracle. Every adapter (openclaw, hermes, nanobot, moltis, ironclaw, zeroclaw) emits the same envelope shape under matching failure modes. Each entry below pins the `error` code (exact-string match) and the `recovery_hint` template (exact-structure match after key-sort). `message` is FREE-FORM prose — adapters MAY vary the human-readable string; the parity tests do NOT pin it. `details` MAY carry transport-specific values (trace_ids, timestamps); parity tests assert STRUCTURE and the field NAMES that R2 mandates (`field`, `problem`, `consumer`, etc.). See ADR-0011 for the full contract. Adding/removing a failure-mode entry MUST happen via ADR amendment — each adapter's test suite reads this file and asserts coverage.",
+
+  "not_registered": {
+    "_when": "creds file or config.json missing under ${KLODI_HOME}",
+    "envelope": {
+      "error": "not_registered",
+      "message": null,
+      "details": null,
+      "recovery_hint": {
+        "kind": "cli",
+        "command": "klodi-<host>-register",
+        "message": null
+      }
+    }
+  },
+
+  "klodi_home_missing": {
+    "_when": "${KLODI_HOME} directory absent or unwritable for tools with on-disk side effects",
+    "envelope": {
+      "error": "klodi_home_missing",
+      "message": null,
+      "details": null,
+      "recovery_hint": {
+        "kind": "tool",
+        "tool": "klodi_setup_status",
+        "message": null
+      }
+    }
+  },
+
+  "connection_not_ready": {
+    "_when": "NATS client not connected — transport down, no responders, or connect failed",
+    "envelope": {
+      "error": "connection_not_ready",
+      "message": null,
+      "details": null,
+      "recovery_hint": {
+        "kind": "tool",
+        "tool": "klodi_setup_status",
+        "message": null
+      }
+    }
+  },
+
+  "consumer_missing_notifications": {
+    "_when": "server-managed notifications consumer absent at subscribe time",
+    "envelope": {
+      "error": "consumer_missing",
+      "message": null,
+      "details": {
+        "consumer": "notifications"
+      },
+      "recovery_hint": {
+        "kind": "tool",
+        "tool": "klodi_setup_status",
+        "message": null
+      }
+    }
+  },
+
+  "consumer_missing_channels": {
+    "_when": "server-managed channels consumer absent at subscribe time",
+    "envelope": {
+      "error": "consumer_missing",
+      "message": null,
+      "details": {
+        "consumer": "channels"
+      },
+      "recovery_hint": {
+        "kind": "tool",
+        "tool": "klodi_setup_status",
+        "message": null
+      }
+    }
+  },
+
+  "invalid_request_missing_field": {
+    "_when": "required field absent from args (caught by adapter guard)",
+    "envelope": {
+      "error": "invalid_request",
+      "message": null,
+      "details": {
+        "field": "<field-name>",
+        "problem": "missing"
+      },
+      "recovery_hint": null
+    }
+  },
+
+  "invalid_request_wrong_type": {
+    "_when": "required field is wrong type (string expected, integer received; bad UUID)",
+    "envelope": {
+      "error": "invalid_request",
+      "message": null,
+      "details": {
+        "field": "<field-name>",
+        "problem": "wrong_type"
+      },
+      "recovery_hint": null
+    }
+  },
+
+  "invalid_request_empty": {
+    "_when": "non-empty-string field receives an empty string",
+    "envelope": {
+      "error": "invalid_request",
+      "message": null,
+      "details": {
+        "field": "<field-name>",
+        "problem": "empty"
+      },
+      "recovery_hint": null
+    }
+  },
+
+  "marketplace_error_unknown_code": {
+    "_when": "server returns ANY error code from the marketplace request/reply path; adapter collapses to `marketplace_error` (the R2 closed-vocabulary catch-all) and preserves the original code under details.marketplace_error_code. The architect's open Q5 (marketplace vocabulary not enumerated in this repo) and PO's Q5 recommendation defer the more-specific subset mapping (`unauthorized` / `not_found` / `conflict` / `validation_failed` / `rate_limited`) to an ADR-0011 amendment once the marketplace's error vocabulary is documented server-side. Until then, marketplace passthrough is single-arm: `marketplace_error` with `details.marketplace_error_code` carrying the server's original code. recovery_hint stays null per architect open Q2 conservative default.",
+    "envelope": {
+      "error": "marketplace_error",
+      "message": null,
+      "details": {
+        "marketplace_error_code": "<server-code>"
+      },
+      "recovery_hint": null
+    }
+  },
+
+  "internal_error_generic": {
+    "_when": "adapter raises an exception outside the categorised set (JSON decode, panic, unexpected throw)",
+    "envelope": {
+      "error": "internal_error",
+      "message": null,
+      "details": {
+        "exception_class": "<class-name>"
+      },
+      "recovery_hint": null
+    }
+  }
+}

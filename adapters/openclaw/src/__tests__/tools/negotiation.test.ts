@@ -137,7 +137,7 @@ describe("klodi_channel_history", () => {
   it("propagates NATS errors", async () => {
     mockNatsError(
       "p2p.v1.channels.history",
-      new KlodiRequestError("not found", "NOT_FOUND"),
+      new KlodiRequestError({ error: "NOT_FOUND", message: "not found" }),
     );
     const tool = getTool(api, "klodi_channel_history");
     const result = await tool.execute("call-1", { channel_id: CHANNEL_ID });

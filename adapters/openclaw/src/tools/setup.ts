@@ -37,7 +37,8 @@ import {
 import { closeClient } from "../lib/client.js";
 import { stopWakePump, wakePumpHealth } from "../service/wake-pump.js";
 import { stopRegisterPoll } from "./register-poller.js";
-import { jsonResult, errorResult } from "../lib/tool-result.js";
+import { jsonResult } from "../lib/tool-result.js";
+import { envelopeToToolResult, makeEnvelope } from "../lib/envelope.js";
 
 interface SetupIssue {
   code: string;
@@ -137,10 +138,20 @@ function registerSetupRepair(api: PluginAPI): void {
           prior_user_id: priorUserId, removed, failures,
         });
         const paths = failures.map((f) => f.path).join(", ");
-        return errorResult(
-          `Repair incomplete. Failed to remove: ${paths}.`
-          + " Check filesystem permissions on the klodi home dir"
-          + ` (${getKlodiHome()}), then retry klodi_setup_repair.`,
+        return envelopeToToolResult(
+          makeEnvelope({
+            error: "internal_error",
+            message:
+              `Repair incomplete. Failed to remove: ${paths}. Check ` +
+              `filesystem permissions on the klodi home dir ` +
+              `(${getKlodiHome()}), then retry klodi_setup_repair.`,
+            details: { failures, removed },
+            recovery_hint: {
+              kind: "tool",
+              tool: "klodi_setup_repair",
+              message: "Retry after fixing filesystem permissions.",
+            },
+          }),
         );
       }
 

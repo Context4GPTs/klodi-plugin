@@ -30,9 +30,7 @@ These assertions stay RED until the developer:
 from __future__ import annotations
 
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -44,7 +42,7 @@ _SRC_DIR = _HERMES_DIR / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from klodi_nats_client import TOOL_SCHEMAS
+from klodi_nats_client import TOOL_SCHEMAS  # noqa: E402 — sys.path set above
 
 
 # ── Magic-number fixtures ────────────────────────────────────────────
@@ -62,6 +60,37 @@ WEBP_MAGIC = bytes(
 PDF_MAGIC = bytes([0x25, 0x50, 0x44, 0x46])
 
 LISTING_ID = "550e8400-e29b-41d4-a716-446655440000"
+
+
+# ── Creds present (R4 guard short-circuit) ───────────────────────────
+#
+# Base-drift reconciliation (round 3): `build_request_handler` now runs
+# the R4 `guard_creds` check FIRST — before the photo-resolution mint
+# call (which is NATS I/O) and before any listings dispatch. Without
+# creds present the guard returns the `not_registered` envelope and the
+# client is never called, so every photo / dispatch assertion below would
+# see `not_registered` instead of the behaviour under test. This autouse
+# fixture seeds `${KLODI_HOME}` with creds so the guard passes through to
+# the photo path. Mirrors the canonical `_klodi_home` fixture in
+# test_tools.py. See ADR-0011 R4.
+#
+# IMPORTANT: KLODI_HOME points at a dedicated subdir DISJOINT from
+# `fixtures_dir` (tmp_path/fixtures). The production photo resolver adds
+# `${KLODI_HOME}` to its sensitive-directory prefix list (photos.py
+# `_sensitive_prefixes`); if the fixture image files lived under
+# KLODI_HOME they would be rejected as "sensitive directory" and the
+# happy-path tests would fail for the wrong reason. Two sibling temp
+# dirs keep the creds dir and the upload fixtures cleanly separated.
+
+
+@pytest.fixture(autouse=True)
+def _klodi_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    home = tmp_path / "klodi-home"
+    home.mkdir()
+    monkeypatch.setenv("KLODI_HOME", str(home))
+    (home / "nats.creds").write_text("fake-creds")
+    (home / "config.json").write_text("{}")
+    return home
 
 
 # ── Catalog removal contract ─────────────────────────────────────────
@@ -535,7 +564,7 @@ def test_klodi_list_update_uploads_local_and_substitutes(
     fake_client.request.side_effect = _mock_request
 
     with patch("urllib.request.urlopen"):
-        envelope = _call_handler(
+        _call_handler(
             fake_client,
             "klodi_list_update",
             {
@@ -599,7 +628,14 @@ def test_klodi_list_create_fails_when_mint_request_errors(
 
     def _mock_request(subject: str, args: dict[str, Any]) -> Any:
         if subject == "p2p.v1.assets.upload-url":
-            raise KlodiRequestError("rate limited", "RATE_LIMITED")
+            # Envelope-form ctor (ADR-0011). The pre-reconcile 2-arg
+            # `(message, code)` form raises TypeError under the migrated
+            # KlodiRequestError signature, which would route the test
+            # through the `internal_error` arm instead of the real mint
+            # KlodiRequestError → upload_failed path under test.
+            raise KlodiRequestError(
+                {"error": "RATE_LIMITED", "message": "rate limited"}
+            )
         raise AssertionError(f"Unexpected subject reached: {subject}")
 
     # Wrap the sync mock in an async wrapper for AsyncMock.side_effect.

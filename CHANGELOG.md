@@ -19,6 +19,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 **External integrators scripting against `klodi_assets_upload_url` directly:** none known (see `registry/listings.yaml` — no third-party tool references this subject). If you are one, switch to passing local paths or URLs straight into `klodi_list_create` / `klodi_list_update`; the adapter does the mint and PUT for you. Open an issue if you need the raw mint endpoint exposed as a host-side primitive.
 
+### Adapter exception envelope and pre-call guard parity (all adapters)
+
+**Every adapter** (openclaw, hermes, nanobot, moltis, ironclaw, zeroclaw) now surfaces the same structured error envelope `{error, message, details, recovery_hint}` for every failure path, drawn from a single closed error-code vocabulary at `packages/tool-catalog/src/error-codes.ts`. The three pre-call guards (`creds_present` → `connection_ready` → `args_well_formed`) run before any I/O in every language stack. Long-running agent sessions need a restart — the openclaw flat-string `{content, isError}` shape, the hermes/nanobot partial-JSON shape, and the Rust `McpError::invalid_params` leak path are all replaced by the canonical envelope. See [ADR-0011](./docs/decisions/0011-adapter-exception-envelope.md).
+
+### Added
+
+- **Catalog (`@klodi/tool-catalog`):** `errorCodes` map (13 codes) — the cross-language canonical vocabulary. `RecoveryKind` discriminator type. Codegen step at `packages/tool-catalog/src/codegen/error-codes.ts` emitting `dist/error-codes.json`; mirrored to `packages/nats-client-py/src/klodi_nats_client/error_codes.json`. Cross-language drift gate at `packages/tool-catalog/tests/error-codes-cross-language.test.ts` (4 tests) — scans Rust + Python envelope sources for code literals and asserts every emitted code is in the TS catalog.
+- **`klodi-rust-host` (internal, shipped vendored in moltis / ironclaw / zeroclaw crates):** `mcp::envelope` module (`ToolEnvelope`, `envelope_from_klodi_err`, `envelope_from_klodi_err_with_cli`, `envelope_to_call_tool_result`, `invalid_request_envelope`, `internal_error_envelope`, `not_registered_envelope_json`). `mcp::guards` module (`guard_creds`, `guard_args`, `run_pre_call_guards`, `ArgKind` enum). `McpConfig.register_cli` field — mandatory per-host CLI name substituted into `not_registered` recovery hints (R8).
+- **`klodi-hermes` + `klodi-nanobot` (Python):** `klodi_nats_client.envelope` module (`make_envelope`, `envelope_from_klodi_request_error`, `envelope_from_invalid_request`, `envelope_from_not_connected`, `envelope_from_unknown`). `klodi_nats_client.guards` module (`guard_creds`, `guard_args`, `run_pre_call_guards`, `ArgKind`). `HERMES_REGISTER_CLI` / `NANOBOT_REGISTER_CLI` constants.
+- **`@4gpts/klodi` (openclaw):** `lib/envelope.ts` (`ToolEnvelope`, `makeEnvelope`, `envelopeFromError`, `envelopeToToolResult`). `lib/guards.ts` (`guardCreds`, `guardArgs`, `runPreCallGuards`, `runPreCallGuardsResult`, `connectionNotReadyEnvelope`, `notRegisteredEnvelope`).
+- **Bundled skill:** `skill/references/error_envelopes.md` — agent-facing documentation of the envelope shape and recovery-hint vocabulary. Cross-link audit at `packages/tool-catalog/tests/skill-coverage.test.ts` asserts every code in the catalog appears in the doc and every code in the doc exists in the catalog.
+- **E2E coverage:** `packages/klodi-rust-host/tests/e2e_envelope.rs` (4 tests) + `adapters/zeroclaw/tests/mcp_envelope_e2e.rs` (2 tests) — spawn the compiled `klodi-zeroclaw-mcp` binary with an empty `KLODI_HOME` and assert the canonical four-key envelope on stderr.
+
+### Removed
+
+- **openclaw:** `lib/tool-result.ts::formatError`, `errorResult`, `requireCreds`, `requireCredsEnvelope` — all deleted (CLAUDE.md "no backwards compatibility"). The flat-string `{content: [{type:"text", text:"<message>"}], isError: true}` return path is gone. Tools call `runPreCallGuardsResult` from `lib/guards.js` instead.
+- **`klodi-rust-host`:** `mcp::tools::map_klodi_err` — replaced by `envelope_for` → `envelope_from_klodi_err_with_cli`.
+- **hermes / nanobot:** the `except BaseException → envelope_from_not_connected()` catch-all that mislabelled every non-Klodi exception as `connection_not_ready` — replaced by the split `except _CONNECTION_ERROR_TYPES → connection_not_ready` / `except BaseException → internal_error` arms.
+
+### Migration
+
+**All adapters.** Long-running agent sessions need a restart. Agents that pattern-match on the pre-card flat-string responses break on the first failure response. The agent's recovery prompt should be updated to read the structured envelope per `skill/references/error_envelopes.md` (bundled).
+
+**Out-of-tree consumers of `klodi_nats_client` (Python).** `envelope.py` and `guards.py` are new modules. Existing `KlodiRequestError` callers continue to work; the envelope helpers are additive. The `error_codes.json` vendored alongside is the catalog's authoritative code list.
+
+**Out-of-tree consumers of `klodi_rust_host`.** Internal crate (`publish = false`); the surface change lands in moltis / ironclaw / zeroclaw via vendoring. Public re-exports add `ToolEnvelope`, `envelope_from_klodi_err`, `envelope_from_klodi_err_with_cli`, `envelope_to_call_tool_result`, `invalid_request_envelope`, `internal_error_envelope`, `not_registered_envelope_json`, `McpConfig.register_cli` (mandatory field).
+
 ## [0.2.16] — 2026-05-14 — klodi-zeroclaw Telegram bridge (supersedes wake-agent-spawn)
 
 **klodi-zeroclaw only.** zeroclaw 0.7.4 silently no-ops `sessions_send` from a concurrent operator dashboard tab and removed `/api/agent/spawn` and `/api/cron/{id}/run`. The 0.2.13 wake-agent-spawn architecture cannot be delivered as designed against shipped zeroclaw. This release pivots to Telegram as the operator surface — zeroclaw becomes the agent runtime only, never the operator UX.

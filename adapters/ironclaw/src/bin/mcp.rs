@@ -4,9 +4,11 @@
 //! IronClaw spawns one subprocess per agent session per its
 //! `[[mcp.servers]]` config; the body lives in `klodi_rust_host::mcp`.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::Parser;
-use klodi_rust_host::{McpConfig, paths, run_mcp_server};
+use klodi_rust_host::{
+    McpConfig, not_registered_envelope_json, paths, run_mcp_server,
+};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -43,17 +45,10 @@ async fn main() -> Result<()> {
     let creds_path = cli.creds.unwrap_or_else(|| klodi_home.join("nats.creds"));
     let config_path = cli.config.unwrap_or_else(|| klodi_home.join("config.json"));
 
-    if !creds_path.exists() {
-        bail!(
-            "klodi creds not found at {} — run klodi-ironclaw-register first",
-            creds_path.display(),
-        );
-    }
-    if !config_path.exists() {
-        bail!(
-            "klodi config not found at {} — run klodi-ironclaw-register first",
-            config_path.display(),
-        );
+    // Operator-facing setup-time guard. See ADR-0011.
+    if !creds_path.exists() || !config_path.exists() {
+        eprintln!("{}", not_registered_envelope_json("klodi-ironclaw-register"));
+        std::process::exit(1);
     }
 
     run_mcp_server(McpConfig {

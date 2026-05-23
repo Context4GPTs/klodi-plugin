@@ -8,13 +8,15 @@
 import type { PluginAPI } from "openclaw/plugin-sdk";
 import { klodiTools } from "@klodi/tool-catalog";
 import {
-  errorResult,
-  formatError,
+  envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCreds,
 } from "../lib/tool-result.js";
+import { runPreCallGuardsResult } from "../lib/guards.js";
 import { onTransactionTerminal } from "../service/state.js";
+
+// Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
 
 export function registerTransactionTools(api: PluginAPI): void {
   registerTxConfirm(api);
@@ -31,13 +33,17 @@ function registerTxConfirm(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "transaction_id", kind: "uuid" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -51,13 +57,17 @@ function registerTxCancel(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "transaction_id", kind: "uuid" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
+      if (guard) return guard;
       let result: Record<string, unknown>;
       try {
         result = await rawRequest(tool.subject, params);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
       if (typeof result["listing_id"] === "string") {
         onTransactionTerminal(result["listing_id"]);
@@ -75,8 +85,12 @@ function registerTxRate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "transaction_id", kind: "uuid" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
+      if (guard) return guard;
       const payload: Record<string, unknown> = {
         transaction_id: params["transaction_id"],
         rating: params["rating"],
@@ -86,7 +100,7 @@ function registerTxRate(api: PluginAPI): void {
       try {
         result = await rawRequest(tool.subject, payload);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
       if (typeof result["listing_id"] === "string") {
         onTransactionTerminal(result["listing_id"]);
@@ -107,13 +121,17 @@ function registerTxStatus(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "transaction_id", kind: "uuid" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });

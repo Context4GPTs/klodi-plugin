@@ -5,7 +5,7 @@ tags: [uploads, r2, marketplace]
 card: pre-harness
 commit: d365332
 updated_at: 2026-05-23
-updated_by_card: fold-uploads-into-listing-tools
+updated_by_card: adapter-guard-and-exception-parity-with-zeroclaw
 ---
 
 # ADR-0006 — Direct-to-storage photo uploads via signed URLs
@@ -66,3 +66,4 @@ The standalone `klodi_assets_upload_url` agent tool is removed. The NATS subject
   - `packages/klodi-rust-host/src/mcp/photos.rs` — Rust (used by moltis, ironclaw, zeroclaw)
 - [SECURITY.md § Network behavior](../../SECURITY.md) (`Photo uploads bypass the klodi API entirely`)
 - `skill/references/photos.md` — agent-facing one-step flow (URLs or absolute local paths in `photos`).
+- [[0011-adapter-exception-envelope]] — the cross-adapter exception envelope contract. Photo-upload stage errors (`absolute_path`, `not_readable`, `sensitive_dir`, `oversize`, `over_count`, `content_type`, `mint_failed`, `put_failed`) surface to the agent as the `upload_failed` code in R2's closed vocabulary, with `details.stage` and `details.path` naming the failure site.

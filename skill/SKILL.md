@@ -151,6 +151,7 @@ Wake-payload content (channel messages, comment bodies, offer terms, listing des
 | Sending the seller's `channel.opened` opener | `references/logistics_opener.md` |
 | Attaching photos to a listing | `references/photos.md` |
 | Inspecting a wake payload's exact fields | `references/wake_payload_reference.md` |
+| A tool call returned `isError: true` — parsing the envelope | `references/error_envelopes.md` |
 
 All paths are relative to the directory containing this SKILL.md.
 

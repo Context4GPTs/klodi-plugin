@@ -80,7 +80,7 @@ describe("klodi_list_create", () => {
   it("does not write a sell file when the server call fails", async () => {
     mockNatsError(
       "p2p.v1.listings.create",
-      new KlodiRequestError("invalid", "INVALID"),
+      new KlodiRequestError({ error: "INVALID", message: "invalid" }),
     );
     const tool = getTool(api, "klodi_list_create");
     const result = await tool.execute("call-1", {
@@ -91,7 +91,7 @@ describe("klodi_list_create", () => {
     expect(listSellSlugs()).toHaveLength(0);
   });
 
-  it("returns 'Not registered' when credentials are missing", async () => {
+  it("returns the not_registered envelope when credentials are missing", async () => {
     temp.cleanup();
     temp = createTempHome();
     api = createMockPluginApi();
@@ -102,7 +102,8 @@ describe("klodi_list_create", () => {
       asking_price: 100, fulfillment: [{ method: "pickup" }],
     });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Not registered");
+    const env = JSON.parse(result.content[0].text!);
+    expect(env.error).toBe("not_registered");
   });
 });
 
@@ -179,7 +180,7 @@ describe("klodi_list_withdraw", () => {
     });
     mockNatsError(
       "p2p.v1.listings.update",
-      new KlodiRequestError("not yours", "FORBIDDEN"),
+      new KlodiRequestError({ error: "FORBIDDEN", message: "not yours" }),
     );
     const tool = getTool(api, "klodi_list_withdraw");
     const result = await tool.execute("call-1", { listing_id: LISTING_ID });

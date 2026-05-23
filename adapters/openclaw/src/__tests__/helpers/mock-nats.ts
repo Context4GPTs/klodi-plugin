@@ -145,13 +145,25 @@ export function isClientConnected(): boolean {
   return connected;
 }
 
+interface ParsedError {
+  error: string;
+  message?: string;
+  details?: unknown;
+}
+
+/**
+ * Mirrors the production `KlodiRequestError` constructor in
+ * `packages/nats-client-ts/src/client.ts`. Tests construct it with an
+ * envelope: `new KlodiRequestError({error, message, details})`.
+ * See ADR-0011.
+ */
 export class KlodiRequestError extends Error {
-  constructor(
-    message: string,
-    readonly code?: string,
-    readonly details?: unknown,
-  ) {
-    super(message);
+  public readonly code: string;
+  public readonly details: unknown;
+  constructor(envelope: ParsedError) {
+    super(envelope.message ?? envelope.error);
     this.name = "KlodiRequestError";
+    this.code = envelope.error;
+    this.details = envelope.details;
   }
 }

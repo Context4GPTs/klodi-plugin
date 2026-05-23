@@ -759,9 +759,16 @@ describe("klodi_list_create — atomic failure (integration)", () => {
     const { mockNatsError, KlodiRequestError } = await import(
       "../helpers/mock-nats.js"
     );
+    // Envelope-form ctor (ADR-0011): the mock `KlodiRequestError` takes
+    // `{error, message}`. The pre-reconcile 2-arg `(message, code)` form
+    // left `envelope.error`/`envelope.message` undefined, so the wrapped
+    // mint message lost the marketplace code. The production path catches
+    // this in resolvePhotos and re-wraps it as the `upload_failed`
+    // envelope; the marketplace message ("rate limited") rides in the
+    // envelope `message` so the agent can still branch on it.
     mockNatsError(
       "p2p.v1.assets.upload-url",
-      new KlodiRequestError("rate limited", "RATE_LIMITED"),
+      new KlodiRequestError({ error: "RATE_LIMITED", message: "rate limited" }),
     );
 
     const tool = getTool(api, "klodi_list_create");
@@ -938,37 +945,63 @@ describe("klodi_list_create — non-array photos rejection (P2.4)", () => {
   });
 });
 
-// ── Error envelope parity (P2.1 + P2.2) ─────────────────────────────────
+// ── Error envelope parity — ADR-0011 upload_failed (R1 + R2) ────────────
 //
 // All three language stacks must emit the same structured envelope shape
-// when photo resolution fails. CQG round 1 found:
-//   - openclaw returned a plain string `"<stage>: <message>"` — and the
-//     ternary `err.path ? '<a>' : '<b>'` was dead because both branches
-//     were identical (P2.1).
-//   - hermes / nanobot returned `json.dumps({"error", "message", "path"})`.
-//   - klodi-rust-host wrapped the same JSON in `McpError::invalid_request`.
+// when photo resolution fails. CQG round 1 found three divergent shapes
+// (openclaw flat string, hermes/nanobot 3-key JSON, Rust McpError).
 //
-// Canonical shape: a JSON object with `error` (stage tag),
-// `message` (human explanation, including the path), and `path` (the
-// offending raw input, or null when there is no specific path — e.g.
-// the count cap). Pinning this shape in openclaw closes the
-// cross-language drift the architect flagged in Discovery.
+// Base-drift reconciliation (round 3) folds the sibling card's
+// `fold-uploads-into-listing-tools` photo pipeline under ADR-0011. The
+// pre-fold per-stage `error` vocabulary (`absolute_path`, `missing`,
+// `content_type`, `size`, `count`, `type`, `put`) is NOT in ADR-0011's
+// closed R2 code set — those codes would let an agent see a value outside
+// the frozen vocabulary, the exact drift this card eliminates.
 //
-// The test parses `result.content[0].text` as JSON for every photo
-// failure path, asserts the three fields, and asserts the path field
-// carries the raw input verbatim (so the dead ternary cannot be
-// reintroduced — both branches must use `err.path`).
+// Canonical reconciled shape (R1 four keys, R2 closed code):
+//   {
+//     error:         "upload_failed",      // the single R2 code for this class
+//     message:       "<human, includes path>",
+//     details:       { stage: "<site>", path: "<raw|null>" },
+//     recovery_hint: null                  // agent retries with corrected files
+//   }
+// The failure SITE that the pre-fold tests pinned via `error` now rides in
+// `details.stage`; the offending file in `details.path`. This re-pin keeps
+// the full discriminating power (which stage failed, which path) and ADDS
+// the R1 four-key shape + recovery_hint assertion the pre-fold shape lacked.
+//
+// Parity oracle: hermes/nanobot `envelope_from_upload_failed`, Rust
+// `upload_failed_envelope`, openclaw `photoErrorResult` all produce this
+// exact shape. See ADR-0011 R2 (`upload_failed` row) + ADR-0006 cross-link.
 
-describe("klodi_list_create — structured error envelope (P2.1 + P2.2)", () => {
-  function parseEnvelope(text: string): {
+describe("klodi_list_create — upload_failed envelope (ADR-0011 R1 + R2)", () => {
+  interface UploadFailedEnvelope {
     error?: string;
     message?: string;
-    path?: string | null;
-  } {
-    return JSON.parse(text);
+    details?: { stage?: string; path?: string | null } | null;
+    recovery_hint?: unknown;
   }
 
-  it("absolute-path failure: emits {error: 'absolute_path', message, path}", async () => {
+  /**
+   * Parse the tool-result body and assert the ADR-0011 four-key shape for
+   * the `upload_failed` class: closed R2 code, a stage in details, and an
+   * explicit `null` recovery_hint. Returns the parsed envelope so each
+   * test can assert the stage/path that discriminates its failure mode.
+   */
+  function parseUploadFailed(text: string): UploadFailedEnvelope {
+    const env = JSON.parse(text) as UploadFailedEnvelope;
+    // R2: the agent-facing code is always the single `upload_failed` value
+    // for this class — never a per-stage tag.
+    expect(env.error).toBe("upload_failed");
+    // R1: all four keys present; recovery_hint is explicit null (not absent).
+    expect(env).toHaveProperty("recovery_hint");
+    expect(env.recovery_hint).toBeNull();
+    expect(env.details).toBeDefined();
+    expect(env.details).not.toBeNull();
+    return env;
+  }
+
+  it("absolute-path failure: error=upload_failed, details.stage=absolute_path", async () => {
     const tool = getTool(api, "klodi_list_create");
     const result = await tool.execute("call-env-relpath", {
       title: "Bad relative path",
@@ -979,15 +1012,15 @@ describe("klodi_list_create — structured error envelope (P2.1 + P2.2)", () => 
       photos: ["./img.jpg"],
     });
     expect(result.isError).toBe(true);
-    const env = parseEnvelope(result.content[0].text ?? "");
-    expect(env.error).toBe("absolute_path");
-    expect(env.path).toBe("./img.jpg");
+    const env = parseUploadFailed(result.content[0].text ?? "");
+    expect(env.details!.stage).toBe("absolute_path");
+    expect(env.details!.path).toBe("./img.jpg");
     expect(env.message).toBeDefined();
     expect(env.message!.toLowerCase()).toContain("absolute");
     expect(env.message).toContain("./img.jpg");
   });
 
-  it("missing-file failure: emits {error: 'missing', message, path}", async () => {
+  it("missing-file failure: error=upload_failed, details.stage=missing", async () => {
     const tool = getTool(api, "klodi_list_create");
     const missingPath = "/tmp/never-exists-987654321.jpg";
     const result = await tool.execute("call-env-missing", {
@@ -999,14 +1032,14 @@ describe("klodi_list_create — structured error envelope (P2.1 + P2.2)", () => 
       photos: [missingPath],
     });
     expect(result.isError).toBe(true);
-    const env = parseEnvelope(result.content[0].text ?? "");
-    expect(env.error).toBe("missing");
-    expect(env.path).toBe(missingPath);
+    const env = parseUploadFailed(result.content[0].text ?? "");
+    expect(env.details!.stage).toBe("missing");
+    expect(env.details!.path).toBe(missingPath);
     expect(env.message).toBeDefined();
     expect(env.message).toContain(missingPath);
   });
 
-  it("content-type failure: emits {error: 'content_type', message, path}", async () => {
+  it("content-type failure: error=upload_failed, details.stage=content_type", async () => {
     const path = writeFixture("doc.pdf", PDF_MAGIC);
     const tool = getTool(api, "klodi_list_create");
     const result = await tool.execute("call-env-ct", {
@@ -1018,14 +1051,14 @@ describe("klodi_list_create — structured error envelope (P2.1 + P2.2)", () => 
       photos: [path],
     });
     expect(result.isError).toBe(true);
-    const env = parseEnvelope(result.content[0].text ?? "");
-    expect(env.error).toBe("content_type");
-    expect(env.path).toBe(path);
+    const env = parseUploadFailed(result.content[0].text ?? "");
+    expect(env.details!.stage).toBe("content_type");
+    expect(env.details!.path).toBe(path);
     expect(env.message).toBeDefined();
     expect(env.message).toContain(path);
   });
 
-  it("oversize failure: emits {error: 'size', message, path}", async () => {
+  it("oversize failure: error=upload_failed, details.stage=size", async () => {
     const big = new Uint8Array(10 * 1024 * 1024 + 1);
     big.set(JPEG_MAGIC, 0);
     const path = writeFixture("huge.jpg", big);
@@ -1039,13 +1072,13 @@ describe("klodi_list_create — structured error envelope (P2.1 + P2.2)", () => 
       photos: [path],
     });
     expect(result.isError).toBe(true);
-    const env = parseEnvelope(result.content[0].text ?? "");
-    expect(env.error).toBe("size");
-    expect(env.path).toBe(path);
+    const env = parseUploadFailed(result.content[0].text ?? "");
+    expect(env.details!.stage).toBe("size");
+    expect(env.details!.path).toBe(path);
     expect(env.message).toContain(path);
   });
 
-  it("count failure: emits {error: 'count', message, path: null}", async () => {
+  it("count failure: error=upload_failed, details.stage=count, details.path=null", async () => {
     const photos = Array.from(
       { length: 11 },
       (_, i) => `https://cdn.example/${i}.jpg`,
@@ -1060,15 +1093,15 @@ describe("klodi_list_create — structured error envelope (P2.1 + P2.2)", () => 
       photos,
     });
     expect(result.isError).toBe(true);
-    const env = parseEnvelope(result.content[0].text ?? "");
-    expect(env.error).toBe("count");
-    // count is not bound to any single path — path field exists but is
-    // null / undefined. Matches the Python `None` and Rust `Option::None`.
-    expect(env.path == null).toBe(true);
+    const env = parseUploadFailed(result.content[0].text ?? "");
+    expect(env.details!.stage).toBe("count");
+    // count is not bound to any single path — details.path is null.
+    // Matches the Python `None` and Rust `Option::None`.
+    expect(env.details!.path == null).toBe(true);
     expect(env.message).toBeDefined();
   });
 
-  it("non-array failure: emits {error: 'type', message, path: null}", async () => {
+  it("non-array failure: error=upload_failed, details.stage=type, details.path=null", async () => {
     const tool = getTool(api, "klodi_list_create");
     const result = await tool.execute("call-env-type", {
       title: "Bad type",
@@ -1079,15 +1112,15 @@ describe("klodi_list_create — structured error envelope (P2.1 + P2.2)", () => 
       photos: 42 as unknown as string[],
     });
     expect(result.isError).toBe(true);
-    const env = parseEnvelope(result.content[0].text ?? "");
-    expect(env.error).toBe("type");
+    const env = parseUploadFailed(result.content[0].text ?? "");
+    expect(env.details!.stage).toBe("type");
     // type failures (whole-input shape, not a specific element) carry a
     // null path — matches Python / Rust.
-    expect(env.path == null).toBe(true);
+    expect(env.details!.path == null).toBe(true);
     expect(env.message).toBeDefined();
   });
 
-  it("PUT failure: emits {error: 'put', message, path}", async () => {
+  it("PUT failure: error=upload_failed, details.stage=put", async () => {
     const path = writeFixture("ok.jpg", JPEG_MAGIC);
     mockNatsResponse("p2p.v1.assets.upload-url", {
       uploads: [
@@ -1111,9 +1144,36 @@ describe("klodi_list_create — structured error envelope (P2.1 + P2.2)", () => 
       photos: [path],
     });
     expect(result.isError).toBe(true);
-    const env = parseEnvelope(result.content[0].text ?? "");
-    expect(env.error).toBe("put");
-    expect(env.path).toBe(path);
+    const env = parseUploadFailed(result.content[0].text ?? "");
+    expect(env.details!.stage).toBe("put");
+    expect(env.details!.path).toBe(path);
     expect(env.message).toContain(path);
+  });
+
+  it("mint failure: error=upload_failed, details.stage=mint, recovery_hint=null", async () => {
+    // Marketplace error during mint → resolvePhotos re-wraps as the
+    // canonical upload_failed envelope (stage "mint"). The marketplace
+    // message survives in `message` so the agent can still branch on it.
+    const path = writeFixture("ok.jpg", JPEG_MAGIC);
+    const { mockNatsError, KlodiRequestError } = await import(
+      "../helpers/mock-nats.js"
+    );
+    mockNatsError(
+      "p2p.v1.assets.upload-url",
+      new KlodiRequestError({ error: "RATE_LIMITED", message: "rate limited" }),
+    );
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-env-mint", {
+      title: "Mint fail",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [path],
+    });
+    expect(result.isError).toBe(true);
+    const env = parseUploadFailed(result.content[0].text ?? "");
+    expect(env.details!.stage).toBe("mint");
+    expect(env.message).toMatch(/RATE_LIMITED|rate.?limit/);
   });
 });

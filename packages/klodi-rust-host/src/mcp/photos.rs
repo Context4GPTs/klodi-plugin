@@ -26,9 +26,8 @@
 //! partial success. See ADR-0006.
 
 use klodi_nats_client::KlodiClient;
-use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use std::path::Path;
 use std::sync::OnceLock;
 use tokio::fs;
@@ -122,17 +121,6 @@ impl PhotoResolutionError {
             stage: stage.to_string(),
             path,
         }
-    }
-
-    /// Render as an `McpError` so the dispatcher can return one
-    /// envelope shape regardless of the failure category.
-    pub fn into_mcp_error(self) -> McpError {
-        let details = json!({
-            "error": self.stage,
-            "message": self.message,
-            "path": self.path,
-        });
-        McpError::invalid_request(self.message, Some(details))
     }
 }
 
@@ -584,13 +572,18 @@ fn value_type_name(v: &Value) -> &'static str {
 /// Logs `klodi_photos_resolution_failed` at warn level for mint and
 /// PUT failures (network-class — operators need visibility). Other
 /// failure stages (absolute_path, missing, content_type, size, count,
-/// type) are agent-driven and would be noise at warn level. The agent
-/// always sees the structured `McpError` envelope.
+/// type) are agent-driven and would be noise at warn level.
+///
+/// Returns the raw [`PhotoResolutionError`] on failure; the dispatcher
+/// (`dispatch_passthrough`) maps it to the canonical `upload_failed`
+/// envelope via `upload_failed_envelope` so the agent sees the same R2
+/// vocabulary as every other failure path (ADR-0011). The per-stage
+/// detail (`absolute_path`, `mint`, `put`, …) rides in `details.stage`.
 pub async fn apply_photos(
     client: &KlodiClient,
     tool_name: &str,
     mut args: Map<String, Value>,
-) -> Result<Map<String, Value>, McpError> {
+) -> Result<Map<String, Value>, PhotoResolutionError> {
     let photos_ref = args.get("photos");
     match resolve_photos(client, photos_ref).await {
         Ok(None) => Ok(args),
@@ -609,7 +602,7 @@ pub async fn apply_photos(
                     "klodi_photos_resolution_failed",
                 );
             }
-            Err(err.into_mcp_error())
+            Err(err)
         }
     }
 }
@@ -667,66 +660,79 @@ mod tests {
         assert!(is_absolute_path("\\\\server\\share\\x.jpg"));
     }
 
-    // P2.2 — envelope-shape parity. The canonical cross-language
-    // envelope is `{error: <stage>, message: <human>, path: <path | null>}`.
-    // The TS adapter emits it as `JSON.stringify(...)`; the Python
-    // adapters emit it via `json.dumps(...)`; this helper attaches the
-    // same JSON via `McpError::invalid_request(message, Some(details))`.
-    // Pin the shape so a refactor of `into_mcp_error` cannot silently
-    // drop a field.
+    // R2 envelope-shape parity (ADR-0011). Photo-resolution failures
+    // collapse to the single `upload_failed` code; the per-stage detail
+    // rides in `details.stage` and the offending file in `details.path`.
+    // The TS adapter emits this via `photoErrorResult`; the Python
+    // adapters via `envelope_from_upload_failed`; the Rust dispatcher via
+    // `upload_failed_envelope` (in `super::envelope`). Pin the shape so a
+    // refactor cannot silently drop a field or regress to the pre-R2
+    // `{error: <stage>, ...}` form.
 
     #[test]
-    fn into_mcp_error_carries_canonical_envelope_with_path() {
+    fn upload_failed_envelope_carries_stage_and_path() {
         let err = PhotoResolutionError::new(
             "photos[0] must be an absolute path: ./img.jpg",
             "absolute_path",
             Some("./img.jpg".to_string()),
         );
-        let mcp = err.into_mcp_error();
-        // The `data` payload is the parity envelope. `rmcp::ErrorData`
-        // surfaces it on the `.data` field as a serde_json::Value.
-        let details = mcp.data.as_ref().expect(
-            "PhotoResolutionError::into_mcp_error must attach a data payload \
-             carrying {error, message, path} — the canonical cross-language envelope",
+        let env = super::super::envelope::upload_failed_envelope(
+            &err.stage,
+            &err.message,
+            err.path.as_deref(),
         );
-        let obj = details.as_object().expect("data is a JSON object");
+        let value = serde_json::to_value(&env).expect("envelope serialises");
+        let obj = value.as_object().expect("envelope is a JSON object");
         assert_eq!(
             obj.get("error").and_then(Value::as_str),
-            Some("absolute_path"),
-            "stage tag must surface as the `error` field",
+            Some("upload_failed"),
+            "R2: per-stage failures collapse to the `upload_failed` code",
         );
         assert_eq!(
             obj.get("message").and_then(Value::as_str),
             Some("photos[0] must be an absolute path: ./img.jpg"),
-            "human message must surface verbatim",
+            "human message surfaces verbatim",
+        );
+        let details = obj.get("details").and_then(Value::as_object).expect("details object");
+        assert_eq!(
+            details.get("stage").and_then(Value::as_str),
+            Some("absolute_path"),
+            "failure site rides in details.stage",
         );
         assert_eq!(
-            obj.get("path").and_then(Value::as_str),
+            details.get("path").and_then(Value::as_str),
             Some("./img.jpg"),
-            "offending raw input must surface as the `path` field",
+            "offending raw input rides in details.path",
+        );
+        assert!(
+            obj.get("recovery_hint").map_or(false, Value::is_null),
+            "upload_failed carries recovery_hint=null (agent retries)",
         );
     }
 
     #[test]
-    fn into_mcp_error_carries_null_path_for_unbound_failures() {
-        // The `count` and `type` stages aren't bound to a single
-        // element — both the Python helper and the TS adapter surface
-        // `path: null` for these. Rust must match.
+    fn upload_failed_envelope_carries_null_path_for_unbound_failures() {
+        // The `count` and `type` stages aren't bound to a single element
+        // — every adapter surfaces `details.path: null` for these.
         let err = PhotoResolutionError::new(
             "Too many photos: 11 entries (max 10 per listing).",
             "count",
             None,
         );
-        let mcp = err.into_mcp_error();
-        let details = mcp.data.as_ref().expect("data payload present");
-        let obj = details.as_object().expect("data is a JSON object");
-        assert_eq!(obj.get("error").and_then(Value::as_str), Some("count"));
-        // Serde serialises `Option::None` as JSON null inside the json!
-        // macro path. Test the runtime serialisation.
+        let env = super::super::envelope::upload_failed_envelope(
+            &err.stage,
+            &err.message,
+            err.path.as_deref(),
+        );
+        let value = serde_json::to_value(&env).expect("envelope serialises");
+        let obj = value.as_object().expect("envelope is a JSON object");
+        assert_eq!(obj.get("error").and_then(Value::as_str), Some("upload_failed"));
+        let details = obj.get("details").and_then(Value::as_object).expect("details object");
+        assert_eq!(details.get("stage").and_then(Value::as_str), Some("count"));
         assert!(
-            obj.get("path").map_or(false, |v| v.is_null()),
-            "unbound failure must carry path=null in the envelope, got {:?}",
-            obj.get("path"),
+            details.get("path").map_or(false, Value::is_null),
+            "unbound failure carries details.path=null, got {:?}",
+            details.get("path"),
         );
     }
 }

@@ -32,9 +32,9 @@ _NANOBOT_DIR = _HERE.parent
 if str(_NANOBOT_DIR) not in sys.path:
     sys.path.insert(0, str(_NANOBOT_DIR))
 
-import nanobot_client as client
-import nanobot_tools as tools
-from klodi_nats_client import TOOL_SCHEMAS
+import nanobot_client as client  # noqa: E402 — sys.path set above
+import nanobot_tools as tools  # noqa: E402 — sys.path set above
+from klodi_nats_client import TOOL_SCHEMAS  # noqa: E402 — sys.path set above
 
 
 # ── Magic-number fixtures ────────────────────────────────────────────
@@ -96,8 +96,28 @@ def _make_fake_client() -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _reset_singleton() -> None:
+def _reset_singleton(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     client._CLIENT = None  # type: ignore[attr-defined]
+    # Base-drift reconciliation (round 3): `handle` now runs the R4
+    # `guard_creds` check FIRST — before the photo-resolution mint (NATS
+    # I/O) and before any listings dispatch. Without creds present the
+    # guard short-circuits with `not_registered` and `call_tool` is never
+    # reached, so every photo / dispatch / propagation assertion below
+    # would see `not_registered` instead of the behaviour under test.
+    # Seed creds so the guard passes through. See ADR-0011 R4.
+    #
+    # KLODI_HOME points at a dedicated subdir DISJOINT from `fixtures_dir`
+    # (tmp_path/fixtures): `nanobot_photos._sensitive_prefixes` adds
+    # `${KLODI_HOME}` to the sensitive-dir reject list, so fixture image
+    # files must NOT live under KLODI_HOME or the happy-path tests would
+    # fail for the wrong reason. Two sibling temp dirs keep them separate.
+    home = tmp_path / "klodi-home"
+    home.mkdir()
+    monkeypatch.setenv("KLODI_HOME", str(home))
+    (home / "nats.creds").write_text("fake-creds")
+    (home / "config.json").write_text("{}")
 
 
 @pytest.fixture
@@ -479,7 +499,7 @@ async def test_klodi_list_update_uploads_local_and_substitutes(
 
     monkeypatch.setattr(_urlreq, "urlopen", lambda *a, **k: _Noop())
 
-    envelope = await _handle(
+    await _handle(
         "klodi_list_update",
         {"listing_id": LISTING_ID, "photos": [path]},
     )
@@ -536,7 +556,14 @@ async def test_klodi_list_create_fails_when_mint_request_errors(
 
     async def _mock_request(subject: str, args: dict[str, Any]) -> Any:
         if subject == "p2p.v1.assets.upload-url":
-            raise KlodiRequestError("rate limited", "RATE_LIMITED")
+            # Envelope-form ctor (ADR-0011). The pre-reconcile 2-arg
+            # `(message, code)` form raises TypeError under the migrated
+            # KlodiRequestError signature, which would route the test
+            # through the `internal_error` arm instead of the real mint
+            # KlodiRequestError → upload_failed path under test.
+            raise KlodiRequestError(
+                {"error": "RATE_LIMITED", "message": "rate limited"}
+            )
         raise AssertionError(f"Unexpected subject reached: {subject}")
 
     fake_client.request.side_effect = _mock_request

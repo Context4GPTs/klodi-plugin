@@ -13,13 +13,15 @@ import type { PluginAPI } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { Uuid, klodiTools } from "@klodi/tool-catalog";
 import {
-  errorResult,
-  formatError,
+  envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCreds,
 } from "../lib/tool-result.js";
+import { runPreCallGuardsResult } from "../lib/guards.js";
 import { getClient } from "../lib/client.js";
+
+// Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
 
 export function registerNegotiationTools(api: PluginAPI): void {
   registerChannelCreate(api);
@@ -37,13 +39,13 @@ function registerChannelCreate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -57,15 +59,15 @@ function registerChannelMine(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       const payload: Record<string, unknown> = {};
       if (params["status"]) payload["status"] = params["status"];
       try {
         const result = await rawRequest(tool.subject, payload);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -92,14 +94,23 @@ function registerChannelMessage(api: PluginAPI): void {
       }),
     }),
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      // Adapter-side schema check mirrors the Rust dispatcher's
+      // `dispatch_channel_message` and the Python `handle_channel_message`
+      // / `handle()` paths — every adapter rejects the same malformed
+      // input with the same `invalid_request` envelope (R1 cross-adapter
+      // parity). The wire-boundary check in `publishChannelMessage` is
+      // a defence-in-depth backstop for non-adapter callers.
+      const guard = runPreCallGuardsResult(
+        params,
+        [
+          { field: "channel_id", kind: "uuid" },
+          { field: "content", kind: "non_empty_string" },
+        ],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
+      if (guard) return guard;
       const channelId = params["channel_id"] as string;
       const content = params["content"] as string;
-      // UUID v4 validation runs inside `publishChannelMessage` itself
-      // (see `nats-client-ts/src/publish.ts`). Adding a duplicate guard
-      // here would be a maintenance hazard — the canonical guard sits at
-      // the wire boundary, before subject interpolation.
       try {
         const ack = await getClient().publishChannelMessage(channelId, {
           content,
@@ -114,7 +125,7 @@ function registerChannelMessage(api: PluginAPI): void {
           sent_at: new Date().toISOString(),
         });
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -128,8 +139,8 @@ function registerChannelHistory(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       const payload: Record<string, unknown> = {
         channel_id: params["channel_id"],
       };
@@ -147,7 +158,7 @@ function registerChannelHistory(api: PluginAPI): void {
         }
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -161,13 +172,13 @@ function registerChannelClose(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });

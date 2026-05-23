@@ -487,15 +487,18 @@ async def test_handle_returns_envelope_on_local_tool_error(
     reset_singleton: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Force the dispatcher to raise a non-KeyError so we hit the
-    # transport_error branch.
+    # Force the dispatcher to raise so we hit the catch-all envelope
+    # path. Per ADR-0011 / R2, an uncategorised exception in a local
+    # tool degrades to `internal_error` (the previous `transport_error`
+    # code was outside the closed R2 vocabulary).
     def boom(name: str, args: dict) -> dict:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(tools, "dispatch_local_tool", boom)
     raw = await tools.handle("klodi_setup_status", {})
     parsed = json.loads(raw)
-    assert parsed["error"] == "transport_error"
+    assert parsed["error"] == "internal_error"
+    assert set(parsed.keys()) == {"error", "message", "details", "recovery_hint"}
 
 
 if __name__ == "__main__":

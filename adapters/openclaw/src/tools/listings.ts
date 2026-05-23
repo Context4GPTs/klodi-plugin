@@ -6,15 +6,15 @@
  * deciding how to negotiate.
  */
 
-import type { PluginAPI } from "openclaw/plugin-sdk";
+import type { PluginAPI, ToolResult } from "openclaw/plugin-sdk";
 import { klodiTools } from "@klodi/tool-catalog";
 import {
-  errorResult,
-  formatError,
+  envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCreds,
 } from "../lib/tool-result.js";
+import { envelopeToToolResult, makeEnvelope } from "../lib/envelope.js";
+import { runPreCallGuardsResult } from "../lib/guards.js";
 import {
   onListingCreated,
   onListingRelisted,
@@ -22,6 +22,9 @@ import {
 } from "../service/state.js";
 import { getSellFilePath } from "../lib/paths.js";
 import { PhotoResolutionError, resolvePhotos } from "./photos.js";
+
+// Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
 
 const SELL_FILE_HINT =
   "Write private context (floor price, logistics, private facts) into"
@@ -45,22 +48,22 @@ function registerCreate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
 
       let resolvedPayload: Record<string, unknown>;
       try {
         resolvedPayload = await applyPhotos(params);
       } catch (e) {
         logPhotoFailure(api, "klodi_list_create", e);
-        return errorResult(formatPhotoError(e));
+        return photoErrorResult(e);
       }
 
       let result: Record<string, unknown>;
       try {
         result = await rawRequest(tool.subject, resolvedPayload);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
 
       if (typeof result["listing_id"] === "string") {
@@ -99,13 +102,13 @@ function registerGet(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -119,15 +122,15 @@ function registerMine(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       const payload: Record<string, unknown> = {};
       if (params["status"]) payload["status"] = params["status"];
       try {
         const result = await rawRequest(tool.subject, payload);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -141,22 +144,24 @@ function registerUpdate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      // R4 — pre-call guard chain runs before any I/O, including the
+      // photo-resolution mint call in applyPhotos below.
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
 
       let resolvedPayload: Record<string, unknown>;
       try {
         resolvedPayload = await applyPhotos(params);
       } catch (e) {
         logPhotoFailure(api, "klodi_list_update", e);
-        return errorResult(formatPhotoError(e));
+        return photoErrorResult(e);
       }
 
       let result: Record<string, unknown>;
       try {
         result = await rawRequest(tool.subject, resolvedPayload);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
       // Note: no local sell-file mirror happens here. After D3 the floor
       // is preserved literally on disk; deriving it from `asking_price`
@@ -177,8 +182,8 @@ function registerWithdraw(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       const listingId = params["listing_id"] as string;
       try {
         const result = await rawRequest(tool.subject, {
@@ -188,7 +193,7 @@ function registerWithdraw(api: PluginAPI): void {
         api.logger.info("sell_file_deleted", { listing_id: listingId });
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -202,8 +207,8 @@ function registerRelist(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       const listingId = params["listing_id"] as string;
       const payload: Record<string, unknown> = {
         listing_id: listingId, status: "active",
@@ -215,7 +220,7 @@ function registerRelist(api: PluginAPI): void {
       try {
         result = await rawRequest(tool.subject, payload);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
       const title = (result["title"] as string) ?? listingId;
       const slug = onListingRelisted(listingId, title);
@@ -236,8 +241,8 @@ function registerComments(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       const payload: Record<string, unknown> = {
         listing_id: params["listing_id"],
       };
@@ -248,7 +253,7 @@ function registerComments(api: PluginAPI): void {
         const result = await rawRequest(tool.subject, payload);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -264,7 +269,8 @@ function registerComments(api: PluginAPI): void {
  * passing a malformed payload through to the marketplace.
  *
  * Throws PhotoResolutionError on any validation / mint / PUT failure;
- * callers map that to errorResult via formatPhotoError().
+ * callers map that to the canonical `upload_failed` envelope via
+ * photoErrorResult().
  */
 async function applyPhotos(
   params: Record<string, unknown>,
@@ -283,27 +289,33 @@ async function applyPhotos(
 }
 
 /**
- * Format a PhotoResolutionError as a canonical JSON envelope:
- *   { "error": "<stage>", "message": "<human>", "path": "<path | null>" }
+ * Map a photo-resolution failure to the canonical four-key envelope
+ * `ToolResult` (ADR-0011). ADR-0006's per-stage vocabulary
+ * (`absolute_path`, `missing`, `sensitive_dir`, `size`, `content_type`,
+ * `count`, `type`, `mint`, `put`) collapses into the single R2 code
+ * `upload_failed`; the failure site rides in `details.stage` and the
+ * offending file in `details.path` (ADR-0011 cross-link in ADR-0006).
+ * `recovery_hint` is `null` — the agent retries with corrected files.
  *
- * Parity with hermes / nanobot (Python `json.dumps({...})`) and Rust
- * (`McpError::invalid_request(..., data: {error, message, path})`):
- * the agent sees the same structured shape regardless of which adapter
- * served the call. The `path` field is `null` for failures that aren't
- * bound to a specific input element (count cap, non-array photos).
+ * Parity with hermes / nanobot (`envelope_from_upload_failed`) and the
+ * Rust host: the agent sees the same `upload_failed` envelope regardless
+ * of which adapter served the call. The `path` field is `null` for
+ * failures not bound to a specific input element (count cap, non-array
+ * photos).
  *
- * Non-PhotoResolutionError errors fall back to formatError() as a flat
- * string — those are unexpected and have no stage tag to surface.
+ * Non-PhotoResolutionError throws (unexpected) fall through to
+ * `envelopeToolResult` → `internal_error`; they carry no stage tag.
  */
-function formatPhotoError(err: unknown): string {
+function photoErrorResult(err: unknown): ToolResult {
   if (err instanceof PhotoResolutionError) {
-    return JSON.stringify({
-      error: err.stage,
+    return envelopeToToolResult(makeEnvelope({
+      error: "upload_failed",
       message: err.message,
-      path: err.path ?? null,
-    });
+      details: { stage: err.stage, path: err.path ?? null },
+      recovery_hint: null,
+    }));
   }
-  return formatError(err);
+  return envelopeToolResult(err);
 }
 
 /**
@@ -312,8 +324,8 @@ function formatPhotoError(err: unknown): string {
  * timeout, credential rotation); validation failures (absolute_path,
  * missing, content_type, size) are agent-driven and noise at warn.
  *
- * The agent always sees the structured envelope in `errorResult`; the
- * operator gets visibility on the network-class stages here.
+ * The agent always sees the structured envelope from `photoErrorResult`;
+ * the operator gets visibility on the network-class stages here.
  */
 function logPhotoFailure(api: PluginAPI, tool: string, err: unknown): void {
   if (!(err instanceof PhotoResolutionError)) return;

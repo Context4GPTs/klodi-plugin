@@ -20,18 +20,20 @@ import {
   type DeliveryFilter as DeliveryFilterShape,
 } from "@klodi/tool-catalog";
 import {
-  errorResult,
-  formatError,
+  envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCreds,
 } from "../lib/tool-result.js";
+import { runPreCallGuardsResult } from "../lib/guards.js";
 import { getBuyFilePath } from "../lib/paths.js";
 import { slugify, type ActionOnMatch } from "../lib/sell-buy-files.js";
 import {
   onBuySearchCreated,
   onBuySearchRemoved,
 } from "../service/state.js";
+
+// Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
 
 const BUY_FILE_HINT =
   "Write evaluation criteria and logistics constraints into this"
@@ -53,14 +55,14 @@ function registerSearch(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       const payload = compactPayload(params);
       try {
         const result = await rawRequest(tool.subject, payload);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -97,8 +99,8 @@ function registerWatch(api: PluginAPI): void {
       )),
     }),
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       const persist = params["persist"] === true;
       return persist
         ? createPersistentSearch(api, params)
@@ -115,7 +117,7 @@ async function runOneShotSearch(
     const result = await rawRequest(tool.subject, compactPayload(params));
     return jsonResult(result);
   } catch (e) {
-    return errorResult(formatError(e));
+    return envelopeToolResult(e);
   }
 }
 
@@ -139,7 +141,7 @@ async function createPersistentSearch(
   try {
     result = await rawRequest(tool.subject, payload);
   } catch (e) {
-    return errorResult(formatError(e));
+    return envelopeToolResult(e);
   }
 
   onBuySearchCreated(slug, {
@@ -174,13 +176,17 @@ function registerUnwatch(api: PluginAPI): void {
       }),
     }),
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "buy_slug", kind: "non_empty_string" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
+      if (guard) return guard;
       const slug = params["buy_slug"] as string;
       try {
         await rawRequest(tool.subject, { slug });
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
       onBuySearchRemoved(slug);
       api.logger.info("buy_file_removed", { slug });
@@ -197,13 +203,13 @@ function registerSearchesList(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute() {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult({}, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, {});
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -224,8 +230,8 @@ function registerComment(api: PluginAPI): void {
       }),
     }),
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, {
           listing_id: params["listing_id"],
@@ -233,7 +239,7 @@ function registerComment(api: PluginAPI): void {
         });
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
