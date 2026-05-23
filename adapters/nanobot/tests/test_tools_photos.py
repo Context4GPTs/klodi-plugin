@@ -583,3 +583,118 @@ async def test_klodi_list_update_passes_urls_verbatim_and_does_not_mint(
     assert envelope.get("listing_id") == LISTING_ID
     assert fake_client.request.await_count == 1
     assert fake_client.request.await_args.args[0] == "p2p.v1.listings.update"
+
+
+# ── P2.6 — shutdown-signal propagation (not swallowed) ────────────────
+#
+# CQG round 1 P2.6: the nanobot ``handle()`` dispatcher used `except
+# BaseException` in four sites, plus another in ``nanobot_photos``.
+# `BaseException` swallows `KeyboardInterrupt`, `SystemExit`,
+# `GeneratorExit`, and (critically for an async runtime)
+# `asyncio.CancelledError`. nanobot is async — a CancelledError that
+# never propagates means a cancelled coroutine keeps running silently,
+# leaving the cancellation request dangling. SIGINT during a long
+# photo mint must let the daemon shut down cleanly.
+#
+# Tests in this group raise `KeyboardInterrupt` (sync subclass of
+# BaseException) and `asyncio.CancelledError` (cancellation primitive
+# that should bubble through async boundaries) from the underlying
+# client.request, then assert the exception escapes `handle()` instead
+# of being converted to a `{"error": "transport_error", ...}` JSON
+# envelope.
+
+
+@pytest.mark.asyncio
+async def test_keyboard_interrupt_propagates_through_photos_mint(
+    fake_client: MagicMock,
+    fixtures_dir: Path,
+) -> None:
+    """A KeyboardInterrupt during the photo-mint NATS call must NOT
+    be swallowed into the transport_error JSON envelope. The boundary
+    catch should be `except Exception`, not `except BaseException`.
+    """
+    path = _write(fixtures_dir, "ok.jpg", JPEG_MAGIC)
+
+    async def _raise_kbd(_subject: str, _args: dict[str, Any]) -> Any:
+        raise KeyboardInterrupt("user pressed ctrl-c during mint")
+
+    fake_client.request.side_effect = _raise_kbd
+
+    with pytest.raises(KeyboardInterrupt):
+        await _handle(
+            "klodi_list_create",
+            {
+                "title": "x",
+                "description": "x",
+                "category": "home",
+                "asking_price": 100,
+                "fulfillment": [{"method": "pickup"}],
+                "photos": [path],
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_error_propagates_through_photos_mint(
+    fake_client: MagicMock,
+    fixtures_dir: Path,
+) -> None:
+    """asyncio.CancelledError is the primitive the runtime uses to
+    unwind a cancelled task. A `except BaseException` catch in the
+    photos dispatcher would convert a cancellation into a JSON
+    envelope and keep the coroutine running — breaking cancellation
+    semantics. The narrower `except Exception` lets it propagate.
+    """
+    path = _write(fixtures_dir, "ok.jpg", JPEG_MAGIC)
+
+    async def _raise_cancel(_subject: str, _args: dict[str, Any]) -> Any:
+        raise asyncio.CancelledError()
+
+    fake_client.request.side_effect = _raise_cancel
+
+    with pytest.raises(asyncio.CancelledError):
+        await _handle(
+            "klodi_list_create",
+            {
+                "title": "x",
+                "description": "x",
+                "category": "home",
+                "asking_price": 100,
+                "fulfillment": [{"method": "pickup"}],
+                "photos": [path],
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_keyboard_interrupt_propagates_on_non_photos_request(
+    fake_client: MagicMock,
+) -> None:
+    """The outer `except` around `call_tool` (the non-photos request
+    path) must also let shutdown signals propagate. Same root cause:
+    narrow catch to `Exception`.
+    """
+
+    async def _raise_kbd(_subject: str, _args: dict[str, Any]) -> Any:
+        raise KeyboardInterrupt("user pressed ctrl-c during listings call")
+
+    fake_client.request.side_effect = _raise_kbd
+
+    with pytest.raises(KeyboardInterrupt):
+        await _handle("klodi_list_mine", {})
+
+
+@pytest.mark.asyncio
+async def test_cancelled_error_propagates_on_non_photos_request(
+    fake_client: MagicMock,
+) -> None:
+    """Cancellation through the non-photos request path. Same
+    propagation contract as the photos-aware path."""
+
+    async def _raise_cancel(_subject: str, _args: dict[str, Any]) -> Any:
+        raise asyncio.CancelledError()
+
+    fake_client.request.side_effect = _raise_cancel
+
+    with pytest.raises(asyncio.CancelledError):
+        await _handle("klodi_list_mine", {})

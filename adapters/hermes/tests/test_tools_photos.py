@@ -652,3 +652,103 @@ def test_klodi_list_update_passes_urls_verbatim_and_does_not_mint(
     assert envelope.get("listing_id") == LISTING_ID
     assert fake_client.request.await_count == 1
     assert fake_client.request.await_args.args[0] == "p2p.v1.listings.update"
+
+
+# ── P2.6 — shutdown-signal propagation (not swallowed) ────────────────
+#
+# CQG round 1 P2.6: the handlers used `except BaseException` to wrap
+# transport errors into a JSON envelope. That broad catch swallows
+# `KeyboardInterrupt`, `SystemExit`, and `GeneratorExit` — signals
+# Python uses to unwind the process cleanly. Hermes runs in a daemon
+# loop; if a SIGINT arrives during the photos mint or the listings
+# request, the handler must let the signal propagate so the daemon
+# can shut down — not return `{"error": "klodi_unavailable", ...}` as
+# if nothing happened.
+#
+# Tests in this group make the patched fake client raise
+# `KeyboardInterrupt` from the underlying request, then assert that
+# the exception escapes the handler instead of being converted to a
+# JSON envelope. The same scaffolding covers the mint-time and the
+# listings-time catch paths.
+
+
+def test_keyboard_interrupt_propagates_through_photos_mint(
+    fake_client: MagicMock,
+    fixtures_dir: Path,
+) -> None:
+    """A SIGINT during the photo-mint NATS call must NOT be swallowed
+    into a JSON envelope. The boundary catch should be `except
+    Exception`, not `except BaseException`.
+    """
+    path = _write_file(fixtures_dir, "ok.jpg", JPEG_MAGIC)
+
+    async def _raise_kbd(_subject: str, _args: dict[str, Any]) -> Any:
+        raise KeyboardInterrupt("user pressed ctrl-c during mint")
+
+    fake_client.request.side_effect = _raise_kbd
+
+    with pytest.raises(KeyboardInterrupt):
+        _call_handler(
+            fake_client,
+            "klodi_list_create",
+            {
+                "title": "x",
+                "description": "x",
+                "category": "home",
+                "asking_price": 100,
+                "fulfillment": [{"method": "pickup"}],
+                "photos": [path],
+            },
+        )
+
+
+def test_system_exit_propagates_through_photos_mint(
+    fake_client: MagicMock,
+    fixtures_dir: Path,
+) -> None:
+    """SystemExit is the other shutdown-signal subclass of BaseException
+    that the original `except BaseException` swallowed. Same propagation
+    contract.
+    """
+    path = _write_file(fixtures_dir, "ok.jpg", JPEG_MAGIC)
+
+    async def _raise_sysexit(_subject: str, _args: dict[str, Any]) -> Any:
+        raise SystemExit(2)
+
+    fake_client.request.side_effect = _raise_sysexit
+
+    with pytest.raises(SystemExit):
+        _call_handler(
+            fake_client,
+            "klodi_list_create",
+            {
+                "title": "x",
+                "description": "x",
+                "category": "home",
+                "asking_price": 100,
+                "fulfillment": [{"method": "pickup"}],
+                "photos": [path],
+            },
+        )
+
+
+def test_keyboard_interrupt_propagates_on_non_photos_request(
+    fake_client: MagicMock,
+) -> None:
+    """The outer try/except in `build_request_handler` (around the
+    listings.* dispatch when there are no photos) must also let
+    shutdown signals propagate. Same root cause: `except Exception`,
+    not `except BaseException`.
+    """
+
+    async def _raise_kbd(_subject: str, _args: dict[str, Any]) -> Any:
+        raise KeyboardInterrupt("user pressed ctrl-c during listings call")
+
+    fake_client.request.side_effect = _raise_kbd
+
+    with pytest.raises(KeyboardInterrupt):
+        _call_handler(
+            fake_client,
+            "klodi_list_mine",
+            {},
+        )
