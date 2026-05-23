@@ -229,7 +229,7 @@ async fn dispatch_passthrough(
     // local path into a durable asset_url, preserving index order;
     // URL-only inputs pass through unchanged. See ADR-0006.
     let args = if matches!(tool, ToolName::KlodiListCreate | ToolName::KlodiListUpdate) {
-        super::photos::apply_photos(client, args).await?
+        super::photos::apply_photos(client, tool.name(), args).await?
     } else {
         args
     };

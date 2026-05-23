@@ -29,6 +29,7 @@ fails when nanobot stops registering one.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from klodi_nats_client import (
@@ -39,6 +40,8 @@ from klodi_nats_client import (
 )
 
 from nanobot_client import get_client
+
+log = logging.getLogger("klodi_nanobot.tools")
 from nanobot_local_tools import (
     LOCAL_TOOL_DEFINITIONS,
     LOCAL_TOOL_NAMES,
@@ -213,6 +216,20 @@ async def handle(name: str, args: dict[str, Any]) -> str:
                 _client_request,
             )
         except PhotoResolutionError as err:
+            # Mint and PUT failures are network-class — operators need
+            # visibility. Validation failures (absolute_path, missing,
+            # content_type, size, count, type) are agent-driven and
+            # would be noise at warn level. The agent always sees the
+            # structured envelope below.
+            if err.stage in ("mint", "put"):
+                log.warning(
+                    "klodi_photos_resolution_failed"
+                    " tool=%s stage=%s path=%s error=%s",
+                    name,
+                    err.stage,
+                    err.path,
+                    err,
+                )
             return json.dumps({
                 "error": err.stage,
                 "message": str(err),

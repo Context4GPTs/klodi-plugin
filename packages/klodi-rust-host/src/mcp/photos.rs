@@ -575,8 +575,15 @@ fn value_type_name(v: &Value) -> &'static str {
 ///
 /// Called by `dispatch_passthrough` for `KlodiListCreate` and
 /// `KlodiListUpdate` only.
+///
+/// Logs `klodi_photos_resolution_failed` at warn level for mint and
+/// PUT failures (network-class — operators need visibility). Other
+/// failure stages (absolute_path, missing, content_type, size, count,
+/// type) are agent-driven and would be noise at warn level. The agent
+/// always sees the structured `McpError` envelope.
 pub async fn apply_photos(
     client: &KlodiClient,
+    tool_name: &str,
     mut args: Map<String, Value>,
 ) -> Result<Map<String, Value>, McpError> {
     let photos_ref = args.get("photos");
@@ -587,7 +594,18 @@ pub async fn apply_photos(
             args.insert("photos".to_string(), Value::Array(array));
             Ok(args)
         }
-        Err(err) => Err(err.into_mcp_error()),
+        Err(err) => {
+            if err.stage == "mint" || err.stage == "put" {
+                tracing::warn!(
+                    tool = tool_name,
+                    stage = %err.stage,
+                    path = ?err.path,
+                    error = %err.message,
+                    "klodi_photos_resolution_failed",
+                );
+            }
+            Err(err.into_mcp_error())
+        }
     }
 }
 
