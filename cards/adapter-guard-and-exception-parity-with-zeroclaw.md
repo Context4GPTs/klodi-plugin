@@ -4,8 +4,8 @@ title: Adapter guard and exception parity with zeroclaw
 slug: adapter-guard-and-exception-parity-with-zeroclaw
 work_type: feature
 tiers: [unit, integration, e2e]
-status: review
-agents: [code-quality-guardian]
+status: distilling
+agents: [solutions-architect]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -1492,5 +1492,108 @@ ADR-0011 amendment + a fixture row + per-adapter parity-test wiring, not a
 test tweak. Also: `oxlint` is uninstalled here, so the openclaw lint gate
 ran via `tsc` (build + `--noEmit` incl. tests) only; CQG may want to confirm
 `oxlint adapters/openclaw/src` in an env where it's available.
+
+## Review round 3 — code-quality-guardian
+
+**Verdict: PASS.**
+
+This round re-reviews the **base-drift reconciliation** only (round-3 delta `0c5bdf5..76e27c7`): the merge of `origin/main` (PR #2 `fold-uploads-into-listing-tools`), the production reconcile of the 8 documented conflicts, the `setup_status.rs` clippy fix, and the qa test re-pin. Settled round-2 findings are not re-litigated except where the reconcile re-touched them.
+
+The reconcile is **correct and complete**. `main`'s folded `klodi_list_create`/`klodi_list_update` photo surface is wrapped in PR #3's pre-call guard chain + canonical exception envelope, uniformly across all four adapters. The R4 ordering decision (creds guard fires BEFORE the photo-resolution mint I/O) is the load-bearing reconcile choice and it is enforced identically in openclaw (`listings.ts`), hermes (`tools.py`), nanobot (`nanobot_tools.py`), and the Rust host (`tools.rs::dispatch_passthrough`). Per-stage photo errors collapse to the single R2 `upload_failed` code with the site in `details.stage` and the file in `details.path` — via three parity helpers (`envelope_from_upload_failed` py, `upload_failed_envelope` rust, `photoErrorResult` openclaw) that all emit `{error: "upload_failed", message, details: {stage, path}, recovery_hint: null}`. The test re-pin **strengthens** coverage rather than weakening it. The full matrix is green (re-run independently by this review).
+
+### Verification (round 3 — re-run by CQG, not taken on faith)
+
+| Surface | Tests | Status |
+|---|---|---|
+| klodi-rust-host lib (`--features mcp`) | 99 | green |
+| klodi-rust-host `e2e_envelope` | 4 | green |
+| klodi-rust-host `envelope_parity` (drift gate) | 8 | green |
+| zeroclaw `mcp_envelope_e2e` | 2 | green |
+| tool-catalog (incl. `error-codes-cross-language` 4 + golden) | 98 | green |
+| openclaw | 311 | green |
+| hermes | 113 | green |
+| nanobot | 81 | green |
+| nats-client-py (envelope + guards + parity) | 42 | green |
+
+- **Builds:** `klodi-rust-host --features mcp` clean; `cargo build` clean for moltis + ironclaw + zeroclaw; `pnpm -C adapters/openclaw build` PASS (production tsc + skill copy).
+- **Lints:** `cargo clippy --manifest-path packages/klodi-rust-host/Cargo.toml --features mcp -- -D warnings` → PASS (exit 0), including all reconciled files. `ruff check` clean on the changed hermes + nanobot production and test files. `tsc --noEmit` (full openclaw project, includes tests) clean.
+- **Named must-not-regress gates:** UUID-v4 triplication drift gate (`error-codes-cross-language`) 4/4 green; golden-envelope parity Rust 8 / Python 7 / TS 6 green.
+- **No merge artifacts:** zero conflict markers anywhere in shipped code (`adapters/`, `packages/`, `skill/`, `docs/`).
+
+### Reconcile audit — production (commits `44e359d` + `dbda3e4`)
+
+**R4 guard-before-photo-mint ordering: CORRECT across 4 adapters.**
+- hermes `tools.py:138` — `guard_creds(default_klodi_home(), HERMES_REGISTER_CLI)` runs before the `resolve_photos` mint call and before `get_client()`.
+- nanobot `nanobot_tools.py` — same, both the channel-message and request/reply arms.
+- openclaw `listings.ts` — `runPreCallGuardsResult(params, [], {registerCli: "klodi-openclaw-register"})` runs before `applyPhotos` (which does the mint I/O) in `klodi_list_create` / `klodi_list_update`.
+- Rust `tools.rs::dispatch_passthrough:234` — `guard_creds(...)` runs before `klodi_client()` opens the WS connection and before `apply_photos`.
+
+**`upload_failed` collapse: CORRECT and parity-clean.** ADR-0006's per-stage vocabulary (`absolute_path`/`missing`/`sensitive_dir`/`size`/`content_type`/`count`/`type`/`mint`/`put`) collapses into the single R2 `upload_failed` code. `upload_failed` IS in the catalog `errorCodes` map — the cross-language drift gate (which scans Python + Rust emission sites against the TS catalog) is green, confirming no off-vocabulary code leaks. The three new helpers produce a byte-equivalent shape.
+
+**`BaseException` → `Exception` narrowing: CORRECT and load-bearing.** All 7 catch-all sites (3 hermes, 4 nanobot) narrowed so `KeyboardInterrupt`/`SystemExit`/`GeneratorExit`/`CancelledError` propagate (unwind the daemon loop) while real errors still route to `envelope_from_unknown` → `internal_error`. Each carries a justified `# noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate` comment. This satisfies `main`'s propagation tests AND keeps PR #3's `internal_error` regression tests green. Not silent swallowing — every catch logs structured + returns a structured envelope.
+
+**Dead-code removal: CLEAN (no shims — CLAUDE.md compliant).** `media.ts` / `media.test.ts` accepted as deleted (tool gone; no stale imports — `fd media adapters/openclaw/src` empty). `errorResult` / `formatError` / `requireCreds` / `formatPhotoError` / `into_mcp_error` fully removed (the only `requireCredsEnvelope` mentions left are doc-comments describing the deletion). `apply_photos` (Rust) now returns `Result<_, PhotoResolutionError>` (raw error); the dispatcher maps it — no orphaned `McpError` / `json!` imports in `photos.rs`.
+
+**Security defences (OWASP path/symlink/sensitive-dir): UNTOUCHED, not weakened.** `adapters/hermes/src/klodi_hermes/photos.py`, `adapters/nanobot/nanobot_photos.py`, and `adapters/openclaw/src/tools/photos.ts` are **byte-identical to `main`** (verified via `git diff origin/main...HEAD --quiet`). The symlink/TOCTOU defence (`os.path.realpath(strict=True)` resolving before the sensitive-dir check), the sensitive-dir reject list (dynamic `${KLODI_HOME}` + `~/.ssh` + static POSIX prefixes), content-sniffing-not-extension (magic-number allowlist), and the size/count ceilings all survive intact. These were vetted in PR #2; the reconcile only wired the guard chain + envelope *around* the unchanged resolver.
+
+**Clippy fix (`dbda3e4`): in-scope, zero behaviour change.** Dropped a redundant `register_cli = register_cli` format binding in `setup_status.rs:410` (inline format-args make it redundant under clippy 0.1.88). Unblocks the host-lib clippy gate. The pre-existing `register.rs` (zeroclaw bin) clippy debt is confirmed UNTOUCHED by this card (`git diff origin/main...HEAD -- adapters/zeroclaw/src/bin/register.rs` is empty), separate crate, round-2 passed with it — correctly out of scope.
+
+**Docs reconcile: CORRECT.** ADR-0011 present (166 lines). `INDEX.md` ordered 0011-top / updated-0006-second. ADR-0006 keeps `main`'s one-step-semantics body with PR #3's `updated_by_card` + `[[0011]]` forward cross-link re-applied on top. Codegen artifacts regenerated: `error_codes.json` (card-introduced; not on `main`) is byte-identical to the catalog `dist/error-codes.json` (codegen in sync); `schemas.json` mirrors match `main`.
+
+### Reconcile audit — tests (commit `76e27c7`)
+
+**Re-pins STRENGTHEN coverage — no weakening, none skipped.** Empirically verified `git diff 0c5bdf5..76e27c7` over test files contains **zero** added `.skip` / `.only` / `xfail` / `#[ignore]` / `it.todo` directives.
+- **openclaw `photos.test.ts`** — every `expect(env.error).toBe("<stage>")` became `expect(env.details!.stage).toBe("<stage>")` (stage discrimination fully preserved), and the new `parseUploadFailed` helper ADDS `error === "upload_failed"` + `recovery_hint === null` + R1 four-key assertions the pre-fold tests lacked. Net +1 test (dedicated mint-failure envelope test). The stale 2-arg `KlodiRequestError("rate limited", "RATE_LIMITED")` → `{error, message}` envelope ctor is a genuine bug fix (the old form left `envelope.error`/`message` undefined).
+- **hermes/nanobot `test_tools_photos.py`** — the autouse `_klodi_home` creds fixture is a legitimate environment fix (the R4 guard correctly runs first; without creds present every test would see `not_registered` instead of the behaviour under test). The **disjoint-dir** detail (`KLODI_HOME` → `tmp_path/klodi-home`, disjoint from `tmp_path/fixtures`) is a real subtle-trap catch: the production sensitive-dir reject list includes `${KLODI_HOME}`, so an overlapping fixture dir would falsely reject happy-path images. Stale 2-arg ctors fixed; pre-existing ruff debt (dead `os`/`tempfile` imports, E402, F841) swept — confirmed present in the merged-from-`main` versions, none introduced here.
+- **`catalog-removal.test.ts`** — `IGNORED_DIRS += "cards"` is correctly scoped: `cards/` is gitignored harness substrate (same class as the already-present `.claude` / `.obsidian`), materialises only inside a card worktree, and the removal-grep's intent is "absent from shipped code," not "absent from kanban prose." Shipped code (`adapters/`, `packages/`, `skill/`, `src/`, `scripts/`) is still fully walked.
+- **New Rust dispatch test** (`list_create_without_creds_returns_not_registered_before_photo_mint`) is a genuine adversarial-gap closure — pins R4 creds-before-photo-mint ordering for a LIST tool (previously only covered for passthrough/local tools), at parity with the other three adapters. Correctly documents why the `upload_failed` shape assertion lives at the `mcp::photos::tests` helper tier (no NATS mock in the unit harness).
+
+### Type safety & fail-fast (round-3 delta)
+
+- **TS:** zero `: any` / `as any` added in changed production TS (`listings.ts`, `envelope.ts`, `guards.ts`, `tool-result.ts`).
+- **Rust:** every `unwrap()` / `expect()` / `panic!` in the round-3 diff is either inside a `#[test]` / `#[tokio::test]` block, or is a post-guard invariant assertion in production (e.g. `tools.rs:355` `.expect("guard_args proved channel_id is a non-empty UUID string")` runs only after `run_pre_call_guards` validated the field and returned early on failure). The latter is the correct fail-fast idiom — a violated invariant is a bug, and the message names the guard that should have caught it.
+- **Python:** type hints intact on changed signatures; boundary catches logged with structured key=value fields and route to structured envelopes (no silent swallowing).
+
+### Findings
+
+#### P0 / P1 (BLOCKING)
+
+None.
+
+#### P2 (REVIEW)
+
+None.
+
+#### P3 (Nitpicks — non-blocking, do not gate distillation)
+
+**P3.1 — `oxlint` uninstalled; openclaw TS lint ran via `tsc` only.** CLAUDE.md lists `oxlint` as the preferred TS linter, but it is not on PATH in this environment and openclaw's `package.json` declares no `lint`/`oxlint` script. The strict-types gate (the load-bearing one) ran via `tsc --noEmit` over the full project including tests and passed cleanly. This is an environment gap, not a code defect — **acceptable for the verdict.** If a future env has `oxlint`, a one-time `oxlint adapters/openclaw/src` sweep would confirm stylistic lints; no evidence of any in the diff (the type checker is clean).
+
+**P3.2 — Two pre-existing `nats-client-py` collection errors (NOT card-caused).** `tests/test_ws_transport_patch.py` (missing optional `aiohttp` dep) and `tests/integration` (`pnpm-workspace.yaml not found` — worktree-path harness quirk) fail to collect. Confirmed UNTOUCHED by this card (`git diff origin/main...HEAD --name-only` contains neither path). Out of scope; CQG round 2 already documented the pre-existing `nats-client-py` failure class.
+
+**P3.3 — Pre-existing clippy debt in `adapters/zeroclaw/src/bin/register.rs` (NOT card-caused).** `uninlined_format_args` + `single_match` lints in the zeroclaw register bin. Confirmed pre-existing (empty card diff for that file), separate crate, round-2 PASSED with them. Correctly left untouched. Clean up in a dedicated follow-up card if the founder wants the zeroclaw bins under the clippy gate.
+
+**P3.4 — Hand-rolled `is_uuid_v4` triplication (carried from round 1/2).** Documented architect choice; the drift gate (green) exercises all three. Unchanged this round; remains acceptable.
+
+**P3.5 — Golden fixture deliberately omits an `upload_failed` row.** The qa's rationale holds: `details.stage` is per-failure-specific (no stable cross-adapter `recovery_hint` template like the guard codes have), the golden-coverage test asserts fixture codes are a *subset* of R2 (not that every code has a row), and `upload_failed` shape is pinned per-adapter where the stage behaviour lives. Adding a row would be scope creep + trip the fixture's ADR-amendment gate. Acceptable. Flagged for a future adversarial-testing pass only if cross-adapter `upload_failed` wire-parity is ever needed (would be an ADR-0011 amendment, not a test tweak).
+
+### Why PASS
+
+- The base-drift reconcile met its contract: `main`'s folded photo surface is wrapped in the ADR-0011 envelope + R4 guard chain uniformly across all four adapters, with `upload_failed` collapse preserving the closed R2 vocabulary. The founder's success signal is preserved on the new surface.
+- Test re-pins strengthen coverage (stage discrimination preserved + R1/recovery_hint/four-key assertions ADDED + a new mint test + a new Rust ordering test) — none weakened, none skipped, verified empirically.
+- Security defences are byte-identical to the vetted `main` versions — the reconcile wrapped, never weakened, them.
+- The `BaseException`→`Exception` narrowing is the correct fix (propagation tests are right; the broad catch was the latent bug).
+- Both named must-not-regress gates green; full 758-test matrix green across all three stacks; all builds + the host clippy gate clean.
+- Only P3 nitpicks remain — every one is either an environment gap or a documented, pre-existing, out-of-scope item. No P0/P1/P2.
+
+Distillation may proceed. Round-2 distillation already produced ADR-0011 + the skill doc; the round-3 reconcile added the `upload_failed` collapse (already captured in ADR-0006's forward cross-link + ADR-0011's R2 row during the reconcile). The solutions-architect should search-first and capture only what round-3 genuinely added beyond that, if anything.
+
+### → Handoff to Distilling — next agent: solutions-architect
+
+The merge target diff (`git diff origin/main...HEAD`) is the distillation surface. Most of the envelope/guard contract is already in ADR-0011 + ADR-0006's cross-link from prior rounds. Round-3's genuinely-new artifacts worth a search-first check:
+
+- The `upload_failed` collapse helpers (`envelope_from_upload_failed` / `upload_failed_envelope` / `photoErrorResult`) and the R4 guard-before-photo-mint ordering — already documented inline (ADR-0011 / ADR-0006 cross-refs in the helper docstrings) and in ADR-0006's References block. Likely no new doc needed; confirm the inline WHY comments are sufficient.
+- The disjoint-`KLODI_HOME`-vs-fixtures testing gotcha (sensitive-dir reject list includes `${KLODI_HOME}`) is a non-obvious trap for future photo-tests. Consider whether it warrants a one-line note in a knowledge doc or is adequately captured by the in-test WHY comment (the comment is thorough — search-first before adding anything).
+
+Do not re-capture what ADR-0011 / ADR-0006 already hold. Per the `distillation` skill: SEARCH the INDEX first, prefer editing existing docs, capture at the smallest viable scope (inline comment > doc).
 
 <!-- Abandoned section: appended by /board-close. Records date, reason, PR state at close, worktree teardown. Heading is "## Abandoned — founder". -->
