@@ -8,9 +8,11 @@
 //! agent) can act on the marketplace. Reporting to the operator is the
 //! agent's job via `sessions_send`, not this MCP server's.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::Parser;
-use klodi_rust_host::{McpConfig, paths, run_mcp_server};
+use klodi_rust_host::{
+    McpConfig, not_registered_envelope_json, paths, run_mcp_server,
+};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -46,17 +48,14 @@ async fn main() -> Result<()> {
     let creds_path = cli.creds.unwrap_or_else(|| klodi_home.join("nats.creds"));
     let config_path = cli.config.unwrap_or_else(|| klodi_home.join("config.json"));
 
-    if !creds_path.exists() {
-        bail!(
-            "klodi creds not found at {} — run klodi-zeroclaw-register first",
-            creds_path.display(),
-        );
-    }
-    if !config_path.exists() {
-        bail!(
-            "klodi config not found at {} — run klodi-zeroclaw-register first",
-            config_path.display(),
-        );
+    // Operator-facing setup-time guard. The agent-visible envelope for
+    // the same failure mode is emitted by the dispatcher; here the bin
+    // mirrors the envelope JSON to stderr so the operator's tail log
+    // carries the same shape (`not_registered` + `recovery_hint`) the
+    // agent receives. See ADR-0011.
+    if !creds_path.exists() || !config_path.exists() {
+        eprintln!("{}", not_registered_envelope_json("klodi-zeroclaw-register"));
+        std::process::exit(1);
     }
 
     run_mcp_server(McpConfig {

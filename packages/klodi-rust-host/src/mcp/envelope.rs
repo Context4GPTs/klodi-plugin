@@ -151,6 +151,32 @@ pub fn envelope_to_call_tool_result(env: ToolEnvelope) -> CallToolResult {
     result
 }
 
+/// Build a `not_registered` envelope for a per-host bin's startup check
+/// (creds or config missing on disk). The caller writes the result to
+/// stderr and aborts; see the per-adapter `bin/mcp.rs` `bail!` paths.
+///
+/// Returns the envelope as a JSON string so the bin can `eprintln!` it
+/// without bringing in this crate's serde dependency directly.
+pub fn not_registered_envelope_json(register_cli: &str) -> String {
+    let env = ToolEnvelope {
+        error: "not_registered".to_string(),
+        message: format!(
+            "klodi is not registered on this host. \
+             Run {register_cli} from a shell to mint nats.creds and config.json.",
+        ),
+        details: None,
+        recovery_hint: Some(NextAction::Cli {
+            command: register_cli.to_string(),
+            message: format!(
+                "Run {register_cli} — opens a browser link, polls for completion, \
+                 writes nats.creds + config.json.",
+            ),
+        }),
+    };
+    serde_json::to_string(&env)
+        .unwrap_or_else(|_| format!("{{\"error\":\"not_registered\",\"message\":\"missing creds; run {register_cli}\",\"details\":null,\"recovery_hint\":null}}"))
+}
+
 #[cfg(test)]
 mod tests {
     // Production items the implementer must add to this same module:

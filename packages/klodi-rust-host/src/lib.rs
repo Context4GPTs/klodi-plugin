@@ -85,6 +85,8 @@ pub use setup_status::{
 #[cfg(feature = "mcp")]
 pub use host_mcp_config::{HostMcpEntry, apply_host_mcp_entry, default_host_config_path};
 #[cfg(feature = "mcp")]
+pub use mcp::envelope::not_registered_envelope_json;
+#[cfg(feature = "mcp")]
 pub use mcp::{McpConfig, run_mcp_server};
 
 #[cfg(feature = "zeroclaw")]

@@ -2,7 +2,7 @@
 
 use super::{resources, tools};
 use anyhow::Result;
-use klodi_nats_client::KlodiClient;
+use klodi_nats_client::{KlodiClient, KlodiError};
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
 use rmcp::ServerHandler;
@@ -63,7 +63,14 @@ impl KlodiMcpHandler {
     /// Lazily open the persistent NATS-WS connection. Subsequent calls
     /// return the same client, so a single MCP session shares one
     /// upstream connection across many tool calls.
-    pub(super) async fn klodi_client(&self) -> Result<&KlodiClient, McpError> {
+    ///
+    /// Returns the underlying `KlodiError` on failure so the dispatcher
+    /// can convert it into a four-key envelope via
+    /// `envelope_from_klodi_err_with_cli` (see ADR-0011). The previous
+    /// `McpError::internal_error` collapse swallowed the structured
+    /// error variant — agents lost the recovery hint that comes with
+    /// `CredsNotFound` / `NotConnected`.
+    pub(super) async fn klodi_client(&self) -> Result<&KlodiClient, KlodiError> {
         self.inner
             .client
             .get_or_try_init(|| async {
@@ -71,19 +78,8 @@ impl KlodiMcpHandler {
                     &self.inner.cfg.creds_path,
                     &self.inner.cfg.config_path,
                 )
-                .await
-                .map_err(|err| {
-                    McpError::internal_error(
-                        format!("loading klodi client: {err}"),
-                        None,
-                    )
-                })?;
-                client.connect().await.map_err(|err| {
-                    McpError::internal_error(
-                        format!("connecting to klodi NATS: {err}"),
-                        None,
-                    )
-                })?;
+                .await?;
+                client.connect().await?;
                 Ok(client)
             })
             .await

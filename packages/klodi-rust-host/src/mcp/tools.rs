@@ -19,6 +19,7 @@
 //! next wake's agent reads the operator's reply via
 //! `sessions_history`).
 
+use super::envelope::{envelope_from_klodi_err_with_cli, envelope_to_call_tool_result};
 use super::handler::KlodiMcpHandler;
 use super::schemas::catalog;
 use crate::buy_sell_files::{self, ActionOnMatch, BuyFile, slugify};
@@ -222,13 +223,15 @@ async fn dispatch_passthrough(
     tool: ToolName,
     args: JsonObject,
 ) -> Result<CallToolResult, McpError> {
-    let client = handler.klodi_client().await?;
+    let client = match handler.klodi_client().await {
+        Ok(c) => c,
+        Err(err) => return Ok(envelope_for(handler, err)),
+    };
     let payload = Value::Object(args);
-    let result: Value = client
-        .request(tool.subject(), &payload, None)
-        .await
-        .map_err(map_klodi_err)?;
-    Ok(structured_with_text(result))
+    match client.request::<Value, _>(tool.subject(), &payload, None).await {
+        Ok(result) => Ok(structured_with_text(result)),
+        Err(err) => Ok(envelope_for(handler, err)),
+    }
 }
 
 async fn dispatch_setup_status(
@@ -301,11 +304,14 @@ async fn dispatch_channel_message(
             )
         })?;
 
-    let client = handler.klodi_client().await?;
-    let ack = client
-        .publish_channel_message(channel_id, content)
-        .await
-        .map_err(map_klodi_err)?;
+    let client = match handler.klodi_client().await {
+        Ok(c) => c,
+        Err(err) => return Ok(envelope_for(handler, err)),
+    };
+    let ack = match client.publish_channel_message(channel_id, content).await {
+        Ok(a) => a,
+        Err(err) => return Ok(envelope_for(handler, err)),
+    };
     let body = json!({
         "sequence": ack.sequence,
         "event_id": ack.event_id,
@@ -335,12 +341,17 @@ async fn dispatch_watch_one_shot(
     args: JsonObject,
 ) -> Result<CallToolResult, McpError> {
     let payload = Value::Object(compact_search_payload(&args));
-    let client = handler.klodi_client().await?;
-    let result: Value = client
-        .request(ToolName::KlodiSearch.subject(), &payload, None)
+    let client = match handler.klodi_client().await {
+        Ok(c) => c,
+        Err(err) => return Ok(envelope_for(handler, err)),
+    };
+    match client
+        .request::<Value, _>(ToolName::KlodiSearch.subject(), &payload, None)
         .await
-        .map_err(map_klodi_err)?;
-    Ok(structured_with_text(result))
+    {
+        Ok(result) => Ok(structured_with_text(result)),
+        Err(err) => Ok(envelope_for(handler, err)),
+    }
 }
 
 async fn dispatch_watch_persist(
@@ -373,15 +384,21 @@ async fn dispatch_watch_persist(
         .unwrap_or_else(|| json!({ "method": "any" }));
     payload.insert("delivery".to_string(), delivery.clone());
 
-    let client = handler.klodi_client().await?;
-    let mut result: Value = client
-        .request(
+    let client = match handler.klodi_client().await {
+        Ok(c) => c,
+        Err(err) => return Ok(envelope_for(handler, err)),
+    };
+    let mut result: Value = match client
+        .request::<Value, _>(
             ToolName::KlodiSearchesCreate.subject(),
             &Value::Object(payload),
             None,
         )
         .await
-        .map_err(map_klodi_err)?;
+    {
+        Ok(v) => v,
+        Err(err) => return Ok(envelope_for(handler, err)),
+    };
 
     let action_on_match = match args.get("action_on_match").and_then(Value::as_str) {
         Some("negotiate") => ActionOnMatch::Negotiate,
@@ -429,15 +446,20 @@ async fn dispatch_unwatch(
         })?
         .to_string();
 
-    let client = handler.klodi_client().await?;
-    let _: Value = client
-        .request(
+    let client = match handler.klodi_client().await {
+        Ok(c) => c,
+        Err(err) => return Ok(envelope_for(handler, err)),
+    };
+    if let Err(err) = client
+        .request::<Value, _>(
             ToolName::KlodiSearchesDelete.subject(),
             &json!({ "slug": slug }),
             None,
         )
         .await
-        .map_err(map_klodi_err)?;
+    {
+        return Ok(envelope_for(handler, err));
+    }
 
     let buy_file_path = handler.klodi_home().join("buy").join(format!("{slug}.md"));
     let buy_file_removed = buy_sell_files::delete_buy_file_at(&buy_file_path)
@@ -481,18 +503,13 @@ fn structured_with_text(value: Value) -> CallToolResult {
     result
 }
 
-fn map_klodi_err(err: KlodiError) -> McpError {
-    match &err {
-        KlodiError::Marketplace { code, message, details } => McpError::invalid_request(
-            format!("{code}: {}", if message.is_empty() { code } else { message }),
-            Some(json!({
-                "error": code,
-                "message": message,
-                "details": details,
-            })),
-        ),
-        _ => McpError::internal_error(format!("{err}"), None),
-    }
+/// Build the cross-language envelope `CallToolResult` from any
+/// `KlodiError`. The handler's per-bin `register_cli` is substituted
+/// into the `not_registered` recovery hint so the agent surfaces the
+/// literal command the operator runs (R8). See ADR-0011.
+fn envelope_for(handler: &KlodiMcpHandler, err: KlodiError) -> CallToolResult {
+    let env = envelope_from_klodi_err_with_cli(err, handler.register_cli());
+    envelope_to_call_tool_result(env)
 }
 
 #[cfg(test)]
