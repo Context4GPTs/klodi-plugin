@@ -4,8 +4,8 @@ title: Adapter guard and exception parity with zeroclaw
 slug: adapter-guard-and-exception-parity-with-zeroclaw
 work_type: feature
 tiers: [unit, integration, e2e]
-status: distilling
-agents: [solutions-architect]
+status: pr-ready
+agents: []
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -1186,6 +1186,29 @@ The dev pair did meaningful integration work in round 2 — the libs are now the
 ## Distillation — solutions-architect
 
 <!-- Runs in the worktree on the card branch after Review PASS. Pushes to the same PR. Per the `distillation` skill: SEARCH docs/ INDEX files first; edit existing docs rather than creating duplicates. Captures land at smallest viable scope: inline WHY comments, docs/decisions/, docs/knowledge/, docs/product/, or CLAUDE.md. Then flips status to pr-ready. -->
+
+**Search before write.** Grepped `docs/decisions/INDEX.md` (and `docs/knowledge/`, `docs/product/` — both absent in this repo). No existing doc matched the cross-adapter envelope / guards contract. ADR-0006 (photo uploads) was the nearest neighbour; the photo-upload stage error vocabulary now folds into ADR-0011's `upload_failed` code, so ADR-0006 gets a forward cross-link rather than being superseded.
+
+**Captures landed (smallest viable scope each).**
+
+- **`docs/decisions/0011-adapter-exception-envelope.md` (NEW).** The mandatory ADR. Locks: envelope shape `{error, message, details, recovery_hint}` (R1); closed code vocabulary (R2) with `marketplace_error` collapse for server passthrough; pre-call guard chain `creds_present → connection_ready → args_well_formed` (R4); read-only-tool exemption (R5/R6); per-host CLI substitution (R8); codegen pipeline (`dist/error-codes.json` from the TS catalog → vendored to `nats-client-py`; Rust drift gate via test); cross-link to ADR-0006.
+- **`docs/decisions/0006-direct-to-storage-photo-uploads.md` (EDIT).** Forward-link to ADR-0011 in References; `updated_at` bumped to 2026-05-23; `updated_by_card` set to this card. Photo-upload stage errors (`absolute_path`, `not_readable`, etc.) now surface as `upload_failed` in R2's vocabulary.
+- **`docs/decisions/INDEX.md` (EDIT).** ADR-0011 row added at top; ADR-0006 row re-sorted to position 2 with `2026-05-23`.
+- **`CHANGELOG.md` `[Unreleased]` (EDIT).** Adapter exception envelope + pre-call guard parity section in 0.2.16-style: Added (catalog / Rust / Python / TS modules), Removed (openclaw flat-string helpers, Rust `map_klodi_err`, Python catch-all mislabel), Migration (long-running agents need a restart; out-of-tree consumer surface deltas).
+- **`packages/klodi-rust-host/src/mcp/envelope.rs` (INLINE WHY).** The `envelope_from_klodi_err` no-cli `klodi-zeroclaw-register` default — was a "canonical adapter" comment, now an explicit SAFETY CONTRACT block: it is a TRIPWIRE, not a generic default. Production routes through `envelope_from_klodi_err_with_cli` via `envelope_for`; if `klodi-zeroclaw-register` ever surfaces on moltis/ironclaw, the visible mismatch is the alarm.
+- **`packages/klodi-rust-host/src/mcp/guards.rs` (INLINE WHY).** `is_uuid_v4` comment expanded — explicitly calls out the intentional triplication across Rust / Python / TS, names the sibling sites, names the drift gate that exercises all three, references ADR-0011.
+- **`packages/nats-client-py/src/klodi_nats_client/guards.py` (INLINE WHY).** `_UUID_V4_RE` comment harmonised to mirror the Rust block — same triplication rationale, references ADR-0011.
+- **`adapters/openclaw/src/lib/guards.ts` (INLINE WHY).** `UUID_V4_RE` previously had no comment — added the same harmonised triplication WHY, references ADR-0011.
+- **`adapters/openclaw/src/lib/client.ts:42` (P3.1 fix).** Stale `requireCreds()` docstring on `getClient()` — `requireCreds` was deleted in dev round 2. Updated to reference `runPreCallGuardsResult()` from `./guards.js` and ADR-0011.
+
+**Not captured (and why).**
+
+- No `docs/knowledge/` entry — would just restate ADR-0011. The skill (`skill/references/error_envelopes.md`) is the agent-facing knowledge surface; the ADR is the contributor-facing one. Duplicate would drift.
+- No `docs/product/` entry — folder does not exist in this repo. The card's product-owner sections already framed parity; an extracted product/ doc would restate them.
+- No `CLAUDE.md` edit — the guard chain and envelope shape are already enforced by the existing `code-quality-guardian` discipline ("strict types, no any, fail fast, no silent failures"). A new convention line would not change reviewer behaviour.
+- No dedicated codegen-pipeline ADR — sub-decision of ADR-0011's R2 section. The drift gate test is the load-bearing artifact; documenting it twice creates a maintenance trap.
+
+**INDEX.md updated:** decisions (rows for ADR-0011 added at top; ADR-0006 bumped + re-sorted).
 
 ## PR Ready
 
