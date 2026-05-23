@@ -865,3 +865,255 @@ describe("klodi_list_update — URL pass-through (regression)", () => {
     ]);
   });
 });
+
+// ── Type-level rejection — non-array `photos` value (P2.4) ──────────────
+//
+// Python and Rust raise `PhotoResolutionError(..., "type")` on a non-list /
+// non-array input. openclaw's old `applyPhotos` early-returned `params`
+// unchanged when `Array.isArray(photos)` was false, which:
+//   - bypassed the validator
+//   - sent the bad payload to `p2p.v1.listings.create` so the marketplace
+//     had to be the type checker
+//   - silently diverged from the Python/Rust adapters
+//
+// Per CQG round-1 P2.4, openclaw must reject the non-array value before
+// any NATS dispatch — matching the other two language stacks.
+
+describe("klodi_list_create — non-array photos rejection (P2.4)", () => {
+  it("rejects a numeric photos value before any NATS dispatch", async () => {
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-num-photos", {
+      title: "Bad type",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      // photos is a number, not an array — openclaw must reject.
+      photos: 42 as unknown as string[],
+    });
+    expect(result.isError).toBe(true);
+    const body = result.content[0].text ?? "";
+    // Error must mention the wrong type and use a `type` stage tag so
+    // the structured envelope is consistent with hermes / nanobot /
+    // Rust.
+    expect(body.toLowerCase()).toMatch(/type|array|list/);
+    // No NATS dispatch — the photos validation must run before the
+    // listings.create request.
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    expect(client.request).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a string photos value before any NATS dispatch", async () => {
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-str-photos", {
+      title: "Bad type 2",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      // `photos` is a string (e.g. a single URL) — must reject.
+      photos: "https://cdn.example/single.jpg" as unknown as string[],
+    });
+    expect(result.isError).toBe(true);
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    expect(client.request).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects an object photos value before any NATS dispatch", async () => {
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-obj-photos", {
+      title: "Bad type 3",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: { "0": "/tmp/x.jpg" } as unknown as string[],
+    });
+    expect(result.isError).toBe(true);
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    expect(client.request).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ── Error envelope parity (P2.1 + P2.2) ─────────────────────────────────
+//
+// All three language stacks must emit the same structured envelope shape
+// when photo resolution fails. CQG round 1 found:
+//   - openclaw returned a plain string `"<stage>: <message>"` — and the
+//     ternary `err.path ? '<a>' : '<b>'` was dead because both branches
+//     were identical (P2.1).
+//   - hermes / nanobot returned `json.dumps({"error", "message", "path"})`.
+//   - klodi-rust-host wrapped the same JSON in `McpError::invalid_request`.
+//
+// Canonical shape: a JSON object with `error` (stage tag),
+// `message` (human explanation, including the path), and `path` (the
+// offending raw input, or null when there is no specific path — e.g.
+// the count cap). Pinning this shape in openclaw closes the
+// cross-language drift the architect flagged in Discovery.
+//
+// The test parses `result.content[0].text` as JSON for every photo
+// failure path, asserts the three fields, and asserts the path field
+// carries the raw input verbatim (so the dead ternary cannot be
+// reintroduced — both branches must use `err.path`).
+
+describe("klodi_list_create — structured error envelope (P2.1 + P2.2)", () => {
+  function parseEnvelope(text: string): {
+    error?: string;
+    message?: string;
+    path?: string | null;
+  } {
+    return JSON.parse(text);
+  }
+
+  it("absolute-path failure: emits {error: 'absolute_path', message, path}", async () => {
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-env-relpath", {
+      title: "Bad relative path",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: ["./img.jpg"],
+    });
+    expect(result.isError).toBe(true);
+    const env = parseEnvelope(result.content[0].text ?? "");
+    expect(env.error).toBe("absolute_path");
+    expect(env.path).toBe("./img.jpg");
+    expect(env.message).toBeDefined();
+    expect(env.message!.toLowerCase()).toContain("absolute");
+    expect(env.message).toContain("./img.jpg");
+  });
+
+  it("missing-file failure: emits {error: 'missing', message, path}", async () => {
+    const tool = getTool(api, "klodi_list_create");
+    const missingPath = "/tmp/never-exists-987654321.jpg";
+    const result = await tool.execute("call-env-missing", {
+      title: "Missing",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [missingPath],
+    });
+    expect(result.isError).toBe(true);
+    const env = parseEnvelope(result.content[0].text ?? "");
+    expect(env.error).toBe("missing");
+    expect(env.path).toBe(missingPath);
+    expect(env.message).toBeDefined();
+    expect(env.message).toContain(missingPath);
+  });
+
+  it("content-type failure: emits {error: 'content_type', message, path}", async () => {
+    const path = writeFixture("doc.pdf", PDF_MAGIC);
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-env-ct", {
+      title: "PDF",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [path],
+    });
+    expect(result.isError).toBe(true);
+    const env = parseEnvelope(result.content[0].text ?? "");
+    expect(env.error).toBe("content_type");
+    expect(env.path).toBe(path);
+    expect(env.message).toBeDefined();
+    expect(env.message).toContain(path);
+  });
+
+  it("oversize failure: emits {error: 'size', message, path}", async () => {
+    const big = new Uint8Array(10 * 1024 * 1024 + 1);
+    big.set(JPEG_MAGIC, 0);
+    const path = writeFixture("huge.jpg", big);
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-env-size", {
+      title: "Big",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [path],
+    });
+    expect(result.isError).toBe(true);
+    const env = parseEnvelope(result.content[0].text ?? "");
+    expect(env.error).toBe("size");
+    expect(env.path).toBe(path);
+    expect(env.message).toContain(path);
+  });
+
+  it("count failure: emits {error: 'count', message, path: null}", async () => {
+    const photos = Array.from(
+      { length: 11 },
+      (_, i) => `https://cdn.example/${i}.jpg`,
+    );
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-env-count", {
+      title: "Too many",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos,
+    });
+    expect(result.isError).toBe(true);
+    const env = parseEnvelope(result.content[0].text ?? "");
+    expect(env.error).toBe("count");
+    // count is not bound to any single path — path field exists but is
+    // null / undefined. Matches the Python `None` and Rust `Option::None`.
+    expect(env.path == null).toBe(true);
+    expect(env.message).toBeDefined();
+  });
+
+  it("non-array failure: emits {error: 'type', message, path: null}", async () => {
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-env-type", {
+      title: "Bad type",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: 42 as unknown as string[],
+    });
+    expect(result.isError).toBe(true);
+    const env = parseEnvelope(result.content[0].text ?? "");
+    expect(env.error).toBe("type");
+    // type failures (whole-input shape, not a specific element) carry a
+    // null path — matches Python / Rust.
+    expect(env.path == null).toBe(true);
+    expect(env.message).toBeDefined();
+  });
+
+  it("PUT failure: emits {error: 'put', message, path}", async () => {
+    const path = writeFixture("ok.jpg", JPEG_MAGIC);
+    mockNatsResponse("p2p.v1.assets.upload-url", {
+      uploads: [
+        {
+          upload_url: "https://r2.example/up-fail",
+          asset_url: "https://cdn.example/asset.jpg",
+        },
+      ],
+    });
+    fetchSpy.mockImplementation(async () => {
+      return new Response("storage error", { status: 500 });
+    });
+
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-env-put", {
+      title: "PUT fail",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [path],
+    });
+    expect(result.isError).toBe(true);
+    const env = parseEnvelope(result.content[0].text ?? "");
+    expect(env.error).toBe("put");
+    expect(env.path).toBe(path);
+    expect(env.message).toContain(path);
+  });
+});
