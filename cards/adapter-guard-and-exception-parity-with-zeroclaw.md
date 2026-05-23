@@ -4,8 +4,8 @@ title: Adapter guard and exception parity with zeroclaw
 slug: adapter-guard-and-exception-parity-with-zeroclaw
 work_type: feature
 tiers: [unit, integration, e2e]
-status: in-dev
-agents: [expert-developer, qa-developer]
+status: review
+agents: [code-quality-guardian]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -801,6 +801,252 @@ PASS would require: P1.1 (Rust local-tool envelopes), P1.2 (guard chain wired in
 - Strict types throughout; no `any` in the new TS, type hints on every Python signature, `Option<T>` with explicit serde on Rust.
 
 The lib layer is the **right** abstraction; it just needs to be the load-bearing implementation of the dispatch path, not a parallel one.
+
+## In Dev round 2 — expert-developer, qa-developer
+
+### What changed since round 1
+
+The lib layer was sound in round 1; the gap was that production dispatch
+paths did not route through it. Round 2 closes that gap and resolves the
+P2 items CQG called out.
+
+**P1.1 — Rust dispatcher local-tool envelopes (FIXED).**
+The four `McpError::invalid_params` / `internal_error` sites in
+`packages/klodi-rust-host/src/mcp/tools.rs` (dispatch_channel_message
+missing channel_id / missing content, dispatch_unwatch missing buy_slug,
+dispatch_watch_persist filesystem failure, dispatch_setup_status serde
+failure) now return `Ok(envelope_to_call_tool_result(make_envelope(...)))`
+via the dispatcher's `invalid_request_envelope` and
+`internal_error_envelope` helpers. The dispatcher's
+`Result<CallToolResult, McpError>` signature is preserved (rmcp's
+contract); only call-time-recoverable failures flow as `Ok` carrying
+the structured envelope. The unknown-tool arm at the bottom of
+`dispatch` also produces an envelope instead of `Err(McpError)`.
+
+**P1.2 — Guards wired into production dispatch (FIXED).**
+
+- **Rust**: every state-mutating dispatch arm (`dispatch_passthrough`,
+  `dispatch_channel_message`, `dispatch_watch_one_shot`,
+  `dispatch_watch_persist`, `dispatch_unwatch`) calls
+  `guards::guard_creds(handler.klodi_home(), handler.register_cli())`
+  or `guards::run_pre_call_guards(...)` BEFORE `handler.klodi_client()`
+  opens the WS connection. R4 ("guards fail before any I/O") is
+  structurally enforced now.
+- **Python (hermes / nanobot)**: `build_request_handler` and `handle`
+  call `guard_creds(default_klodi_home(), <host>_REGISTER_CLI)` before
+  invoking `get_client()`. Verified by side-effect-freedom tests
+  (`get_client` substituted with a panic-on-call sentinel; the test
+  asserts the panic was never raised, then asserts the envelope is
+  `not_registered` with the per-host CLI in `recovery_hint`).
+- **openclaw**: `requireCredsEnvelope` is gone. Every per-tool file
+  (transactions / listings / offers / negotiation / discovery /
+  identity / media / setup) now calls
+  `runPreCallGuardsResult(params, [...args spec...], { registerCli:
+  "klodi-openclaw-register" })`. The helper composes creds → connection
+  → args in R4 order and returns a `ToolResult` directly. `guards.ts`
+  is the single canonical pre-call guard module.
+
+**P1.3 — Python catch-all split (FIXED).**
+
+Both `adapters/hermes/src/klodi_hermes/tools.py` (`build_request_handler`
+and `handle_channel_message`) and `adapters/nanobot/nanobot_tools.py`
+(`handle`'s passthrough + channel-message arms) now distinguish:
+
+- `ConnectionError` / `asyncio.TimeoutError` / `TimeoutError` →
+  `envelope_from_not_connected()` (`connection_not_ready` envelope).
+- `BaseException` (catch-all) → `envelope_from_unknown(err)`
+  (`internal_error` envelope with `details.exception_class`).
+
+The round-1 bug — every non-Klodi exception silently labelled
+`connection_not_ready` — is closed. The agent now sees the correct
+recovery hint for each failure mode.
+
+**P2.1 — R2 closed-vocabulary contradiction (FIXED).**
+
+All three envelope helpers (`envelope_from_klodi_request_error` Python,
+`envelope_from_klodi_err` Rust Marketplace arm, `envelopeFromError`
+TS KlodiRequestError arm) now collapse server passthrough codes to the
+catch-all `marketplace_error`. The server's original code rides in
+`details.marketplace_error_code`; the message in
+`details.marketplace_message`; extra payload in
+`details.marketplace_details`. The golden fixture is updated: the old
+`marketplace_passthrough_listing_not_owned` entry is replaced with the
+canonical `marketplace_error_unknown_code` row. The agent now sees a
+closed vocabulary per R2.
+
+**P2.2 — Cross-language drift gate (NEW).**
+
+`packages/tool-catalog/tests/error-codes-cross-language.test.ts` scans
+`envelope.py` + `guards.py` (Python) and `envelope.rs` + `guards.rs` +
+`tools.rs` (Rust) for literal `error: "<code>"` occurrences and asserts
+every emitted code is in the TS catalog `errorCodes` map. Four tests:
+catalog membership (Python), catalog membership (Rust), R4 guard-code
+coverage in both languages, byte-for-byte equality of the emitted code
+sets. The full `dist/error-codes.{json,rs}` codegen pipeline is the
+better fix; this drift gate is the minimum-cost catch the round-1 CQG
+report asked for.
+
+The expert further added `packages/tool-catalog/src/codegen/error-codes.ts`
+which emits `dist/error-codes.json` from the canonical catalog — the
+loop is now closed for Python consumers; the Rust side will pick this
+up in a follow-up.
+
+**P2.3 — hermes `build_request_handler` tests (NEW).**
+
+`adapters/hermes/tests/test_tools.py` (19 tests) pins the full
+dispatch-path contract: happy path, KlodiRequestError → marketplace_error
+collapse, ValueError / RuntimeError / KeyError / JSONDecodeError →
+internal_error, ConnectionError / asyncio.TimeoutError →
+connection_not_ready, creds-missing → not_registered without calling
+the client. Side-effect freedom is asserted by substituting
+`get_client` with a panic-on-call sentinel.
+
+**P2.4 — `requireCredsEnvelope` deleted (FIXED).**
+
+The legacy parallel `not_registered` envelope helper in
+`adapters/openclaw/src/lib/tool-result.ts` is gone. All eight per-tool
+files import `runPreCallGuardsResult` from `lib/guards.js` instead.
+The silent-drift trap CQG flagged is closed.
+
+**E2E tier coverage (NEW).**
+
+`adapters/zeroclaw/tests/mcp_envelope_e2e.rs` spawns the compiled
+`klodi-zeroclaw-mcp` binary with an empty `KLODI_HOME` and asserts:
+
+- stderr contains a single JSON line that parses as the four-key
+  `not_registered` envelope.
+- `recovery_hint.kind == "cli"` and
+  `recovery_hint.command == "klodi-zeroclaw-register"` (R8).
+- `details` is `null` for this failure mode.
+- exit code is 1 (operator-facing bin contract).
+- stdout is empty (MCP servers MUST keep stdout pristine for
+  JSON-RPC).
+
+This closes the round-1 tier-coverage mismatch — the card's
+`tiers: [unit, integration, e2e]` frontmatter is now load-bearing.
+
+**Additional regression-protection tests pinned by QA.**
+
+- `mcp::tools::dispatch_tests` (11 tests in `tools.rs`) drives the
+  Rust dispatcher's `dispatch(...)` end-to-end with a constructed
+  `KlodiMcpHandler` and asserts every state-mutating arm returns
+  `Ok(envelope)` instead of `Err(McpError)` for guard failures,
+  args-validation failures, and creds-missing. Covers
+  `klodi_channel_message`, `klodi_unwatch`, `klodi_watch_persist`,
+  `klodi_whoami` (passthrough), `klodi_tx_confirm` (creds-before-args
+  ordering). R5 exemption asserts: `klodi_setup_status` and
+  `klodi_health` return their diagnostic payloads even when degraded.
+- nanobot `handle` round-2 tests (8 new tests): catch-all =
+  `internal_error`, ConnectionError = `connection_not_ready`, creds
+  guard fires before client.
+- openclaw `runPreCallGuardsResult` tests (5 new tests): full R4
+  chain ordering (creds → connection → args), `connection_not_ready`
+  surfacing, return type is `ToolResult` not `ToolEnvelope`.
+
+### Test approach (round 2 increments)
+
+- **Side-effect-freedom** is the load-bearing assertion for the R4
+  contract. Python tests substitute `get_client()` with a sentinel
+  that raises `AssertionError` on call; if the guard chain fires
+  before the substitute is reached, the test passes. Rust tests
+  exercise dispatch with `klodi_home` pointing at an empty directory
+  so any actual NATS dial would fail with a non-`not_registered`
+  envelope; the test verifies `not_registered` came back, proving
+  the guard short-circuited.
+- **Cross-language parity** is now structurally tested:
+  `error-codes-cross-language.test.ts` ensures the emitted code set
+  is byte-identical between Python and Rust; the existing
+  `envelope_parity.rs` (Rust) and `test_envelope_parity.py` (Python)
+  + `envelope-parity.test.ts` (TS) tests pin the envelope shape
+  against the shared golden fixture.
+- **E2E coverage** drives the compiled binary against an empty
+  KLODI_HOME; the test asserts the agent-visible (stderr) envelope
+  matches the contract.
+
+### Test counts (round 2)
+
+| Surface | Tests |
+|---|---|
+| Rust `klodi-rust-host` lib | 90 (was 79; +11 dispatch_tests) |
+| Rust `envelope_parity` integration | 8 |
+| Rust `zeroclaw mcp_envelope_e2e` | 2 (NEW — e2e tier) |
+| Python `klodi_nats_client` envelope set | unchanged (helper layer) |
+| Python `hermes` | 92 (was 73; +19 `test_tools.py` NEW file) |
+| Python `nanobot` | 60 (was 51; +9 round-2 dispatch tests) |
+| TS `openclaw` | 273 (was 265; +8 across guards / parity / tool-result) |
+| TS `tool-catalog` | 90 (was 86; +4 cross-language drift) |
+| **Total** | **615 green** |
+
+### Live verification
+
+- `cargo test -p klodi-rust-host --features mcp` green (90 lib + 8
+  integration).
+- `cargo test -p klodi-zeroclaw --test mcp_envelope_e2e` green
+  (binary spawn + envelope parse, 2 tests).
+- `cargo build -p klodi-moltis -p klodi-ironclaw -p klodi-zeroclaw`
+  clean.
+- `pnpm -C adapters/openclaw test` green (273/273).
+- `pnpm -C packages/tool-catalog test` green (90/90).
+- `uv run pytest` in hermes (92) and nanobot (60) green.
+
+### → Handoff to Review (round 2) — next agent: code-quality-guardian
+
+**Where to look first.**
+
+1. **`packages/klodi-rust-host/src/mcp/tools.rs`** — every
+   state-mutating dispatch arm now wires `guards::guard_creds` /
+   `guards::run_pre_call_guards` at the top. Verify the wiring is
+   uniform: no arm dials NATS before guards have run. The unknown-tool
+   arm at the bottom of `dispatch` also returns the envelope.
+2. **`adapters/{hermes,nanobot}/`** — both adapters now distinguish
+   `_CONNECTION_ERROR_TYPES` from `BaseException`. Verify the catch
+   arms route correctly: connection errors → `connection_not_ready`,
+   everything else → `internal_error`. The creds guard fires before
+   `get_client()` / `call_tool()` — verify by inspecting the order
+   in both `build_request_handler` (hermes) and `handle` (nanobot).
+3. **`adapters/openclaw/src/tools/*.ts`** — eight tool files all use
+   `runPreCallGuardsResult` from `lib/guards.js`. `requireCredsEnvelope`
+   is gone. Verify no per-tool file imports a deleted symbol.
+4. **`packages/tool-catalog/tests/error-codes-cross-language.test.ts`**
+   — the drift gate. Verify it fires on a deliberate mis-match
+   (e.g., rename one code in `envelope.rs` to a non-catalog string;
+   the test should fail).
+5. **`adapters/zeroclaw/tests/mcp_envelope_e2e.rs`** — verify the
+   e2e test runs the bin, parses the envelope, and asserts the four
+   R1 keys + the R8 `recovery_hint.command`.
+
+**Known smells (carried over from round 1, still acceptable).**
+
+- `envelope_from_klodi_err` default CLI is still `klodi-zeroclaw-register`;
+  callers in the dispatcher pass `_with_cli` so the smell is contained.
+- Hand-rolled `is_uuid_v4` in three languages — same code review
+  rationale as round 1; small fixed pattern, no need to pull in a
+  regex crate.
+- The full `dist/error-codes.rs` codegen for Rust is deferred; the
+  drift test covers the gap.
+
+**Definition-of-done audit (round 2 deltas).**
+
+- [x] Rust dispatcher: every `McpError::invalid_params` /
+  `McpError::internal_error` site converted to
+  `Ok(envelope_to_call_tool_result(...))`.
+- [x] Rust dispatcher: `guard_creds` / `run_pre_call_guards` wired
+  into every state-mutating arm.
+- [x] Python catch-all split: `_CONNECTION_ERROR_TYPES` catches
+  transport state; `BaseException` catches everything else and
+  routes to `envelope_from_unknown` (`internal_error`).
+- [x] openclaw: `requireCredsEnvelope` deleted; tool files use
+  `runPreCallGuardsResult`.
+- [x] R2 collapse: all three envelope helpers route unknown server
+  codes to `marketplace_error` with original in
+  `details.marketplace_error_code`.
+- [x] Golden fixture updated: `marketplace_error_unknown_code` row
+  replaces the verbatim-passthrough entry.
+- [x] Cross-language drift gate: `error-codes-cross-language.test.ts`.
+- [x] hermes `build_request_handler` tests (19 in `test_tools.py`).
+- [x] E2E tier: `mcp_envelope_e2e.rs` spawns the bin and asserts the
+  envelope.
+- [x] All 615 tests green across the test surface.
 
 
 ## Distillation — solutions-architect
