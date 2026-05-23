@@ -61,7 +61,6 @@ mod tests {
             ToolName::KlodiTxCancel,
             ToolName::KlodiTxRate,
             ToolName::KlodiTxStatus,
-            ToolName::KlodiAssetsUploadUrl,
         ];
         for tool in names {
             let parsed = ToolName::from_name(tool.name())

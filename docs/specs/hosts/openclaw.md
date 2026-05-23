@@ -15,7 +15,7 @@ host_shape: in_agent
 - **Registration API:** `api.registerTool({ name, label, description, parameters, execute })` from the OpenClaw plugin SDK.
 - **Schema source:** `@klodi/tool-catalog` (TypeBox schemas); each adapter tool wraps a catalog tool descriptor and forwards args via `client.request(subject, params)`.
 - **Tool families:**
-  - **NATS request/reply passthrough:** identity, listings, discovery (`klodi_search`), offers, transactions, ratings, comments, channel reads, `klodi_assets_upload_url` (signed-URL fetch from server then HTTP PUT).
+  - **NATS request/reply passthrough:** identity, listings (`klodi_list_create` / `klodi_list_update` accept absolute local file paths in `photos` and run the adapter-internal mint + direct-to-R2 PUT pipeline before dispatch), discovery (`klodi_search`), offers, transactions, ratings, comments, channel reads.
   - **Local-state tools:** `klodi_register` (browser OAuth handoff), `klodi_register_poll` (manual fallback), `klodi_setup_status` / `klodi_setup_repair` / `klodi_setup_reseed_policies` (filesystem only). `klodi_health` probes the NATS connection and re-bootstraps on failure.
   - **Direct JetStream publish:** `klodi_channel_message` publishes via `client.publishChannelMessage(channel_id, body)` instead of round-tripping through a request/reply.
 - **Catalog file:** `klodi-plugin/packages/tool-catalog/src/index.ts` (TypeBox tree); adapter tool wrappers live in `klodi-plugin/adapters/openclaw/src/tools/`.

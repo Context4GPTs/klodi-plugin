@@ -67,7 +67,6 @@ _TOOL_EMOJIS: dict[str, str] = {
     "klodi_tx_confirm": "✅",
     "klodi_tx_cancel": "❎",
     "klodi_tx_rate": "⭐",
-    "klodi_assets_upload_url": "📸",
     "klodi_searches_create": "👁️",
     "klodi_searches_delete": "✖️",
     "klodi_searches_list": "📔",
