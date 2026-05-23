@@ -4,8 +4,8 @@ title: Direct-to-storage photo uploads via signed URLs
 tags: [uploads, r2, marketplace]
 card: pre-harness
 commit: d365332
-updated_at: 2026-04-30
-updated_by_card: pre-harness
+updated_at: 2026-05-23
+updated_by_card: fold-uploads-into-listing-tools
 ---
 
 # ADR-0006 — Direct-to-storage photo uploads via signed URLs
@@ -26,13 +26,20 @@ There are three problems with that:
 
 ## Decision
 
-`klodi_assets_upload_url` requests a set of **presigned URLs** from the klodi API (NATS subject `p2p.v1.assets.upload-url`), one per photo. The client (the agent, via whatever HTTP library it chooses) then PUTs the binary directly to R2 (Cloudflare's object storage) using the signed URL. klodi-operated compute never sees a byte of photo data.
+`klodi_list_create` and `klodi_list_update` accept either image URLs or absolute local filesystem paths in `photos`. When a local path is supplied, the adapter (not the agent) is responsible for the mint + PUT dance:
 
-The response also includes the public `asset_url` the user passes back to `klodi_list_create` / `klodi_list_update` as the photo reference. The presigned URL enforces:
+1. Validate the path is absolute, resolve symlinks via `realpath()`, and reject paths under sensitive directories (`/etc/`, `/var/run/`, `/var/log/`, `/proc/`, `/sys/`, `/root/`, `$KLODI_HOME`, `~/.ssh/`).
+2. Content-sniff against the magic-byte table — `image/jpeg`, `image/png`, `image/webp`. Extension is advisory; bytes are authoritative.
+3. Enforce 10 MB per file and 10 photos per listing client-side before any network I/O.
+4. Mint the entire batch in one NATS request to `p2p.v1.assets.upload-url`, with `files: [{filename, content_type, size}, ...]`. The marketplace returns one `{upload_url, asset_url}` pair per local in index order.
+5. Issue concurrent PUTs to each `upload_url` with `Content-Type` matching the sniffed type. R2 enforces both content type and size at the storage layer.
+6. Assemble the listing payload's `photos` array by index — URLs pass through, locals are replaced with the matching `asset_url` — and dispatch the listing call.
 
-- **Content-type allow-list** (`image/jpeg`, `image/png`, `image/webp`) at signing time.
-- **Size ceiling** of 10MB per file, 10 files per request, enforced in the sign step.
-- **Short TTL** on the signed URL (bounded by the klodi backend's signing policy).
+Atomicity: any rejection at steps 1-3, any mint failure at step 4, or any PUT failure at step 5 aborts the entire call. No listing is created or updated. The error envelope is `{error: <stage>, message: <human>, path: <offending path | null>}` where `<stage>` is one of the closed vocabulary `absolute_path`, `missing`, `sensitive_dir`, `size`, `content_type`, `count`, `type`, `mint`, `put`, `internal`. All four adapter languages (TypeScript / Python / Rust) emit this shape identically — openclaw, hermes, nanobot in the MCP `content[0].text` body as JSON; the Rust host on `McpError::data`. The shape is pinned by unit tests in each helper's test module and by the cross-stack assertions in `adapters/{openclaw,hermes,nanobot}/tests` plus `packages/klodi-rust-host/src/mcp/photos.rs::tests`.
+
+This envelope is the photo-resolution-specific shape. A broader adapter-wide exception envelope (carrying `details` and `recovery_hint`) is being defined separately and supersets this one — `path` becomes a member of `details`. The stage-tag vocabulary above remains the canonical photo-error code set under that superset.
+
+The standalone `klodi_assets_upload_url` agent tool is removed. The NATS subject (`p2p.v1.assets.upload-url`) is retained as an internal adapter dependency — it is no longer agent-facing.
 
 ## Alternatives considered
 
@@ -46,10 +53,16 @@ The response also includes the public `asset_url` the user passes back to `klodi
 - **Narrow attack surface at sign time.** The API endpoint that signs URLs sees only metadata (filename, content-type, size) — a few hundred bytes of structured JSON — not the binary itself. Format-confusion attacks against image decoders are bounded to what R2 does, and R2 does not decode.
 - **Content-type and size enforced before the client can upload.** A client that tries to upload 100MB of executable wrapped as image/jpeg gets EACCES from R2, because the presigned URL was cut for `image/jpeg` at 10MB.
 - **Bounded URL lifetime.** A leaked signed URL expires; the equivalent persistent upload endpoint would remain exploitable.
-- **Single code path for all binary.** Every photo-bearing tool (`klodi_list_create`, `klodi_list_update`) consumes `asset_url` strings that came from `klodi_assets_upload_url`. Auditors verify one flow.
+- **Single code path for all binary.** Every photo-bearing tool (`klodi_list_create`, `klodi_list_update`) runs photo inputs through the adapter's resolution pipeline before the listing request is dispatched. Auditors verify one flow.
+- **Content-sniff closes the format-confusion gap.** The pre-card flow trusted the agent's `content_type` argument; the new flow rejects any file whose bytes do not match an allowlisted magic-number prefix, regardless of what the extension claims.
+- **Path-traversal defence.** Absolute-path-only inputs, `realpath()`-based symlink resolution, and a sensitive-directory reject list bound the surface a prompt-injected agent can address. The agent cannot point the adapter at `/etc/passwd`, the klodi creds dir, or `~/.ssh/`.
 
 ## References
 
-- Code: `adapters/openclaw/src/tools/media.ts` — single call site for the OpenClaw adapter; per-language adapters mint via the same NATS subject (`p2p.v1.assets.upload-url`).
+- Code (one helper per language, byte-identical magic-number table + stage-tag vocabulary + envelope shape):
+  - `adapters/openclaw/src/tools/photos.ts` — TypeScript
+  - `adapters/hermes/src/klodi_hermes/photos.py` — Python (sync, used by hermes)
+  - `adapters/nanobot/nanobot_photos.py` — Python (async, used by nanobot)
+  - `packages/klodi-rust-host/src/mcp/photos.rs` — Rust (used by moltis, ironclaw, zeroclaw)
 - [SECURITY.md § Network behavior](../../SECURITY.md) (`Photo uploads bypass the klodi API entirely`)
-- `skill/references/photo_upload_flow.md` — agent-facing two-step flow.
+- `skill/references/photos.md` — agent-facing one-step flow (URLs or absolute local paths in `photos`).

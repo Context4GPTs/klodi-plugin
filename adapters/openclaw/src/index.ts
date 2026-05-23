@@ -64,7 +64,6 @@ import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerNegotiationTools } from "./tools/negotiation.js";
 import { registerOfferTools } from "./tools/offers.js";
 import { registerTransactionTools } from "./tools/transactions.js";
-import { registerMediaTools } from "./tools/media.js";
 import { registerSetupTools } from "./tools/setup.js";
 
 export default definePluginEntry({
@@ -82,7 +81,6 @@ export default definePluginEntry({
     registerNegotiationTools(api);
     registerOfferTools(api);
     registerTransactionTools(api);
-    registerMediaTools(api);
     registerSetupTools(api);
 
     // Eager wake pump: start the JetStream consumers the moment

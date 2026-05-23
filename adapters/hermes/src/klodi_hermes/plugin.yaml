@@ -75,7 +75,6 @@ provides_tools:
   - klodi_offer_create
   - klodi_offer_mine
   - klodi_offer_respond
-  - klodi_assets_upload_url
   - klodi_ratings
   - klodi_search
   - klodi_search_create

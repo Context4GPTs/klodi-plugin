@@ -29,6 +29,7 @@ fails when nanobot stops registering one.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from klodi_nats_client import (
@@ -39,11 +40,14 @@ from klodi_nats_client import (
 )
 
 from nanobot_client import get_client
+
+log = logging.getLogger("klodi_nanobot.tools")
 from nanobot_local_tools import (
     LOCAL_TOOL_DEFINITIONS,
     LOCAL_TOOL_NAMES,
     dispatch_local_tool,
 )
+from nanobot_photos import PhotoResolutionError, resolve_photos
 
 
 _PUBLISH_TOOLS: frozenset[str] = frozenset({
@@ -51,6 +55,14 @@ _PUBLISH_TOOLS: frozenset[str] = frozenset({
     # Per **D § D4** (P3-3): canonical name is `klodi_channel_message`;
     # the legacy `klodi_channel_send` was removed in 0012.
     "klodi_channel_message",
+})
+
+# Tools whose `photos` parameter is run through the adapter-internal
+# photo-resolution pipeline before the listing request is dispatched.
+# See `nanobot_photos.resolve_photos` and ADR-0006.
+_PHOTOS_AWARE_TOOLS: frozenset[str] = frozenset({
+    "klodi_list_create",
+    "klodi_list_update",
 })
 
 # Names that must NEVER reach `call_tool` (the request/reply path) —
@@ -176,7 +188,7 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             result = await publish_channel_message(channel_id, content)
         except ValueError as err:
             return json.dumps({"error": "INVALID_REQUEST", "message": str(err)})
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
             return json.dumps({
                 "error": "transport_error",
                 "message": str(err),
@@ -190,12 +202,46 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             # Defensive — LOCAL_TOOL_NAMES + dispatch_local_tool are in
             # the same module, but keep the envelope shape consistent.
             return json.dumps({"error": "UNKNOWN_TOOL", "message": str(err)})
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
             return json.dumps({
                 "error": "transport_error",
                 "message": str(err),
             })
         return json.dumps(local_result)
+
+    if name in _PHOTOS_AWARE_TOOLS:
+        try:
+            resolved = await resolve_photos(
+                args.get("photos"),
+                _client_request,
+            )
+        except PhotoResolutionError as err:
+            # Mint and PUT failures are network-class — operators need
+            # visibility. Validation failures (absolute_path, missing,
+            # content_type, size, count, type) are agent-driven and
+            # would be noise at warn level. The agent always sees the
+            # structured envelope below.
+            if err.stage in ("mint", "put"):
+                log.warning(
+                    "klodi_photos_resolution_failed"
+                    " tool=%s stage=%s path=%s error=%s",
+                    name,
+                    err.stage,
+                    err.path,
+                    err,
+                )
+            return json.dumps({
+                "error": err.stage,
+                "message": str(err),
+                "path": err.path,
+            })
+        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
+            return json.dumps({
+                "error": "transport_error",
+                "message": str(err),
+            })
+        if resolved is not None:
+            args = {**args, "photos": resolved}
 
     try:
         result = await call_tool(name, args)
@@ -209,12 +255,19 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             "error": err.code or "request_failed",
             "message": str(err),
         })
-    except BaseException as err:  # noqa: BLE001 — boundary
+    except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
         return json.dumps({
             "error": "transport_error",
             "message": str(err),
         })
     return json.dumps(result)
+
+
+async def _client_request(
+    subject: str, payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Bridge ``resolve_photos`` to the shared KlodiClient singleton."""
+    return await get_client().request(subject, payload)
 
 
 __all__ = [

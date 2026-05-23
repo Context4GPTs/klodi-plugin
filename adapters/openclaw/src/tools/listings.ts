@@ -21,6 +21,7 @@ import {
   onListingWithdrawn,
 } from "../service/state.js";
 import { getSellFilePath } from "../lib/paths.js";
+import { PhotoResolutionError, resolvePhotos } from "./photos.js";
 
 const SELL_FILE_HINT =
   "Write private context (floor price, logistics, private facts) into"
@@ -47,9 +48,17 @@ function registerCreate(api: PluginAPI): void {
       const err = requireCreds();
       if (err) return errorResult(err);
 
+      let resolvedPayload: Record<string, unknown>;
+      try {
+        resolvedPayload = await applyPhotos(params);
+      } catch (e) {
+        logPhotoFailure(api, "klodi_list_create", e);
+        return errorResult(formatPhotoError(e));
+      }
+
       let result: Record<string, unknown>;
       try {
-        result = await rawRequest(tool.subject, params);
+        result = await rawRequest(tool.subject, resolvedPayload);
       } catch (e) {
         return errorResult(formatError(e));
       }
@@ -134,9 +143,18 @@ function registerUpdate(api: PluginAPI): void {
     async execute(_id, params) {
       const err = requireCreds();
       if (err) return errorResult(err);
+
+      let resolvedPayload: Record<string, unknown>;
+      try {
+        resolvedPayload = await applyPhotos(params);
+      } catch (e) {
+        logPhotoFailure(api, "klodi_list_update", e);
+        return errorResult(formatPhotoError(e));
+      }
+
       let result: Record<string, unknown>;
       try {
-        result = await rawRequest(tool.subject, params);
+        result = await rawRequest(tool.subject, resolvedPayload);
       } catch (e) {
         return errorResult(formatError(e));
       }
@@ -233,5 +251,77 @@ function registerComments(api: PluginAPI): void {
         return errorResult(formatError(e));
       }
     },
+  });
+}
+
+/**
+ * Resolve any local paths in `params.photos` to asset_urls and return
+ * the substituted payload. A no-op when `photos` is absent (undefined).
+ *
+ * Non-array `photos` values (number, string, object) are rejected with
+ * `PhotoResolutionError(..., "type")` so the contract matches the
+ * Python and Rust helpers — every adapter raises rather than silently
+ * passing a malformed payload through to the marketplace.
+ *
+ * Throws PhotoResolutionError on any validation / mint / PUT failure;
+ * callers map that to errorResult via formatPhotoError().
+ */
+async function applyPhotos(
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const photos = params["photos"];
+  if (photos === undefined) return params;
+  if (!Array.isArray(photos)) {
+    throw new PhotoResolutionError(
+      `photos must be an array, got ${typeof photos}.`,
+      "type",
+    );
+  }
+  const resolved = await resolvePhotos(photos);
+  if (resolved === undefined) return params;
+  return { ...params, photos: resolved };
+}
+
+/**
+ * Format a PhotoResolutionError as a canonical JSON envelope:
+ *   { "error": "<stage>", "message": "<human>", "path": "<path | null>" }
+ *
+ * Parity with hermes / nanobot (Python `json.dumps({...})`) and Rust
+ * (`McpError::invalid_request(..., data: {error, message, path})`):
+ * the agent sees the same structured shape regardless of which adapter
+ * served the call. The `path` field is `null` for failures that aren't
+ * bound to a specific input element (count cap, non-array photos).
+ *
+ * Non-PhotoResolutionError errors fall back to formatError() as a flat
+ * string — those are unexpected and have no stage tag to surface.
+ */
+function formatPhotoError(err: unknown): string {
+  if (err instanceof PhotoResolutionError) {
+    return JSON.stringify({
+      error: err.stage,
+      message: err.message,
+      path: err.path ?? null,
+    });
+  }
+  return formatError(err);
+}
+
+/**
+ * Emit a structured log line when photo resolution fails. Mint and PUT
+ * failures are network-driven and matter to operators (R2 outage, NATS
+ * timeout, credential rotation); validation failures (absolute_path,
+ * missing, content_type, size) are agent-driven and noise at warn.
+ *
+ * The agent always sees the structured envelope in `errorResult`; the
+ * operator gets visibility on the network-class stages here.
+ */
+function logPhotoFailure(api: PluginAPI, tool: string, err: unknown): void {
+  if (!(err instanceof PhotoResolutionError)) return;
+  if (err.stage !== "mint" && err.stage !== "put") return;
+  api.logger.warn("klodi_photos_resolution_failed", {
+    tool,
+    stage: err.stage,
+    path: err.path ?? null,
+    error: err.message,
   });
 }

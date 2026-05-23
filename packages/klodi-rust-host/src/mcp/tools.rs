@@ -223,6 +223,16 @@ async fn dispatch_passthrough(
     args: JsonObject,
 ) -> Result<CallToolResult, McpError> {
     let client = handler.klodi_client().await?;
+    // For photos-aware listing tools, run params.photos through the
+    // adapter-internal validate / sniff / mint / PUT pipeline before
+    // the listing request is dispatched. The pipeline rewrites every
+    // local path into a durable asset_url, preserving index order;
+    // URL-only inputs pass through unchanged. See ADR-0006.
+    let args = if matches!(tool, ToolName::KlodiListCreate | ToolName::KlodiListUpdate) {
+        super::photos::apply_photos(client, tool.name(), args).await?
+    } else {
+        args
+    };
     let payload = Value::Object(args);
     let result: Value = client
         .request(tool.subject(), &payload, None)
@@ -519,6 +529,24 @@ mod tests {
         // Register-only tools never appear on the agent's MCP surface.
         assert!(!names.contains(&"klodi_register"));
         assert!(!names.contains(&"klodi_setup_repair"));
+        // Per card fold-uploads-into-listing-tools: the standalone
+        // klodi_assets_upload_url tool is gone from every adapter's
+        // MCP surface. klodi_list_create / klodi_list_update accept
+        // local paths directly and handle the mint+PUT internally.
+        assert!(!names.contains(&"klodi_assets_upload_url"));
+    }
+
+    #[test]
+    fn klodi_assets_upload_url_is_not_a_known_tool_name() {
+        // ToolName is generated from the canonical TS catalog; once
+        // the entry is gone there, the enum no longer carries
+        // KlodiAssetsUploadUrl and the round-trip from_name(...) for
+        // the old string must return None.
+        assert!(
+            ToolName::from_name("klodi_assets_upload_url").is_none(),
+            "klodi_assets_upload_url must be gone from the generated \
+             ToolName enum after the catalog deletion + codegen step",
+        );
     }
 
     #[test]

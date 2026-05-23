@@ -35,6 +35,7 @@ from klodi_nats_client import (
 )
 
 from .client import get_client, run_async
+from .photos import PhotoResolutionError, resolve_photos
 
 log = logging.getLogger("klodi_hermes.tools")
 
@@ -67,7 +68,6 @@ _TOOL_EMOJIS: dict[str, str] = {
     "klodi_tx_confirm": "✅",
     "klodi_tx_cancel": "❎",
     "klodi_tx_rate": "⭐",
-    "klodi_assets_upload_url": "📸",
     "klodi_searches_create": "👁️",
     "klodi_searches_delete": "✖️",
     "klodi_searches_list": "📔",
@@ -81,6 +81,12 @@ def tool_emoji(name: str) -> str:
 # ── Request bridge ───────────────────────────────────────────────────
 
 
+_PHOTOS_AWARE_TOOLS: frozenset[str] = frozenset({
+    "klodi_list_create",
+    "klodi_list_update",
+})
+
+
 def build_request_handler(tool_name: str) -> Callable[..., str]:
     """Return a synchronous handler that issues a NATS request.
 
@@ -89,16 +95,69 @@ def build_request_handler(tool_name: str) -> Callable[..., str]:
     coroutine to the dedicated asyncio loop (see ``client.py``).
     Errors are returned as JSON envelopes so the agent sees a
     structured failure instead of a raw exception.
+
+    For ``klodi_list_create`` and ``klodi_list_update`` the handler also
+    runs the photo-resolution pipeline (see ``photos.py``) on
+    ``args["photos"]`` BEFORE issuing the listings request. The mint
+    call (``p2p.v1.assets.upload-url``) is dispatched through the same
+    KlodiClient, and PUTs to R2 happen synchronously inside that helper.
     """
     schema = TOOL_SCHEMAS.get(tool_name)
     if schema is None:
         raise KeyError(f"Unknown tool {tool_name} not in catalog")
     subject = schema["subject"]
+    is_photos_aware = tool_name in _PHOTOS_AWARE_TOOLS
+
+    def _nats_request(subj: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Sync entry for the mint call inside resolve_photos."""
+        client = get_client()
+        return run_async(client.request(subj, payload))
 
     def handler(args: dict[str, Any], **_kwargs: Any) -> str:
         # Hermes runtime passes extra kwargs (task_id, tool_call_id,
         # etc.) — we accept-and-discard so future runtime params don't
         # break the plugin on upgrade.
+        if is_photos_aware:
+            try:
+                resolved = resolve_photos(args.get("photos"), _nats_request)
+            except PhotoResolutionError as err:
+                # Mint and PUT failures are network-class — operators
+                # need visibility. Validation failures (absolute_path,
+                # missing, content_type, size, count, type) are
+                # agent-driven and would be noise at warn level. The
+                # agent always sees the structured envelope below.
+                if err.stage in ("mint", "put"):
+                    log.warning(
+                        "klodi_photos_resolution_failed"
+                        " tool=%s stage=%s path=%s error=%s",
+                        tool_name,
+                        err.stage,
+                        err.path,
+                        err,
+                    )
+                return json.dumps({
+                    "error": err.stage,
+                    "message": str(err),
+                    "path": err.path,
+                })
+            except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit
+                log.warning(
+                    "klodi_photos_resolution_failed tool=%s error=%s",
+                    tool_name,
+                    err,
+                )
+                return json.dumps({
+                    "error": "klodi_unavailable",
+                    "message": (
+                        "klodi NATS connection is not ready. Run"
+                        " klodi_setup_status to diagnose, or klodi_register"
+                        " if you haven't signed up."
+                    ),
+                    "underlying": str(err),
+                })
+            if resolved is not None:
+                args = {**args, "photos": resolved}
+
         try:
             client = get_client()
             result = run_async(client.request(subject, args))
@@ -107,7 +166,7 @@ def build_request_handler(tool_name: str) -> Callable[..., str]:
                 "error": err.code or "request_failed",
                 "message": str(err),
             })
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit
             log.warning(
                 "klodi_tool_handler_failed tool=%s subject=%s error=%s",
                 tool_name,
@@ -163,7 +222,7 @@ def handle_channel_message(args: dict[str, Any], **_kwargs: Any) -> str:
         )
     except ValueError as err:
         return json.dumps({"error": "INVALID_REQUEST", "message": str(err)})
-    except BaseException as err:  # noqa: BLE001 — boundary
+    except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit
         log.warning(
             "klodi_channel_message_failed channel_id=%s error=%s",
             channel_id,

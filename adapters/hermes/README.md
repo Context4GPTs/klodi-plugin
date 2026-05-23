@@ -49,7 +49,7 @@ Optional: `klodi-hermes-setup --with-plugin-dir` drops a `${HERMES_HOME}/plugins
 
 The catalog ([`packages/tool-catalog`](https://github.com/Context4GPTs/klodi-plugin/tree/main/packages/tool-catalog)) is the single source of schema truth — every adapter consumes the same JSON Schema export. The Hermes-specific split:
 
-- **NATS-backed (catalog-driven request bridge):** `klodi_whoami`, `klodi_ratings`, `klodi_list_*`, `klodi_search`, `klodi_offer_*`, `klodi_tx_*`, `klodi_channel_create`, `klodi_channel_close`, `klodi_channel_history`, `klodi_channel_mine`, `klodi_comment`, `klodi_list_comments`, `klodi_search_*`, `klodi_assets_upload_url`.
+- **NATS-backed (catalog-driven request bridge):** `klodi_whoami`, `klodi_ratings`, `klodi_list_*`, `klodi_search`, `klodi_offer_*`, `klodi_tx_*`, `klodi_channel_create`, `klodi_channel_close`, `klodi_channel_history`, `klodi_channel_mine`, `klodi_comment`, `klodi_list_comments`, `klodi_search_*`. `klodi_list_create` / `klodi_list_update` accept image URLs or absolute local file paths in `photos` — locals are uploaded automatically.
 - **Local (Python only):** `klodi_register` / `klodi_register_poll` (browser OAuth handoff), `klodi_setup_*` (filesystem health + repair), `klodi_watch` / `klodi_unwatch` (server-side standing searches + on-disk buy file template), `klodi_channel_message` (direct JetStream publish).
 
 Marketplace events arrive on the durable JetStream consumers and are forwarded to the running Hermes session via `ctx.inject_message(text, role="system")` — the agent wakes with the content already in hand.

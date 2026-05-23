@@ -30,7 +30,6 @@ vi.mock("../tools/discovery.js", () => ({ registerDiscoveryTools: vi.fn() }));
 vi.mock("../tools/negotiation.js", () => ({ registerNegotiationTools: vi.fn() }));
 vi.mock("../tools/offers.js", () => ({ registerOfferTools: vi.fn() }));
 vi.mock("../tools/transactions.js", () => ({ registerTransactionTools: vi.fn() }));
-vi.mock("../tools/media.js", () => ({ registerMediaTools: vi.fn() }));
 vi.mock("../tools/setup.js", () => ({ registerSetupTools: vi.fn() }));
 vi.mock("../service/wake-pump.js", () => ({
   startWakePumpIfPossible: vi.fn().mockResolvedValue(null),
@@ -45,7 +44,6 @@ import { registerDiscoveryTools } from "../tools/discovery.js";
 import { registerNegotiationTools } from "../tools/negotiation.js";
 import { registerOfferTools } from "../tools/offers.js";
 import { registerTransactionTools } from "../tools/transactions.js";
-import { registerMediaTools } from "../tools/media.js";
 import { registerSetupTools } from "../tools/setup.js";
 import {
   scheduleWakePumpRetry,
@@ -72,7 +70,10 @@ describe("plugin entry", () => {
     expect(capturedRegisterFn).toBeTypeOf("function");
   });
 
-  it("registers all 8 tool groups with the api", () => {
+  it("registers all 7 tool groups with the api", () => {
+    // klodi_assets_upload_url and its registerMediaTools wrapper were
+    // removed in the fold-uploads-into-listing-tools card — listings.ts
+    // now handles photo uploads internally via tools/photos.ts.
     const api = createMockPluginApi();
     capturedRegisterFn!(api);
     expect(registerIdentityTools).toHaveBeenCalledWith(api);
@@ -81,7 +82,6 @@ describe("plugin entry", () => {
     expect(registerNegotiationTools).toHaveBeenCalledWith(api);
     expect(registerOfferTools).toHaveBeenCalledWith(api);
     expect(registerTransactionTools).toHaveBeenCalledWith(api);
-    expect(registerMediaTools).toHaveBeenCalledWith(api);
     expect(registerSetupTools).toHaveBeenCalledWith(api);
   });
 

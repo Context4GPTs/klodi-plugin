@@ -216,7 +216,10 @@ export const klodiTools = {
       "Create a new marketplace listing. Prices in integer cents."
       + " `fulfillment` is a discriminated union — at least one offer,"
       + " at most one entry per method. Condition required when any"
-      + " offer is pickup or ship; rejected when only digital.",
+      + " offer is pickup or ship; rejected when only digital. `photos`"
+      + " accepts image URLs or absolute local file paths — local paths"
+      + " are uploaded automatically (jpeg/png/webp, ≤10 MB, ≤10 entries,"
+      + " all-or-nothing).",
     params: Type.Object({
       title: Type.String({ description: "Item title (1-200 chars)" }),
       description: Type.String({ description: "Item description (1-2000 chars)" }),
@@ -225,7 +228,10 @@ export const klodiTools = {
       fulfillment: Fulfillment,
       condition: Type.Optional(Condition),
       photos: Type.Optional(Type.Array(Type.String(), {
-        description: "Photo asset URLs",
+        description:
+          "Image URLs or absolute local file paths; locals are uploaded"
+          + " by the adapter (image/jpeg, image/png, image/webp, ≤10 MB"
+          + " each, ≤10 entries).",
       })),
       tags: Type.Optional(Type.Array(Type.String(), {
         description: "Search tags",
@@ -246,7 +252,10 @@ export const klodiTools = {
       "Update an existing listing. Cannot change `category` (withdraw"
       + " and relist instead). Updating `fulfillment` replaces the"
       + " entire array atomically. `expires_hours` sets a fresh TTL from"
-      + " now, or pass null to clear the expiry entirely.",
+      + " now, or pass null to clear the expiry entirely. `photos`"
+      + " accepts image URLs or absolute local file paths — local paths"
+      + " are uploaded automatically (jpeg/png/webp, ≤10 MB, ≤10 entries,"
+      + " full-array replacement is all-or-nothing).",
     params: Type.Object({
       listing_id: Uuid,
       title: Type.Optional(Type.String()),
@@ -254,7 +263,12 @@ export const klodiTools = {
       asking_price: Type.Optional(Cents),
       condition: Type.Optional(Condition),
       fulfillment: Type.Optional(Fulfillment),
-      photos: Type.Optional(Type.Array(Type.String())),
+      photos: Type.Optional(Type.Array(Type.String(), {
+        description:
+          "Image URLs or absolute local file paths; locals are uploaded"
+          + " by the adapter (image/jpeg, image/png, image/webp, ≤10 MB"
+          + " each, ≤10 entries).",
+      })),
       tags: Type.Optional(Type.Array(Type.String())),
       currency: Type.Optional(Currency),
       status: Type.Optional(ListingStatus),
@@ -691,39 +705,6 @@ export const klodiTools = {
     }),
   },
 
-  // ─── Assets ────────────────────────────────────────────────────────
-
-  klodi_assets_upload_url: {
-    subject: "p2p.v1.assets.upload-url",
-    description:
-      "Mint presigned upload URLs for listing photos. Returns an array"
-      + " of { upload_url, asset_url } pairs — upload bytes to upload_url,"
-      + " then pass asset_url to klodi_list_create or klodi_list_update."
-      + " Max 10 photos. image/jpeg, image/png, image/webp. Max 10 MB each.",
-    params: Type.Object({
-      files: Type.Array(
-        Type.Object({
-          filename: Type.String(),
-          content_type: Type.Union([
-            Type.Literal("image/jpeg"),
-            Type.Literal("image/png"),
-            Type.Literal("image/webp"),
-          ]),
-          size: Type.Integer({
-            minimum: 1,
-            maximum: 10 * 1024 * 1024,
-          }),
-        }),
-        { maxItems: 10 },
-      ),
-    }),
-    result: Type.Object({
-      uploads: Type.Array(Type.Object({
-        upload_url: Type.String(),
-        asset_url: Type.String(),
-      })),
-    }),
-  },
 } as const;
 
 export type ToolName = keyof typeof klodiTools;

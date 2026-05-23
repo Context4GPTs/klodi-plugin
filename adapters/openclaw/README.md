@@ -127,11 +127,9 @@ Every tool is namespaced `klodi_*` so it never collides with other plugins. Your
 - `klodi_tx_status` — current state plus the locked-in `terms` snapshot (the audit trail).
 - `klodi_tx_rate` — rate the counterparty after completion.
 
-#### Media
-
-- `klodi_assets_upload_url` — signed direct-to-R2 asset upload; no binary ever passes through the klodi API.
-
 > Marketplace events arrive directly as system wakes carrying their full payload — no `klodi_pending` drain step is required.
+
+`klodi_list_create` and `klodi_list_update` accept image URLs or absolute local file paths in `photos` — locals are content-sniffed (`image/jpeg`, `image/png`, `image/webp`), uploaded direct-to-R2 by the adapter, and substituted with the durable `asset_url` before the listing is dispatched. No binary ever passes through the klodi API. See [ADR-0006](https://github.com/Context4GPTs/klodi-plugin/blob/main/docs/decisions/0006-direct-to-storage-photo-uploads.md).
 
 ---
 
@@ -145,7 +143,7 @@ The plugin ships with an OpenClaw skill — a full operational playbook your age
 | `skill/references/setup_first_run.md` | First-run walkthrough. The agent loads it only when `klodi_setup_status` returns `phase !== "ready"`; never loaded in steady state. |
 | `skill/references/tool_inventory.md` | Every `klodi_*` tool with usage patterns, grouped by domain. |
 | `skill/references/file_format_sell_buy.md` | Sell/buy frontmatter and body conventions. Loaded during any sell/buy file edit. |
-| `skill/references/offer_terms_examples.md`, `logistics_opener.md`, `photo_upload_flow.md`, `wake_payload_reference.md` | Specialised references loaded on demand. |
+| `skill/references/offer_terms_examples.md`, `logistics_opener.md`, `photos.md`, `wake_payload_reference.md` | Specialised references loaded on demand. |
 | `skill/policies/security.md` | Hard rules that override any permissive `negotiation_style.md` setting — copied into `${klodi_home}/policies/security.md` on first run. |
 | `skill/templates/negotiation_style.template.md` | Starter negotiation-style file — seeded on first run, ready for you to edit in your own words. |
 

@@ -131,11 +131,13 @@ If wakes are not landing, the failure surface is now NATS connectivity (`klodi_h
 
 ### T13 — Photo upload endpoint abused for non-photo binary
 
-*A compromised agent or a bug uses `klodi_assets_upload_url` to exfiltrate arbitrary bytes to R2.*
+*A compromised agent or a bug uses `klodi_list_create.photos` or `klodi_list_update.photos` (absolute local paths) to exfiltrate arbitrary bytes to R2.*
 
-- **Mitigation (content-type bind):** The presigned URL is signed for a specific `content_type` chosen at sign time (`image/jpeg|png|webp`). R2 rejects uploads whose `Content-Type` request header does not match.
-- **Mitigation (size cap):** Max 10MB per file, max 10 files per request.
-- **Mitigation (no arbitrary destination):** The asset URL returned points into the klodi-controlled bucket; the user cannot smuggle a different destination through the tool.
+- **Mitigation (content-type sniff before mint):** The adapter reads the first bytes of every local path and matches against the magic-number table for `image/jpeg`, `image/png`, `image/webp`. Mismatches reject pre-mint — no presigned URL is even issued. Extension is advisory; bytes are authoritative.
+- **Mitigation (content-type bind at mint):** The presigned URL the marketplace mints is signed for the sniffed `content_type`. R2 rejects PUTs whose `Content-Type` request header does not match.
+- **Mitigation (size cap):** Max 10 MB per file, max 10 photos per listing — checked client-side before the mint request is issued.
+- **Mitigation (no arbitrary destination):** The `asset_url` returned by the mint points into the klodi-controlled bucket; the user cannot smuggle a different destination through the tool.
+- **Mitigation (absolute path + sensitive-dir reject):** Local paths must be absolute (`/...`); relative, tilde-expansion, and `file://` URLs are rejected. After `realpath()`, paths under sensitive directories (`/etc/`, `/var/run/`, `/var/log/`, `/proc/`, `/sys/`, `/root/`, `${KLODI_HOME}`, `~/.ssh/`) are rejected before any read. Symlink escape closes via the sensitive-dir check on the resolved real path.
 
 ## Residual risks the plugin does not attempt to defend
 
