@@ -153,9 +153,72 @@ Practically, we don't depend on fold-uploads merge ordering. The two PRs touch o
 - **Sibling card merge ordering with `fold-uploads-into-listing-tools`.** Whichever PR merges second resolves conflicts in `packages/tool-catalog/src/index.ts`, `adapters/openclaw/src/tools/listings.ts`, the Python adapter handlers. *Mitigation:* this card's dev pair runs `git fetch origin && git merge origin/main` after the sibling PR merges; the conflicts are mechanical because both PRs touch the same lines but with non-overlapping intent (delete a tool vs. promote envelope shape). Explicit dev-pair note: do not start until fold-uploads is either merged or paused — landing two in-flight PRs that touch the same files simultaneously is the only scenario that produces non-mechanical conflicts.
 - **The Rust trio bins (moltis/ironclaw/zeroclaw) themselves are not exercised by the host's unit tests.** The sibling card's review (P3.2 line 496) flagged this: the binaries are thin wrappers around `run_mcp_server` but their `bail!` paths (lines 47–58 of `adapters/moltis/src/bin/mcp.rs`) still produce *legacy* string errors. *Mitigation:* in scope for this card — the three bin files each get a one-line replacement of the `bail!` text with an envelope-shaped JSON payload (still printed to stderr; the binary aborts but the operator sees the structured envelope).
 
+### Product framing — product-owner
+
+**What "parity" means from the agent's perspective.** Parity is not a code property; it is a *behavioural* one. An agent that has learned to recover from a failure on adapter A must succeed at recovery on adapter B without retraining, retraining-by-prompt, or branching on adapter identity. Concretely, four things must hold simultaneously:
+
+1. **Identical tool names.** The state-mutating surface the agent reasons over is the same string on every adapter — exactly the keys of `klodiTools` in `packages/tool-catalog/src/index.ts`. If any of the five lagging adapters has historically drifted to a different name (`klodi_transaction_confirm` vs `klodi_tx_confirm`, `klodi_accept_offer` vs `klodi_offer_respond`), rename to the catalog string. Aligns with R7 below; the architect's tool inventory in Affected-files is the canonical scope. **The founder's intent named `klodi_transactions_accept` and `klodi_assets_withdraw`; neither exists today** — the architect's premise reconciliation above resolves these as illustrative references to the irreversible-effect family, with `klodi_offer_respond` and `klodi_list_withdraw` being the existing equivalents.
+
+2. **Identical guard semantics.** Every state-mutating tool runs the same pre-call validation chain in the same order: `creds_present` → `connection_ready` → `args_well_formed`. Guards fail fast with the structured envelope below; they never silently fall through, never partially execute, and never produce side effects before validating.
+
+3. **Identical exception envelope.** Every failure — guard rejection, transport failure, marketplace `{error, message, details}`, unexpected internal error — surfaces to the agent as the *same shape* on every adapter: `{ error, message, details, recovery_hint }`. The agent never has to detect "which adapter am I talking to" to parse the response. (Architect locked the shape in R1 below.)
+
+4. **Identical recovery hints.** The `recovery_hint` field is agent-actionable, not human-prose: it points the agent at a *named tool* or a *named CLI* it can invoke next. The same failure mode produces the same `recovery_hint` discriminated-union value across all six adapters. Zeroclaw's hints are the canonical vocabulary; the other five mirror them verbatim.
+
+**Coverage scope.** This card targets the **state-mutating + lifecycle** surface (the architect's list in Affected-files is authoritative). Read-only tools (`klodi_*_status`, `klodi_*_get`, `klodi_*_mine`, `klodi_search`, `klodi_whoami`, `klodi_ratings`, `klodi_channel_history`, `klodi_channel_mine`, `klodi_list_comments`, `klodi_searches_list`) still produce envelope parity on the failure path (transport / setup / marketplace error), but only run the `creds_present` and `connection_ready` guards — not `args_well_formed` (the catalog schema is the validator for read-only inputs, no host-side check needed). The two **local diagnostic** tools (`klodi_setup_status`, `klodi_health`) are exempt by R5 — they are the *target* of recovery hints, not a failure surface.
+
+### Business rules — parity invariants (product-owner)
+
+The following invariants hold across all six adapters once this card lands. They are the rules tests assert against and the rules code-quality-guardian holds the diff to. They formalise the architect's engineering choices into agent-facing contracts.
+
+**R1 — Envelope shape is invariant across adapters.** Every error result surfaced to the agent is structurally:
+
+```
+{
+  "error":          "<code>",                  // member of the canonical set (R2)
+  "message":        "<human-prose>",           // for log/operator surface; agent does not pattern-match
+  "details":        { ... | null },            // machine-readable cause; nullable when no detail applies
+  "recovery_hint":  { ... NextAction | null }  // structured action; agent-actionable
+}
+```
+
+Field names, JSON casing (`snake_case`), and the rule "all four keys are *always present*; `details` and `recovery_hint` are explicit `null` when absent" are part of the contract. Adapter-language idioms (Python `None`, Rust `Option::None`, TS `undefined`) do not leak to the wire — they all serialise to `null`. This pins R1 to the architect's golden fixture at `packages/tool-catalog/tests/fixtures/envelope-golden.json`.
+
+**R2 — Error code vocabulary is closed.** Every `error` value is drawn from a fixed, append-only set maintained in `packages/tool-catalog/src/error-codes.ts`. The agent never sees a code outside this set — adapters that catch an unrecognised marketplace code fall back to `marketplace_error` with the original code preserved in `details.marketplace_error_code`. Initial vocabulary (architect's list, with the marketplace-passthrough subset I'm naming below for the failure-mode parity criteria):
+
+| Code | Trigger | Stage | Recovery target |
+|---|---|---|---|
+| `not_registered` | Creds file missing/unreadable | Pre-call guard | `cli: klodi-<host>-register` |
+| `klodi_home_missing` | `${KLODI_HOME}` directory absent/unwritable for tools with on-disk side effects | Pre-call guard | `tool: klodi_setup_status` |
+| `connection_not_ready` | NATS client not connected; canonical code (`klodi_unavailable` is the deprecated Py alias — see architect open Q1) | Pre-call guard | `tool: klodi_setup_status` |
+| `consumer_missing` | Server-managed durable consumer absent (`notifications_consumer_missing` / `channels_consumer_missing` mapped) | Dispatch | `tool: klodi_setup_status` |
+| `invalid_request` | Args fail JSON Schema (missing/wrong-type/empty); the adapter's guard rejects before NATS | Pre-call guard | `null` (agent re-calls with corrected args) |
+| `unauthorized` | Marketplace error indicates user does not own the target resource | Marketplace | `tool: klodi_<resource>_mine` (`null` if no such tool) |
+| `not_found` | Marketplace error indicates target id does not exist | Marketplace | `tool: klodi_<resource>_mine` (`null` if no such tool) |
+| `conflict` | Marketplace error indicates state-transition conflict (tx already confirmed, listing already sold) | Marketplace | `tool: klodi_tx_status` / `klodi_<resource>_status` |
+| `validation_failed` | Marketplace rejected request shape (server-side schema) | Marketplace | `null` (agent re-calls with corrected args; `details.field` names the bad field) |
+| `rate_limited` | Marketplace throttled the request | Marketplace | `null` (agent waits `details.retry_after_seconds`) |
+| `marketplace_error` | Marketplace error not in the more-specific subset above | Marketplace | `tool: klodi_<resource>_status` (resource inferred from tool name; `null` if no inference possible) |
+| `upload_failed` | Photo upload step failed (carries over from `card/fold-uploads-into-listing-tools`) | Adapter internal | `null` (agent retries; `details.path` names the failing file) |
+| `internal_error` | JSON decode failure, panic, unexpected adapter exception | Adapter internal | `null` (agent retries once; `details.trace_id` if available) |
+
+The agent never receives a code outside this table. New codes require an ADR amendment (architect's R6 stability gate enforces this).
+
+**R3 — Recovery-hint vocabulary is closed.** `recovery_hint` is either `null` or a value of the existing `NextAction` discriminated union (`{kind: "cli" | "tool" | "shell" | "dialog", ...}`, defined at `packages/klodi-rust-host/src/setup_status.rs:46`). The agent has *already learned* `NextAction` from `klodi_setup_status`; reusing it here means the agent has zero new vocabulary to learn. New `kind`s require an ADR amendment.
+
+**R4 — Guards fail before any I/O.** Every pre-call guard (`not_registered`, `klodi_home_missing`, `connection_not_ready`, `invalid_request`) returns the envelope without opening a NATS connection, reading any other file, or issuing any marketplace request. A failure of a later guard does not depend on a successful earlier guard's side effects (no read-modify-write within the guard stack). Guard order is fixed: `not_registered` → `klodi_home_missing` (only for tools with on-disk side effects) → `connection_not_ready` → `invalid_request`. First failure short-circuits.
+
+**R5 — `klodi_setup_status` and `klodi_health` are exempt.** These two tools are the *target* of recovery hints; they MUST always return their diagnostic payload (even when degraded — `klodi_health` already does this at `packages/klodi-rust-host/src/mcp/tools.rs:266`, returning `{ok: false, issue: ...}` on transport failure). They never return the failure envelope. If an agent receives the envelope from these tools, the contract is broken.
+
+**R6 — Read-only tools share the envelope contract.** `klodi_whoami`, `klodi_search`, `klodi_*_get`, `klodi_*_mine`, `klodi_*_status` (non-local), `klodi_ratings`, `klodi_list_comments`, `klodi_channel_history`, `klodi_channel_mine`, `klodi_searches_list`: run the `not_registered` and `connection_not_ready` guards (skip `klodi_home_missing` and `invalid_request`), surface marketplace failures through the same envelope.
+
+**R7 — Tool names are catalog-canonical.** The published tool name on every adapter exactly matches the key in `klodiTools` (i.e. the keys in `packages/tool-catalog/src/index.ts`). Local tools (`klodi_setup_status`, `klodi_health`, `klodi_channel_message`, `klodi_watch`, `klodi_unwatch`) use the same five names on every adapter that exposes them. Any historical drift is corrected by this card.
+
+**R8 — `recovery_hint` references only tools that exist on the same adapter.** If `recovery_hint.kind = "tool"` and `recovery_hint.tool = "klodi_X"`, then `klodi_X` is in the registered tool list of the same adapter that produced the envelope. (Closes the failure mode where an agent follows the hint and gets `unknown tool`.)
+
 ### Acceptance criteria — solutions-architect (engineering-side)
 
-product-owner will append behaviour-framed Given/When/Then criteria below. These are the engineering invariants the dev pair tests.
+product-owner appends behaviour-framed Given/When/Then criteria below. These are the engineering invariants the dev pair tests.
 
 **Envelope shape parity.**
 
