@@ -4,8 +4,8 @@ title: Adapter guard and exception parity with zeroclaw
 slug: adapter-guard-and-exception-parity-with-zeroclaw
 work_type: feature
 tiers: [unit, integration, e2e]
-status: in-dev
-agents: [expert-developer, qa-developer]
+status: review
+agents: [code-quality-guardian]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -1298,5 +1298,199 @@ Production reconciliation is complete and GREEN (builds + lints + all PR-#3 and 
 - New helpers added for the `upload_failed` collapse: `envelope_from_upload_failed` (py), `upload_failed_envelope` (rust), `photoErrorResult` (openclaw). All three produce `{error: "upload_failed", message, details: {stage, path}, recovery_hint: null}`. The golden fixture has no `upload_failed` row yet — qa may want to add one for cross-language parity coverage.
 - **Clippy gate.** `cargo clippy --manifest-path packages/klodi-rust-host/Cargo.toml --features mcp -- -D warnings` (the round-2-documented host gate) is **GREEN**, including all reconciled files (`mcp/photos.rs`, `mcp/envelope.rs`, `mcp/tools.rs` — zero new lints). One pre-existing `uninlined_format_args` in `packages/klodi-rust-host/src/setup_status.rs:410` (NOT in the 8 conflicts; present at round-2 HEAD `0c5bdf5`, untouched by the merge) blocked that host-lib gate under clippy 0.1.88, so I applied the one-line idiom fix (drop the redundant `register_cli = register_cli` binding — zero behaviour change) to keep the host gate green for qa. Committed separately from the merge.
 - **Pre-existing clippy debt left UNTOUCHED (separate crate, out of scope):** the `klodi-zeroclaw-register` bin (`adapters/zeroclaw/src/bin/register.rs:170`) has pre-existing `uninlined_format_args` + `single_match` lints. They pre-date the merge (untouched — `git diff 0c5bdf5 -- adapters/zeroclaw/src/bin/register.rs` is empty) and round-2 Review PASSED with them, so the round-2 clippy gate never swept the zeroclaw bins. Fixing one revealed the next (a rabbit hole in a crate this card doesn't touch), so I left them and flag for qa/CQG to clean up here or in a follow-up. They do not affect the host lib, the trio bins' builds, or any test.
+
+### Test approach (round 3) — qa-developer
+
+I did NOT rubber-stamp the expert's RED-test analysis; I re-derived each
+failure empirically (ran the suite, read the failing assertions, read the
+production code + ADR-0011/R1–R8) and confirmed the verdict independently.
+Two of the expert's claims were imprecise and I corrected them (see below).
+Every change is a re-pin to the reconciled ADR-0011 contract or a genuine
+test-bug fix — **no assertion was weakened, no test was skipped/xfail'd**
+(self-audited: `git diff | rg 'skip|xfail|only|ignore'` is clean).
+
+**Verdict per RED test:**
+
+1. **`packages/tool-catalog/tests/catalog-removal.test.ts` → RE-PIN (not impl-fault).**
+   Expert claimed "1 fail"; **actually 2** (the `REMOVED_NAME` grep AND the
+   `KlodiAssetsUploadUrl` Rust-variant grep), both tripping on *this card's
+   own* body prose under the gitignored `cards/` substrate. All shipped code
+   (`adapters/`, `packages/`, `skill/`, `src/`, `scripts/`) is clean — verified
+   by grep. `cards/` is gitignored harness state (repo `.gitignore` L168),
+   the same class as `.claude` (L161) and `.obsidian` (L167) which are already
+   in `IGNORED_DIRS`. The "removed name absent from shipped code" assertion
+   must scope to shipped artifacts, not kanban prose — on `main` the test
+   passes because `cards/` doesn't exist there (card-resident model). Fix: add
+   `"cards"` to `IGNORED_DIRS` (chose this over allowlisting the single card,
+   because the latter leaves a latent trap: every future card whose prose
+   names a removed tool would fail inside its own worktree). Verified no
+   shipped source lives under any `cards` dir (`fd -t d '^cards$'` → only the
+   root harness dir; zero `.ts/.py/.rs` under it). Assertion power intact.
+
+2. **`adapters/openclaw/src/__tests__/tools/photos.test.ts` → RE-PIN (not impl-fault).**
+   8 fails confirmed. (a) 7 `structured error envelope` tests pinned the
+   sibling card's **pre-fold** per-stage `error` vocabulary (`absolute_path`,
+   `missing`, `content_type`, `size`, `count`, `type`, `put`) — codes NOT in
+   ADR-0011 R2's closed set. The reconciled `photoErrorResult` correctly
+   collapses them to `error: "upload_failed"` with the site in `details.stage`
+   and the file in `details.path` (R2 line 71). Re-pinned the block to assert
+   the canonical `upload_failed` envelope **without losing discriminating
+   power**: every removed `env.error === "<stage>"` became
+   `env.details.stage === "<stage>"`, and I ADDED the R1 four-key shape +
+   `recovery_hint === null` checks the pre-fold tests lacked (via a
+   `parseUploadFailed` helper). (b) The mint-failure test used the stale
+   2-arg `KlodiRequestError("rate limited", "RATE_LIMITED")` — the only
+   stale ctor left in the whole openclaw test surface (every sibling test
+   already uses the envelope form). Fixed to `{error, message}`. I also added
+   a dedicated **`mint failure`** test (stage `mint`) to give that stage
+   explicit envelope-shape coverage (the existing atomic-failure test only
+   checked the message substring). Net +1 test (32 → 33 in this file).
+
+3. **`adapters/hermes/tests/test_tools_photos.py` (16) + `adapters/nanobot/tests/test_tools_photos.py` (17) → RE-PIN (not impl-fault).**
+   Here I **disagree with the expert's prescription** and the disagreement is
+   load-bearing. The expert said cause (b) was "error-shape assertions expect
+   the pre-R2 `{error: <stage>}`; re-pin to `upload_failed` + `details.stage`."
+   I read every failing test body: the Python photos tests assert ONLY
+   `envelope.get("error")` truthy + a `message` substring (the path / "10" /
+   "absolute") — they do NOT assert the per-stage `error` code (unlike
+   openclaw's structured block). So the `upload_failed` envelope already
+   satisfies them (its `message` carries the path). **The sole real cause is
+   (a): the missing creds fixture.** The reconciled handlers run R4
+   `guard_creds(default_klodi_home(), …)` FIRST — verified in production
+   `tools.py:143` (hermes) and `nanobot_tools.py:213/251` — so with no creds
+   every test got `not_registered` before the photo path. Fix: add the
+   autouse `_klodi_home` creds fixture (mirrors PR #3's `test_tools.py`).
+   **Subtle correctness catch the expert's prescription would have missed:**
+   the production photo resolver adds `${KLODI_HOME}` to its sensitive-dir
+   reject list (`photos.py`/`nanobot_photos.py` `_sensitive_prefixes`). If the
+   fixture pointed `KLODI_HOME` at the shared `tmp_path` (where `fixtures_dir`
+   = `tmp_path/fixtures` lives), the happy-path tests' image files would be
+   rejected as "sensitive directory" — failing for the WRONG reason. I pointed
+   `KLODI_HOME` at a DISJOINT sibling subdir (`tmp_path/klodi-home`) so creds
+   and upload fixtures never overlap. Also fixed the stale 2-arg
+   `KlodiRequestError` ctor in both mint tests (Python's migrated ctor takes a
+   single envelope dict; the 2-arg form would raise `TypeError` and route
+   through the `internal_error` arm instead of the real mint path). Swept
+   pre-existing ruff debt in both files (dead `os`/`tempfile` imports, E402,
+   F841 unused `envelope`) — all confirmed present in the merged-from-`main`
+   committed versions, none introduced by me; both files now ruff-clean.
+   The `KeyboardInterrupt`/`SystemExit`/`CancelledError` propagation tests
+   pass once creds are present — production `except Exception` (narrowed from
+   the round-1 `BaseException`) already lets them propagate.
+
+**Coverage check of the merged surface (brief item 3).** The folded
+`klodi_list_create`/`klodi_list_update` failure modes surface the
+`upload_failed` envelope on all four adapters: openclaw `photos.test.ts`
+(upload_failed block, stages absolute_path/missing/content_type/size/count/
+type/put/mint), hermes + nanobot `test_tools_photos.py` (path validation,
+mixed-array atomicity, mint failure), and the Rust host via
+`mcp::photos::tests::upload_failed_envelope_*` (helper tier). `media.ts` /
+`media.test.ts` are correctly gone (`fd media adapters/openclaw/src` empty,
+no stale imports) — their envelope/guard coverage is not lost because the
+equivalent assertions now live against the folded list tools.
+
+**Adversarial gap I closed (test-first).** The Rust host had dispatch-level
+guard tests only for passthrough tools (`klodi_whoami`, `klodi_tx_confirm`)
+and local tools — nothing pinned the **R4 creds-guard-before-photo-mint
+ordering for a LIST tool**. Added
+`dispatch_tests::list_create_without_creds_returns_not_registered_before_photo_mint`:
+a `klodi_list_create` call carrying a local-path photo with no creds MUST
+return `not_registered` (proving `guard_creds` short-circuits before
+`apply_photos` does any I/O), at parity with the openclaw/hermes/nanobot
+dispatch-level ordering tests. The `upload_failed` envelope SHAPE stays
+pinned at the helper tier on the Rust side because the dispatcher reaches
+`apply_photos` only after `klodi_client().await` succeeds — the unit harness
+has no NATS mock, so the dispatch-path `upload_failed` arm is genuinely only
+reachable under e2e/integration; the helper test `upload_failed_envelope_*`
+(constructed from the exact `PhotoResolutionError` `apply_photos` produces,
+through the exact `upload_failed_envelope` the dispatcher calls) is the
+correct tier for the shape assertion.
+
+**Golden-fixture `upload_failed` row — DELIBERATELY NOT added.** The expert
+flagged "qa may want to add one." I checked: the golden-fixture coverage
+test (`envelope-golden.test.ts`) requires fixture rows only for the
+guard/consumer/invalid_request/marketplace/internal classes (its `required`
+array), and asserts fixture `error` values are a SUBSET of `R2_CODES` (not
+that every R2 code has a row). `upload_failed`'s absence is intentional and
+consistent — its `details.stage` is per-failure-specific (no stable
+cross-adapter `recovery_hint` template like the guard codes have), so it's
+pinned per-adapter where the stage behaviour lives, not in the shared wire
+oracle. Adding a row would also trip the fixture `_doc`'s "ADR amendment"
+gate and require wiring each adapter's parity test against it — scope creep
+that doesn't strengthen the actual contract. Suite is green without it.
+
+### Test counts (round 3) — qa-developer
+
+| Surface | Tests | Notes |
+|---|---|---|
+| Rust `klodi-rust-host` lib (`--features mcp`) | 99 (was 98) | +1 `list_create_without_creds…` (incl. 7 `mcp::photos::tests`) |
+| Rust `klodi-rust-host` `e2e_envelope` | 4 | golden-fixture shapes |
+| Rust `klodi-rust-host` `envelope_parity` (drift gate) | 8 | green |
+| Rust `zeroclaw` `mcp_envelope_e2e` | 2 | bin spawn, stderr envelope, pristine stdout |
+| TS `openclaw` | 311 (was ~303) | photos.test.ts 33 (was 32; 8 re-pinned + 1 new mint test) |
+| TS `tool-catalog` (incl. drift gate + golden) | 98 | catalog-removal re-scoped, now green |
+| Python `hermes` | 113 | test_tools_photos.py 21 (16 re-pinned via creds fixture) |
+| Python `nanobot` | 81 | test_tools_photos.py 21 (17 re-pinned via creds fixture) |
+| Python `nats-client-py` envelope+guards+parity | 42 | card-touched files green |
+
+**Full matrix: GREEN across all three stacks.** Rust host clippy
+(`--features mcp -- -D warnings`) clean; moltis + ironclaw clippy clean; all
+three trio bins build. openclaw `build` (production tsc) + full-project
+`tsc --noEmit` (includes tests) clean; `oxlint` is not installed in this
+environment (no `lint` script in openclaw's package.json; the expert's
+round-3 notes likewise relied on `build` for the TS gate). hermes + nanobot
+ruff-clean on the touched test files. The **UUID-v4 triplication drift gate
+and the golden envelope parity tests stay green** (the card's two named
+must-not-regress gates).
+
+**Pre-existing, NOT card-caused (confirmed by inspecting untouched files):**
+`packages/nats-client-py/tests/test_ws_transport_patch.py` fails to collect
+(`ModuleNotFoundError: aiohttp` — missing optional dep in this env) and
+`tests/integration` fails to collect (`pnpm-workspace.yaml not found` —
+worktree-path harness issue). Neither file is touched by this card's diff
+(`git diff origin/main...HEAD --name-only` confirms), and CQG round 2 already
+documented pre-existing `nats-client-py` golden failures unrelated to this
+card. The `klodi-zeroclaw-register` bin's pre-existing clippy lints
+(`adapters/zeroclaw/src/bin/register.rs`) remain out of scope per the
+expert's round-3 note (separate crate, untouched by the merge, round-2
+PASSED with them).
+
+### → Handoff to Review (round 3) — next agent: code-quality-guardian
+
+Production reconciliation (expert, `dbda3e4`) + test reconciliation (qa, this
+commit) are complete and GREEN. All round-3 RED tests are re-pinned to the
+ADR-0011 contract; none were weakened.
+
+**Where to look first.**
+
+1. **`adapters/openclaw/src/__tests__/tools/photos.test.ts`** — the
+   `upload_failed envelope (ADR-0011 R1 + R2)` describe block. Confirm the
+   re-pin preserved discriminating power: each former `error: "<stage>"`
+   assertion now reads `details.stage === "<stage>"`, plus the new
+   `parseUploadFailed` helper enforces `error === "upload_failed"` +
+   `recovery_hint === null` + the four R1 keys. No assertion was loosened.
+2. **`adapters/{hermes,nanobot}/tests/test_tools_photos.py`** — the autouse
+   `_klodi_home` creds fixture. Confirm `KLODI_HOME` points at a subdir
+   DISJOINT from `fixtures_dir` (the production sensitive-dir reject list
+   includes `${KLODI_HOME}`; overlapping dirs would falsely reject the
+   happy-path fixtures). Confirm the mint tests use the envelope-form ctor.
+3. **`packages/klodi-rust-host/src/mcp/tools.rs`** — the new
+   `list_create_without_creds_returns_not_registered_before_photo_mint`
+   dispatch test (R4 creds-before-photo ordering for a list tool). The
+   `upload_failed` SHAPE is pinned at the `mcp::photos::tests` helper tier
+   (dispatcher needs a live NATS client to reach `apply_photos`; no mock in
+   the unit harness).
+4. **`packages/tool-catalog/tests/catalog-removal.test.ts`** — `IGNORED_DIRS`
+   now includes `"cards"` (gitignored harness substrate). Confirm shipped
+   code is still fully walked (the change only stops descending into the
+   non-shipped kanban dir, same class as `.claude`/`.obsidian`).
+
+**For an adversarial-testing pass on the next card:** the golden envelope
+fixture deliberately omits `upload_failed` (rationale in Test approach above)
+— if a future card needs cross-adapter `upload_failed` wire-parity, that's an
+ADR-0011 amendment + a fixture row + per-adapter parity-test wiring, not a
+test tweak. Also: `oxlint` is uninstalled here, so the openclaw lint gate
+ran via `tsc` (build + `--noEmit` incl. tests) only; CQG may want to confirm
+`oxlint adapters/openclaw/src` in an env where it's available.
 
 <!-- Abandoned section: appended by /board-close. Records date, reason, PR state at close, worktree teardown. Heading is "## Abandoned — founder". -->

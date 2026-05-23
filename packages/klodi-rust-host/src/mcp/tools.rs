@@ -977,6 +977,43 @@ mod dispatch_tests {
         );
     }
 
+    /// Base-drift reconciliation (round 3): the photos-folded list tools
+    /// (`klodi_list_create` / `klodi_list_update`) run the photo-resolution
+    /// pipeline — whose mint step is NATS I/O — only AFTER the R4 creds
+    /// guard. This pins that ordering for a LIST tool: a local-path photo
+    /// supplied without creds MUST yield `not_registered`, NOT a photo
+    /// `upload_failed` / `connection_not_ready` — proving the guard fires
+    /// before `apply_photos` dials anything. Parity with openclaw / hermes /
+    /// nanobot, which assert the same creds-before-photo ordering at their
+    /// dispatch level. The `upload_failed` envelope shape itself is pinned
+    /// by `mcp::photos::tests::upload_failed_envelope_*` (the dispatcher
+    /// cannot reach `apply_photos` here without a live NATS connection, so
+    /// the envelope-shape assertion correctly lives at the helper tier).
+    /// See ADR-0011 R4 + ADR-0006.
+    #[tokio::test]
+    async fn list_create_without_creds_returns_not_registered_before_photo_mint() {
+        let (handler, _dir) = handler_without_creds("klodi-zeroclaw-register");
+        let mut args = JsonObject::new();
+        args.insert("title".to_string(), json!("Vintage lamp"));
+        args.insert("description".to_string(), json!("x"));
+        args.insert("category".to_string(), json!("home"));
+        args.insert("asking_price".to_string(), json!(100));
+        // A local absolute path — if the creds guard did NOT fire first,
+        // apply_photos would attempt to read/mint it (NATS I/O). The guard
+        // MUST short-circuit before any of that.
+        args.insert("photos".to_string(), json!(["/tmp/some-photo.jpg"]));
+        let result = dispatch(&handler, "klodi_list_create", Some(args))
+            .await
+            .expect("Ok(envelope) for missing creds on klodi_list_create");
+        let env = envelope_from_result(&result);
+        assert_eq!(
+            env["error"], "not_registered",
+            "R4 creds guard MUST fire before the photo-resolution mint"
+        );
+        assert_eq!(env["recovery_hint"]["kind"], "cli");
+        assert_eq!(env["recovery_hint"]["command"], "klodi-zeroclaw-register");
+    }
+
     // ── P1.1 — filesystem failure paths must convert to envelope ──────────
 
     /// dispatch_watch_persist with creds present but `${klodi_home}/buy`
