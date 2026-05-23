@@ -4,8 +4,8 @@ title: Remove standalone upload tool, fold uploads into listing tools
 slug: fold-uploads-into-listing-tools
 work_type: feature
 tiers: [unit, integration, e2e]
-status: in-dev
-agents: [expert-developer, qa-developer]
+status: review
+agents: [code-quality-guardian]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -552,7 +552,7 @@ Each CQG round-1 finding addressed in a focused commit. Order matches the CQG pr
 | tool-catalog | 8 | 8 | unchanged (P1.1 rewrote the implementation, kept the assertion count) |
 | hermes | 91 | 94 | +3 (qa added P2.6 shutdown-signal propagation tests) |
 | nanobot | 68 | 72 | +4 (qa added P2.6 shutdown-signal propagation tests) |
-| klodi-rust-host | 61 | 61 | unchanged |
+| klodi-rust-host | 61 | 63 | +2 (qa added envelope-parity pin tests in commit 17ee069) |
 | Rust adapters (moltis / ironclaw / zeroclaw) | not run | 0/0 each (no tests defined; build clean) | now verified per P3.2 |
 
 All suites green at HEAD.
@@ -570,6 +570,8 @@ All suites green at HEAD.
 4. **`except BaseException` is gone from the listing/photos boundary in hermes and nanobot.** All catches in `tools.py` (hermes) and `nanobot_tools.py` (nanobot) plus the mint catches in `photos.py` / `nanobot_photos.py` are narrowed to `except Exception`. The qa-added P2.6 tests pin that `KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError` propagate.
 
 5. **ADR-0006 metadata is current.** `updated_at: 2026-05-23`, `updated_by_card: fold-uploads-into-listing-tools`. INDEX.md row reflects the bump and is re-sorted to the top of the newest-first table.
+
+6. **Rust envelope-parity unit tests added** (commit 17ee069). Two co-located tests in `packages/klodi-rust-host/src/mcp/photos.rs` pin the `{error, message, path}` shape that `PhotoResolutionError::into_mcp_error` attaches to `McpError::data`. The Python and Rust helpers already used this shape; the test pins it so a refactor that drops a field or renames a key cannot ship silently. Verified RED on a sample regression (commenting `"path": self.path,` in `into_mcp_error`); GREEN with the line restored.
 
 **What stays the same (intentional, do not re-flag):**
 
