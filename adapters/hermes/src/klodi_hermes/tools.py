@@ -126,7 +126,7 @@ def build_request_handler(tool_name: str) -> Callable[..., str]:
                     "message": str(err),
                     "path": err.path,
                 })
-            except BaseException as err:  # noqa: BLE001 — boundary
+            except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit
                 log.warning(
                     "klodi_photos_resolution_failed tool=%s error=%s",
                     tool_name,
@@ -152,7 +152,7 @@ def build_request_handler(tool_name: str) -> Callable[..., str]:
                 "error": err.code or "request_failed",
                 "message": str(err),
             })
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit
             log.warning(
                 "klodi_tool_handler_failed tool=%s subject=%s error=%s",
                 tool_name,
@@ -208,7 +208,7 @@ def handle_channel_message(args: dict[str, Any], **_kwargs: Any) -> str:
         )
     except ValueError as err:
         return json.dumps({"error": "INVALID_REQUEST", "message": str(err)})
-    except BaseException as err:  # noqa: BLE001 — boundary
+    except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit
         log.warning(
             "klodi_channel_message_failed channel_id=%s error=%s",
             channel_id,

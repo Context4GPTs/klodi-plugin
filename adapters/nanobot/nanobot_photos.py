@@ -201,7 +201,7 @@ async def resolve_photos(
         mint_reply = await nats_request(UPLOAD_URL_SUBJECT, mint_payload)
     except PhotoResolutionError:
         raise
-    except BaseException as err:  # noqa: BLE001 — boundary
+    except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
         raise PhotoResolutionError(
             f"Mint failed for {len(locals_only)} photo(s): {err}",
             "mint",

@@ -185,7 +185,7 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             result = await publish_channel_message(channel_id, content)
         except ValueError as err:
             return json.dumps({"error": "INVALID_REQUEST", "message": str(err)})
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
             return json.dumps({
                 "error": "transport_error",
                 "message": str(err),
@@ -199,7 +199,7 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             # Defensive — LOCAL_TOOL_NAMES + dispatch_local_tool are in
             # the same module, but keep the envelope shape consistent.
             return json.dumps({"error": "UNKNOWN_TOOL", "message": str(err)})
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
             return json.dumps({
                 "error": "transport_error",
                 "message": str(err),
@@ -218,7 +218,7 @@ async def handle(name: str, args: dict[str, Any]) -> str:
                 "message": str(err),
                 "path": err.path,
             })
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
             return json.dumps({
                 "error": "transport_error",
                 "message": str(err),
@@ -238,7 +238,7 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             "error": err.code or "request_failed",
             "message": str(err),
         })
-    except BaseException as err:  # noqa: BLE001 — boundary
+    except Exception as err:  # noqa: BLE001 — boundary; propagate KeyboardInterrupt/SystemExit/CancelledError
         return json.dumps({
             "error": "transport_error",
             "message": str(err),
