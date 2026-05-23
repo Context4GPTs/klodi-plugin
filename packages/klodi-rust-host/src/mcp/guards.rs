@@ -163,8 +163,18 @@ fn check_value(value: &Value, kind: ArgKind) -> Option<&'static str> {
 }
 
 fn is_uuid_v4(s: &str) -> bool {
-    // Hand-rolled instead of pulling in a regex crate — the catalog's
-    // UUID-v4 pattern is small and fixed. See ADR-0011.
+    // INTENTIONAL DUPLICATION across three languages (also in
+    // `packages/nats-client-py/src/klodi_nats_client/guards.py`
+    // `_UUID_V4_RE` and `adapters/openclaw/src/lib/guards.ts`
+    // `UUID_V4_RE`). Hand-rolled instead of pulling in a regex crate
+    // here / a uuid-validation dependency in Py / TS: the catalog's
+    // UUID-v4 pattern is small, fixed, and used only by `guard_args`.
+    // Adding `regex` to Rust alone is +200KB compile + a crate; mirror
+    // costs apply per language. The cross-language drift gate at
+    // `packages/tool-catalog/tests/error-codes-cross-language.test.ts`
+    // plus the golden-fixture `invalid_request` arms exercise every
+    // site — a pattern change requires updating three call sites in
+    // lockstep. See ADR-0011.
     let bytes = s.as_bytes();
     if bytes.len() != 36 {
         return false;

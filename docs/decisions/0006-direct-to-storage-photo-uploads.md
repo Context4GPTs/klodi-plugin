@@ -4,8 +4,8 @@ title: Direct-to-storage photo uploads via signed URLs
 tags: [uploads, r2, marketplace]
 card: pre-harness
 commit: d365332
-updated_at: 2026-04-30
-updated_by_card: pre-harness
+updated_at: 2026-05-23
+updated_by_card: adapter-guard-and-exception-parity-with-zeroclaw
 ---
 
 # ADR-0006 — Direct-to-storage photo uploads via signed URLs
@@ -53,3 +53,4 @@ The response also includes the public `asset_url` the user passes back to `klodi
 - Code: `adapters/openclaw/src/tools/media.ts` — single call site for the OpenClaw adapter; per-language adapters mint via the same NATS subject (`p2p.v1.assets.upload-url`).
 - [SECURITY.md § Network behavior](../../SECURITY.md) (`Photo uploads bypass the klodi API entirely`)
 - `skill/references/photo_upload_flow.md` — agent-facing two-step flow.
+- [[0011-adapter-exception-envelope]] — the cross-adapter exception envelope contract. Photo-upload stage errors (`absolute_path`, `not_readable`, `sensitive_dir`, `oversize`, `over_count`, `content_type`, `mint_failed`, `put_failed`) surface to the agent as the `upload_failed` code in R2's closed vocabulary, with `details.stage` and `details.path` naming the failure site.

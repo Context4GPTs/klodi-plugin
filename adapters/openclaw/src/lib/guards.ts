@@ -52,6 +52,19 @@ export interface GuardOptions {
 
 const DEFAULT_REGISTER_CLI = "klodi-openclaw-register";
 
+// INTENTIONAL DUPLICATION across three languages (also in
+// `packages/klodi-rust-host/src/mcp/guards.rs` `is_uuid_v4` and
+// `packages/nats-client-py/src/klodi_nats_client/guards.py` `_UUID_V4_RE`).
+// TS has a built-in regex engine; the duplication is the literal
+// pattern, not the engine — keeping the same regex in lockstep
+// across Rust / Python / TS is the parity invariant. Catalog's
+// UUID-v4 pattern is small and fixed; promoting to a shared package
+// awaits the `dist/error-codes.rs` codegen step. The cross-language
+// drift gate at
+// `packages/tool-catalog/tests/error-codes-cross-language.test.ts`
+// plus golden-fixture `invalid_request` arms exercise every site —
+// a pattern change requires updating three call sites in lockstep.
+// See ADR-0011.
 const UUID_V4_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 

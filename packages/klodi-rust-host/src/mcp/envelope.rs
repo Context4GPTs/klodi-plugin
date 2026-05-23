@@ -97,11 +97,21 @@ pub fn envelope_from_klodi_err(err: KlodiError) -> ToolEnvelope {
                  Run klodi-zeroclaw-register from a shell to mint credentials.",
             ),
             details: None,
-            // The default CLI is zeroclaw (the canonical Rust adapter
-            // for which this shared host was first wired up). Adapters
-            // whose binary differs (moltis, ironclaw) override the hint
-            // via `envelope_from_klodi_err_with_cli` in the dispatch
-            // wrap-up. See ADR-0011.
+            // SAFETY CONTRACT: the `klodi-zeroclaw-register` default below
+            // is a TRIPWIRE, not a generic default. Every PRODUCTION call
+            // site routes through `envelope_from_klodi_err_with_cli`
+            // (see the dispatcher's `envelope_for` helper at
+            // `tools.rs::envelope_for`), which overrides this hint with
+            // the per-host `register_cli` from `McpConfig` — mandatory
+            // on every bin (`adapters/zeroclaw/src/bin/mcp.rs:67`,
+            // `adapters/moltis/src/bin/mcp.rs`, `adapters/ironclaw/src/bin/mcp.rs`).
+            //
+            // If an operator running moltis or ironclaw ever sees
+            // `klodi-zeroclaw-register` in their recovery hint, the
+            // visible mismatch is the alarm: a caller bypassed
+            // `_with_cli`. The default deliberately fails LOUD rather
+            // than hiding the misconfiguration behind a placeholder.
+            // See ADR-0011.
             recovery_hint: Some(NextAction::Cli {
                 command: "klodi-zeroclaw-register".to_string(),
                 message:

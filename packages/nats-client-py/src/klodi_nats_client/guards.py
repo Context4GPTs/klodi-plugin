@@ -53,8 +53,16 @@ class ArgKind(str, Enum):
     NON_EMPTY_STRING = "non_empty_string"
 
 
-# UUID-v4 pattern shared with the catalog schemas. The hand-rolled match
-# avoids importing a separate regex engine for one well-known pattern.
+# INTENTIONAL DUPLICATION across three languages (also in
+# `packages/klodi-rust-host/src/mcp/guards.rs` `is_uuid_v4` and
+# `adapters/openclaw/src/lib/guards.ts` `UUID_V4_RE`). Python's
+# stdlib `re` is free; the duplication is the literal pattern, not
+# the engine — keeping the same regex in lockstep across Rust /
+# Python / TS is the parity invariant. The cross-language drift gate
+# at `packages/tool-catalog/tests/error-codes-cross-language.test.ts`
+# plus golden-fixture `invalid_request` arms exercise every site —
+# a pattern change requires updating three call sites in lockstep.
+# See ADR-0011.
 _UUID_V4_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )

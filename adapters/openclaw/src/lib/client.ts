@@ -39,8 +39,9 @@ export async function connectClient(api: PluginAPILike): Promise<KlodiClient> {
 
 /**
  * Get the singleton without forcing connect. Tools call this after
- * `requireCreds()` has confirmed credentials exist; the underlying
- * `request()` triggers a lazy connect on first use.
+ * `runPreCallGuardsResult()` (from `./guards.js`) has confirmed
+ * credentials exist and args are well-formed; the underlying
+ * `request()` triggers a lazy connect on first use. See ADR-0011.
  */
 export function getClient(): KlodiClient {
   if (client === null) {
