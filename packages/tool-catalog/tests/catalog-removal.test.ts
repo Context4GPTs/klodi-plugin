@@ -62,3 +62,57 @@ describe("klodi_assets_upload_url removal — source text", () => {
     expect(source).not.toContain(REMOVED_SUBJECT);
   });
 });
+
+describe("klodi_assets_upload_url removal — repo-wide grep", () => {
+  // The e2e acceptance criterion: a search across the repo for the
+  // tool name, the Rust enum variant, and the NATS subject returns no
+  // matches except in (a) docs/decisions/0006-*.md (history-only
+  // mention of the prior name) and (b) cards/done/ (archive of past
+  // work). Both exceptions are intentional and documented.
+  //
+  // We resolve REPO_ROOT by climbing from this file (tests/) up to
+  // packages/tool-catalog → packages → REPO_ROOT.
+  const repoRoot = join(PACKAGE_ROOT, "..", "..");
+
+  function grepAll(needle: string): string[] {
+    const { execSync } = require("node:child_process");
+    try {
+      // ripgrep is required (CLAUDE.md tooling preferences). Includes
+      // hidden files but skips the gitignore'd build artefacts —
+      // node_modules, dist/, .venv, target, build/staged.
+      const out = execSync(
+        // eslint-disable-next-line no-useless-concat
+        `rg -lF ${JSON.stringify(needle)} -g '!**/node_modules/**' `
+          + `-g '!**/dist/**' -g '!**/build/staged/**' `
+          + `-g '!**/.publish-stage/**' -g '!**/target/**' `
+          + `-g '!**/.venv/**' -g '!**/__pycache__/**' `
+          + `-g '!docs/decisions/0006-*.md' -g '!cards/done/**' `
+          + `-g '!cards/**/fold-uploads-into-listing-tools.md' `
+          + `-g '!CHANGELOG.md' || true`,
+        { cwd: repoRoot, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
+      );
+      return out
+        .split("\n")
+        .map((s: string) => s.trim())
+        .filter((s: string) => s.length > 0);
+    } catch (err) {
+      // rg exits non-zero with no matches; that's success here.
+      return [];
+    }
+  }
+
+  it("no file under adapters/, packages/, skill/, or root code contains the tool name", () => {
+    const hits = grepAll(REMOVED_NAME);
+    expect(hits).toEqual([]);
+  });
+
+  it("no file outside docs/decisions/0006-*.md mentions the NATS subject", () => {
+    const hits = grepAll(REMOVED_SUBJECT);
+    expect(hits).toEqual([]);
+  });
+
+  it("no file mentions the Rust enum variant KlodiAssetsUploadUrl", () => {
+    const hits = grepAll("KlodiAssetsUploadUrl");
+    expect(hits).toEqual([]);
+  });
+});
