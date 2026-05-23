@@ -4,7 +4,7 @@ title: Adapter guard and exception parity with zeroclaw
 slug: adapter-guard-and-exception-parity-with-zeroclaw
 work_type: feature
 tiers: [unit, integration, e2e]
-status: pr-ready
+status: done
 agents: []
 priority: 2
 created: 2026-05-23
@@ -13,7 +13,7 @@ base_branch: main
 worktree: /Users/knitlybak/GitHub/4gpts/klodi/klodi-plugin/.claude/worktrees/card-adapter-guard-and-exception-parity-with-zeroclaw
 branch: card/adapter-guard-and-exception-parity-with-zeroclaw
 pr: https://github.com/Context4GPTs/klodi-plugin/pull/3
-merged_commit: null
+merged_commit: 4ad660a48f29dab4de04909e5b31c242a64392cb
 ---
 
 ## Intent (founder)
