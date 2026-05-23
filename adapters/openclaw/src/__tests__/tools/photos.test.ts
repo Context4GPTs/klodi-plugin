@@ -410,3 +410,347 @@ describe("klodi_list_create — symlink + sensitive-dir defence (unit)", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+// ── Happy path — local file → mint → PUT → substitute ───────────────────
+
+describe("klodi_list_create — local-path upload pipeline (integration)", () => {
+  /**
+   * Drive the mint+PUT sequence end-to-end. Pinned contract:
+   *   1. Adapter mints presigned URLs via NATS subject
+   *      `p2p.v1.assets.upload-url` with one `files[]` entry per local
+   *      path (filename + sniffed content_type + size).
+   *   2. Adapter PUTs each local file's bytes to its `upload_url`,
+   *      with `Content-Type` header matching the sniffed type.
+   *   3. Adapter dispatches `p2p.v1.listings.create` with the photos
+   *      array rewritten so each local path is replaced by its
+   *      `asset_url`. Order is preserved positionally.
+   *   4. The agent sees the listing.create reply unchanged (and the
+   *      existing sell_file side effect still fires).
+   */
+  it("uploads one local JPEG and substitutes the asset_url before listings.create", async () => {
+    const path = writeFixture("img1.jpg", JPEG_MAGIC);
+    mockNatsResponse("p2p.v1.assets.upload-url", {
+      uploads: [
+        {
+          upload_url: "https://r2.example/up1?sig=abc",
+          asset_url: "https://cdn.example/asset1.jpg",
+        },
+      ],
+    });
+    mockNatsResponse("p2p.v1.listings.create", {
+      listing_id: LISTING_ID,
+      title: "Local JPEG",
+      photos: ["https://cdn.example/asset1.jpg"],
+    });
+
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-1jpg", {
+      title: "Local JPEG",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [path],
+    });
+
+    expect(result.isError).toBeFalsy();
+
+    // Mint happened with the right file metadata.
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    const subjects = client.request.mock.calls.map(
+      (c: unknown[]) => c[0] as string,
+    );
+    expect(subjects).toEqual([
+      "p2p.v1.assets.upload-url",
+      "p2p.v1.listings.create",
+    ]);
+    const mintCall = client.request.mock.calls[0];
+    const mintPayload = mintCall[1] as {
+      files: { filename: string; content_type: string; size: number }[];
+    };
+    expect(mintPayload.files).toHaveLength(1);
+    expect(mintPayload.files[0].content_type).toBe("image/jpeg");
+    expect(mintPayload.files[0].size).toBe(JPEG_MAGIC.byteLength);
+    expect(mintPayload.files[0].filename).toContain("img1.jpg");
+
+    // R2 PUT happened with the bytes + correct content type.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [putUrl, putInit] = fetchSpy.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(putUrl).toBe("https://r2.example/up1?sig=abc");
+    expect(putInit?.method).toBe("PUT");
+    expect(
+      (putInit?.headers as Record<string, string>)?.["Content-Type"]
+        ?? (putInit?.headers as Record<string, string>)?.["content-type"],
+    ).toBe("image/jpeg");
+
+    // listings.create dispatched with the substituted asset_url.
+    const createPayload = client.request.mock.calls[1][1] as {
+      photos: string[];
+    };
+    expect(createPayload.photos).toEqual([
+      "https://cdn.example/asset1.jpg",
+    ]);
+  });
+
+  it("preserves index order when mixing URLs and local paths", async () => {
+    const localPath = writeFixture("middle.png", PNG_MAGIC);
+    mockNatsResponse("p2p.v1.assets.upload-url", {
+      uploads: [
+        {
+          upload_url: "https://r2.example/up-middle?sig=mid",
+          asset_url: "https://cdn.example/asset-middle.png",
+        },
+      ],
+    });
+    mockNatsResponse("p2p.v1.listings.create", {
+      listing_id: LISTING_ID,
+      title: "Mixed",
+      photos: [
+        "https://cdn.example/keep.jpg",
+        "https://cdn.example/asset-middle.png",
+        "https://cdn.example/keep2.webp",
+      ],
+    });
+
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-mixed", {
+      title: "Mixed",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [
+        "https://cdn.example/keep.jpg",
+        localPath,
+        "https://cdn.example/keep2.webp",
+      ],
+    });
+
+    expect(result.isError).toBeFalsy();
+
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    // Exactly one mint — only the local needs a presigned URL.
+    const mintCall = client.request.mock.calls[0];
+    const mintPayload = mintCall[1] as { files: unknown[] };
+    expect(mintCall[0]).toBe("p2p.v1.assets.upload-url");
+    expect(mintPayload.files).toHaveLength(1);
+
+    // listings.create receives the URLs verbatim and the asset_url at
+    // index 1.
+    const createPayload = client.request.mock.calls[1][1] as {
+      photos: string[];
+    };
+    expect(createPayload.photos).toEqual([
+      "https://cdn.example/keep.jpg",
+      "https://cdn.example/asset-middle.png",
+      "https://cdn.example/keep2.webp",
+    ]);
+
+    // Exactly one PUT happened.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves index-to-pair mapping for three locals (concurrent PUTs)", async () => {
+    // The criterion: indexes 0/1/2 must positionally correspond to
+    // a.jpg/b.jpg/c.jpg even if PUTs are issued concurrently. The mint
+    // reply order pairs (a,b,c) ↔ (asset_a,asset_b,asset_c); the adapter
+    // must hold that mapping when launching PUTs and assemble the final
+    // photos array by index, not by completion order.
+    const pathA = writeFixture("a.jpg", JPEG_MAGIC);
+    const pathB = writeFixture("b.png", PNG_MAGIC);
+    const pathC = writeFixture("c.webp", WEBP_MAGIC);
+
+    mockNatsResponse("p2p.v1.assets.upload-url", {
+      uploads: [
+        {
+          upload_url: "https://r2.example/upA",
+          asset_url: "https://cdn.example/asset-a.jpg",
+        },
+        {
+          upload_url: "https://r2.example/upB",
+          asset_url: "https://cdn.example/asset-b.png",
+        },
+        {
+          upload_url: "https://r2.example/upC",
+          asset_url: "https://cdn.example/asset-c.webp",
+        },
+      ],
+    });
+    mockNatsResponse("p2p.v1.listings.create", {
+      listing_id: LISTING_ID,
+      title: "Three",
+    });
+
+    // Force PUTs to resolve in reverse order so completion-order ≠
+    // index-order. The adapter must still substitute by index.
+    const completionOrder: string[] = [];
+    fetchSpy.mockImplementation(async (url: string | URL | Request) => {
+      const u = String(url);
+      const delay = u.endsWith("upA") ? 30 : u.endsWith("upB") ? 15 : 0;
+      await new Promise((r) => setTimeout(r, delay));
+      completionOrder.push(u);
+      return new Response(null, { status: 200 });
+    });
+
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-three", {
+      title: "Three",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [pathA, pathB, pathC],
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    // PUTs completed in non-index order (proves concurrency, not
+    // serial-by-index).
+    expect(completionOrder.at(-1)).toContain("upA");
+
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    const createPayload = client.request.mock.calls[1][1] as {
+      photos: string[];
+    };
+    expect(createPayload.photos).toEqual([
+      "https://cdn.example/asset-a.jpg",
+      "https://cdn.example/asset-b.png",
+      "https://cdn.example/asset-c.webp",
+    ]);
+  });
+
+  it("preserves the sell_file side effect from listings.test.ts", async () => {
+    // Regression guard — adding photos upload mustn't break the
+    // create-time sell-file side effect.
+    const path = writeFixture("photo.jpg", JPEG_MAGIC);
+    mockNatsResponse("p2p.v1.assets.upload-url", {
+      uploads: [
+        {
+          upload_url: "https://r2.example/up",
+          asset_url: "https://cdn.example/asset.jpg",
+        },
+      ],
+    });
+    mockNatsResponse("p2p.v1.listings.create", {
+      listing_id: LISTING_ID,
+      title: "With sell file",
+    });
+
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-sf", {
+      title: "Vintage Lamp",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [path],
+    });
+
+    expect(result.isError).toBeFalsy();
+    const data = JSON.parse(result.content[0].text ?? "{}");
+    expect(data.sell_file).toBeDefined();
+    expect(data.sell_file.slug).toContain("vintage-lamp");
+  });
+});
+
+// ── Happy path — klodi_list_update mirrors the same pipeline ────────────
+
+describe("klodi_list_update — local-path upload pipeline (integration)", () => {
+  it("uploads a local PNG and substitutes the asset_url before listings.update", async () => {
+    const path = writeFixture("replacement.png", PNG_MAGIC);
+    mockNatsResponse("p2p.v1.assets.upload-url", {
+      uploads: [
+        {
+          upload_url: "https://r2.example/up-upd",
+          asset_url: "https://cdn.example/replacement.png",
+        },
+      ],
+    });
+    mockNatsResponse("p2p.v1.listings.update", {
+      listing_id: LISTING_ID,
+      photos: ["https://cdn.example/replacement.png"],
+    });
+
+    const tool = getTool(api, "klodi_list_update");
+    const result = await tool.execute("call-upd", {
+      listing_id: LISTING_ID,
+      photos: [path],
+    });
+
+    expect(result.isError).toBeFalsy();
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    expect(client.request.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+      "p2p.v1.assets.upload-url",
+      "p2p.v1.listings.update",
+    ]);
+    const updatePayload = client.request.mock.calls[1][1] as {
+      photos: string[];
+    };
+    expect(updatePayload.photos).toEqual([
+      "https://cdn.example/replacement.png",
+    ]);
+    // Sniffed as PNG, not from extension.
+    const mintPayload = client.request.mock.calls[0][1] as {
+      files: { content_type: string }[];
+    };
+    expect(mintPayload.files[0].content_type).toBe("image/png");
+  });
+});
+
+// ── Error path — atomic failure across mixed array ──────────────────────
+
+describe("klodi_list_create — atomic failure (integration)", () => {
+  it("fails the entire call when one file in a multi-photo array is oversize", async () => {
+    const ok = writeFixture("ok.jpg", JPEG_MAGIC);
+    const big = new Uint8Array(10 * 1024 * 1024 + 1);
+    big.set(JPEG_MAGIC, 0);
+    const oversize = writeFixture("oversized.jpg", big);
+
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-mix-fail", {
+      title: "Mixed",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [ok, oversize],
+    });
+
+    expect(result.isError).toBe(true);
+    const body = result.content[0].text ?? "";
+    expect(body).toContain(oversize);
+    // listings.create MUST NOT have been called — partial success forbidden.
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    const subjects = client.request.mock.calls.map(
+      (c: unknown[]) => c[0] as string,
+    );
+    expect(subjects).not.toContain("p2p.v1.listings.create");
+  });
+
+  it("fails the entire call when one file in a multi-photo array is the wrong type", async () => {
+    const ok = writeFixture("ok.jpg", JPEG_MAGIC);
+    const pdf = writeFixture("doc.pdf", PDF_MAGIC);
+
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-pdf-mix", {
+      title: "Mixed",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [ok, pdf],
+    });
+
+    expect(result.isError).toBe(true);
+    const body = result.content[0].text ?? "";
+    expect(body).toContain(pdf);
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    const subjects = client.request.mock.calls.map(
+      (c: unknown[]) => c[0] as string,
+    );
+    expect(subjects).not.toContain("p2p.v1.listings.create");
+  });
+});
