@@ -4,7 +4,7 @@ title: Remove standalone upload tool, fold uploads into listing tools
 slug: fold-uploads-into-listing-tools
 work_type: feature
 tiers: [unit, integration, e2e]
-status: pr-ready
+status: done
 agents: []
 priority: 2
 created: 2026-05-23
@@ -13,7 +13,7 @@ base_branch: main
 worktree: /Users/knitlybak/GitHub/4gpts/klodi/klodi-plugin/.claude/worktrees/card-fold-uploads-into-listing-tools
 branch: card/fold-uploads-into-listing-tools
 pr: https://github.com/Context4GPTs/klodi-plugin/pull/2
-merged_commit: null
+merged_commit: 3ca5d2fbb7281185cdefa4359f0d3e8f0a20c733
 ---
 
 ## Intent (founder)
