@@ -522,7 +522,67 @@ Priority fix list for the dev pair, smallest to largest:
 
 When the dev pair pushes the fixes, re-trigger review by flipping the card back to `status: review`. The same Review will reopen against the new diff.
 
-## Distillation — solutions-architect
+## In Dev round 2 — expert-developer, qa-developer
+
+### Fix list — expert-developer
+
+Each CQG round-1 finding addressed in a focused commit. Order matches the CQG priority list (smallest first):
+
+1. **P2.5 ADR-0006 date bump** (commit 876bb83) — frontmatter `updated_at: 2026-05-23`; INDEX.md row updated and re-sorted to the top of the newest-first table. The ADR body was already rewritten in round 1; only metadata was stale.
+
+2. **P2.6 BaseException → Exception** (commit 826eb79) — narrowed eight boundary catches across hermes (`tools.py` × 3, `photos.py`) and nanobot (`nanobot_tools.py` × 4, `nanobot_photos.py`). `KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError` now propagate out of the tool handler boundary instead of being swallowed and returned as `transport_error` JSON envelopes. The `# noqa: BLE001 — boundary` comments are kept with the rationale appended ("propagate KeyboardInterrupt/SystemExit/CancelledError"). All sites the CQG explicitly named are tightened; other `BaseException` catches outside the photos/listings path (e.g. `bridge.py`, `register.py`, `watch.py`, `client.py`) are out of scope for this card and untouched.
+
+3. **P1.1 catalog-removal grep** (qa, commit d569286) — qa rewrote the harness to a Node-native file walk over the repo, allowlisting specific paths that legitimately mention the tool name / Rust variant / NATS subject. Verified RED when the tool is re-added to the catalog source, GREEN when removed.
+
+4. **P2.1 + P2.2 + P2.3 + P2.4 openclaw consolidation** (commit 5858cc3) — all four fixed in a single edit of `adapters/openclaw/src/tools/listings.ts`:
+   - **P2.1 dead ternary**: `formatPhotoError`'s `err.path ? '<a>' : '<b>'` where both branches produced the same string is replaced by a single `JSON.stringify` path that carries `err.path` (or `null`) explicitly.
+   - **P2.2 envelope shape**: the canonical cross-language shape is now `{ "error": "<stage>", "message": "<human>", "path": "<path | null>" }`. openclaw used to emit a flat string `"<stage>: <message>"`; it now mirrors what hermes / nanobot already produce and what Rust's `McpError::invalid_request(..., data: {...})` wraps. The agent gets one parseable shape regardless of which adapter served the call.
+   - **P2.3 logging (openclaw side)**: `logPhotoFailure` emits `api.logger.warn("klodi_photos_resolution_failed", { tool, stage, path, error })` at the `mint` and `put` stages only. Validation failures (`absolute_path`, `missing`, `content_type`, `size`, `count`, `type`) stay silent — agent-driven and noise at warn level. The agent always sees the structured envelope via `errorResult`.
+   - **P2.4 non-array `photos` rejection**: `applyPhotos` now throws `PhotoResolutionError(..., "type")` on a non-array (number, string, object) input, matching the Python and Rust helpers. The early-return path-through that bypassed the validator and dumped malformed payloads on the marketplace is gone. `photos === undefined` still passes through unchanged — the no-photos case is unaffected.
+
+5. **P2.3 logging (hermes + nanobot + Rust)** (commit 7c8af73) — same event name `klodi_photos_resolution_failed` in all three stacks, gated to `stage in ("mint", "put")`. Hermes uses `log.warning` on its existing `klodi_hermes.tools` logger; nanobot now has its own `klodi_nanobot.tools` logger (it had no module-level logger before); Rust uses `tracing::warn!`. The Rust call required passing `tool.name()` through `apply_photos`, since the helper had no context about which tool invoked it.
+
+6. **P3.2 Rust adapter cargo tests** (verified in-session) — `cargo test` against `klodi-moltis`, `klodi-ironclaw`, and `klodi-zeroclaw` now passes (disk space restored). Each adapter binary compiles and its (currently empty) test suite is green. The `klodi-rust-host` shared crate that all three delegate to remains 61/61 green.
+
+### Test verification — expert-developer
+
+| Suite | Pre-round-2 | Post-round-2 | Delta |
+|---|---|---|---|
+| openclaw | 247 | 257 | +10 (qa added P2.4 + envelope-shape tests in commit 6ef1114) |
+| tool-catalog | 8 | 8 | unchanged (P1.1 rewrote the implementation, kept the assertion count) |
+| hermes | 91 | 94 | +3 (qa added P2.6 shutdown-signal propagation tests) |
+| nanobot | 68 | 72 | +4 (qa added P2.6 shutdown-signal propagation tests) |
+| klodi-rust-host | 61 | 61 | unchanged |
+| Rust adapters (moltis / ironclaw / zeroclaw) | not run | 0/0 each (no tests defined; build clean) | now verified per P3.2 |
+
+All suites green at HEAD.
+
+### → Handoff to Review (next agent: code-quality-guardian)
+
+**What changed since round 1:**
+
+1. **Envelope shape is now canonical across all four stacks.** The agent parses one shape: `{error: <stage>, message: <human>, path: <path | null>}`. The stage tags are the same set (`absolute_path`, `missing`, `sensitive_dir`, `size`, `content_type`, `mint`, `put`, `count`, `type`, `internal`). Confirm by reading openclaw `formatPhotoError`, hermes `tools.py:_handler` photos branch, nanobot `handle()` photos branch, and Rust `PhotoResolutionError::into_mcp_error`. The shape is structurally identical.
+
+2. **Logging events are uniform.** Event name `klodi_photos_resolution_failed`; fields `tool`, `stage`, `path`, `error`. Emitted at `warn` level for `mint` and `put` stages only. Verify by reading openclaw `logPhotoFailure`, hermes `_handler`'s `PhotoResolutionError` branch, nanobot `handle()`'s `PhotoResolutionError` branch, and Rust `apply_photos`'s `Err` branch.
+
+3. **openclaw `applyPhotos` non-array path matches Python/Rust.** Per CQG P2.4, a non-array `params.photos` now raises `PhotoResolutionError(..., "type")`. `photos === undefined` is still a no-op (the listing call dispatches without a photos field). The qa-added tests pin this.
+
+4. **`except BaseException` is gone from the listing/photos boundary in hermes and nanobot.** All catches in `tools.py` (hermes) and `nanobot_tools.py` (nanobot) plus the mint catches in `photos.py` / `nanobot_photos.py` are narrowed to `except Exception`. The qa-added P2.6 tests pin that `KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError` propagate.
+
+5. **ADR-0006 metadata is current.** `updated_at: 2026-05-23`, `updated_by_card: fold-uploads-into-listing-tools`. INDEX.md row reflects the bump and is re-sorted to the top of the newest-first table.
+
+**What stays the same (intentional, do not re-flag):**
+
+- Three independent implementations of the magic-byte sniffer. Per round-1 P3.1 the modules are at the upper end (TS 426, Rust 646, Python 405) but every individual function stays inside the 100-line cap. No abstraction was added for this round; the magic-byte table is short and identical across stacks.
+- The `p2p.v1.assets.upload-url` NATS subject is still used internally by the three helpers (TS / Py / Rust). The catalog-removal test (now correctly Node-native) allowlists the helper paths and tests; an agent-side `klodi_assets_upload_url` regression is still caught.
+- Live-verification was deferred again in this round — same reason as round 1 (no host runtime in the worktree session). Founder discretion on whether to gate merge on a live boot; per round-1 P3.3 this is a known gap.
+
+**Smells the new diff invites (CQG should re-confirm):**
+
+- `formatPhotoError` returns `JSON.stringify({...})`; `errorResult` then wraps that into a `text/plain` content block. The agent gets the JSON in `result.content[0].text` and `result.isError === true`. This is the same shape hermes/nanobot already produce. Confirm no double-stringify anywhere (e.g. inside a different error path that happens to JSON-stringify the message before passing it through `errorResult`).
+- The Rust `apply_photos` signature changed (added `tool_name: &str`). Confirm the only call site (`dispatch_passthrough` in `tools.rs`) was updated; no other crate or feature-gated call exists. `cargo build` was green across `klodi-rust-host` (mcp feature) and all three adapter binaries.
+
+
 
 <!-- Runs in the worktree on the card branch after Review PASS. Pushes to the same PR. Per the `distillation` skill: SEARCH docs/ INDEX files first; edit existing docs rather than creating duplicates. Captures land at smallest viable scope: inline WHY comments, docs/decisions/, docs/knowledge/, docs/product/, or CLAUDE.md. Then flips status to pr-ready. -->
 
