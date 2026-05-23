@@ -4,8 +4,8 @@ title: Adapter guard and exception parity with zeroclaw
 slug: adapter-guard-and-exception-parity-with-zeroclaw
 work_type: feature
 tiers: [unit, integration, e2e]
-status: in-dev
-agents: [expert-developer, qa-developer]
+status: review
+agents: [code-quality-guardian]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -430,13 +430,201 @@ These five hand-checks are the cross-language parity sanity test the founder wil
 <!-- architect closes out here with the final flip to status: stand-by (or the agreed next stage). -->
 
 
-## In Dev — <agents>
+## In Dev — expert-developer, qa-developer
 
-<!-- implementation + test notes -->
+### Implementation notes
+
+**Shape contract (R1, ADR-0011).** Every adapter emits the four-key envelope
+`{error, message, details, recovery_hint}` for every failure path. `details`
+and `recovery_hint` serialise as JSON `null` (never elided) on every language
+so the cross-language fixture deserialises identically on every adapter.
+
+- **Rust** — `ToolEnvelope` carries `Option<Value>` / `Option<NextAction>`
+  with explicit serde (`#[derive(Serialize)]` without `skip_serializing_if`).
+  The wire JSON literally contains `"details":null,"recovery_hint":null`.
+- **Python** — `make_envelope` returns a `dict[str, Any]` with `None`
+  placeholders; `json.dumps` natively renders `None → null`. Verified via
+  `test_envelope_serialises_none_as_json_null_not_omitted`.
+- **TypeScript** — `makeEnvelope` substitutes `?? null` so missing
+  `details` / `recovery_hint` reach the wire as literal `null` (the
+  default `JSON.stringify` would otherwise drop `undefined`).
+
+**R2 closed code vocabulary** lives at
+`packages/tool-catalog/src/error-codes.ts` (frozen `errorCodes` map). The
+13 codes cover pre-call guards, marketplace passthrough, server rejections,
+adapter-internal errors. The Rust dispatcher's `envelope_from_klodi_err`
+maps `KlodiError` variants to this vocabulary; Python's
+`envelope_from_klodi_request_error` passes server codes through verbatim;
+openclaw's `envelopeFromError` does the same. Server-side codes (e.g.
+`listing_not_owned_by_caller`) pass through unchanged with
+`recovery_hint: null` per architect open Q2 (conservative default).
+
+**Per-host CLI in R8 hints.** The default `envelope_from_klodi_err`
+returns `klodi-zeroclaw-register` as the `not_registered` CLI; per-bin
+adapters override via `envelope_from_klodi_err_with_cli(err, register_cli)`.
+The Rust trio's `bin/mcp.rs` setup-time check (creds/config missing) now
+emits the canonical envelope JSON to stderr and exits 1 — operator log
+parity with the agent-visible envelope. Verified live:
+
+```
+KLODI_HOME=/tmp/nonexistent target/debug/klodi-zeroclaw-mcp
+→ stderr: {"error":"not_registered","recovery_hint":{"kind":"cli","command":"klodi-zeroclaw-register",…}}
+→ exit 1
+```
+
+Same envelope for `klodi-moltis-mcp` (CLI = `klodi-moltis-register`),
+`klodi-ironclaw-mcp` (CLI = `klodi-ironclaw-register`).
+
+**Skill bundle.** `skill/references/error_envelopes.md` is the agent's
+documentation of the envelope. The catalog's
+`tests/skill-coverage.test.ts` grep-asserts that every code in
+`errorCodes` appears in the doc and every code-shaped token in the doc
+exists in `errorCodes` (catches doc / catalog drift in either direction).
+The bundled openclaw skill copy (`adapters/openclaw/skill/`) carries the
+doc post-`pnpm build`.
+
+**Mock-helper migration.** Updating
+`adapters/openclaw/src/__tests__/helpers/mock-nats.ts::KlodiRequestError`
+to mirror the production envelope constructor (`(envelope: ParsedError)`)
+required updating 12 call sites across 7 tool tests + the `tool-result`
+test. Legacy `(message, code, details)` triple is gone per CLAUDE.md.
+
+### Test approach
+
+- **Unit (per-adapter).** Rust: 79 lib tests (envelope.rs / guards.rs +
+  existing setup_status, register, forwarder); Python: 35 envelope +
+  guards tests; TypeScript: 16 envelope + 24 guards = 40 tests.
+- **Cross-language parity.** Integration test in each language reads
+  `packages/tool-catalog/tests/fixtures/envelope-golden.json` and asserts
+  the adapter's envelope helper produces a structurally-equal envelope
+  under matching failure modes (after placeholder substitution for the
+  per-host CLI name). Rust: 8 parity tests; Python: 7; TypeScript: 6.
+- **Catalog stability.** `skill-coverage.test.ts` (5 tests) gates doc /
+  catalog drift in either direction.
+- **Per-tool envelope promotion.** Existing tool tests promoted from
+  flat-string assertions to envelope shape — every error-path test now
+  parses the JSON body and asserts the `{error, recovery_hint?}` shape.
+
+Total: 611 tests green across packages and adapters (cargo: 87; openclaw:
+265; hermes: 73; nanobot: 51; nats-client-py envelope set: 42;
+tool-catalog: 93).
+
+### Live verification
+
+- **Build gate.** All five adapter builds clean:
+  `cargo build -p klodi-{moltis,ironclaw,zeroclaw}`,
+  `pnpm -C adapters/openclaw build`,
+  `uv build` in hermes / nanobot (deps installed; build succeeds).
+- **Bin smoke.** Each Rust adapter bin invoked with a non-existent
+  `KLODI_HOME` emits the canonical `not_registered` envelope to stderr
+  with the per-host register CLI in `recovery_hint.command`. Exit 1
+  (operator can tail and parse).
+- **Cross-language wire parity.** The Rust / Python / TS implementations
+  all serialise the envelope to the same four-key JSON document under
+  matching conditions — verified by the per-language parity test suite
+  against the shared golden fixture.
 
 ### → Handoff to Review (next agent: code-quality-guardian)
 
-<!-- what to pay attention to, known smells -->
+**Where to look first.**
+
+1. **`packages/klodi-rust-host/src/mcp/{envelope,guards}.rs`** — the
+   shape contract. The qa tests pin behaviour; the implementation is
+   minimal. Watch for any divergence between `envelope_from_klodi_err`
+   and the per-language equivalents in
+   `packages/nats-client-py/src/klodi_nats_client/envelope.py` and
+   `adapters/openclaw/src/lib/envelope.ts`.
+2. **`packages/klodi-rust-host/src/mcp/tools.rs`** — the dispatcher
+   rewrite. Each `dispatch_*` arm now explicit-matches on
+   `klodi_client()` AND the inner `client.request()` call instead of
+   `?`-propagating `McpError`. The wire-up is verbose by design — please
+   confirm that no error path still flows through the deleted
+   `map_klodi_err` (it's gone; check no stale references).
+3. **`adapters/openclaw/src/lib/tool-result.ts`** — the legacy
+   `errorResult` / `formatError` / `requireCreds` helpers are gone.
+   `envelopeToolResult` + `requireCredsEnvelope` are the replacements;
+   every per-tool file calls them. CLAUDE.md "no backwards compatibility"
+   was applied here — no shim, the legacy exports are deleted.
+4. **`adapters/openclaw/src/__tests__/helpers/mock-nats.ts`** — the
+   `KlodiRequestError` constructor now matches production. 12 test sites
+   were updated to construct via the envelope form; please confirm no
+   test still uses the old `(message, code)` triple.
+
+**Known smells.**
+
+- **`envelope_from_klodi_err` default CLI** is `klodi-zeroclaw-register`.
+  This is "default the canonical / most-active Rust adapter" semantics.
+  An alternative was to refuse to default and force callers to pass a
+  CLI — but the qa parity test exercises the no-arg form expecting
+  zeroclaw. If reviewers prefer a Result-typed `try_envelope_from_klodi_err`
+  variant that returns an error when no CLI is supplied, that's a
+  defensible follow-up. Documented inline.
+- **Marketplace passthrough returns `recovery_hint: null`** by design
+  (architect open Q2). The PO open Q2 says the agent benefits from a
+  hint even on server codes; the ADR amendment that introduces a
+  server-code→hint mapping table is out of scope for this card. Flagged
+  in `error_envelopes.md`.
+- **`KlodiRequestError` instanceof detection** in
+  `adapters/openclaw/src/lib/envelope.ts` uses duck-typing (name +
+  `.code` field) because the production class lives in
+  `@klodi/nats-client` and the test mock helper declares its own
+  structurally-identical class. `instanceof` would fail across the two;
+  duck-typing keeps the helper portable. Marked with a `Why:` comment.
+- **`is_uuid_v4` hand-rolled** in the Rust guards instead of pulling
+  in a regex crate. The catalog's UUID-v4 pattern is small and fixed;
+  adding `regex` for one well-known shape is overkill.
+- **R5 exemption arms.** `klodi_setup_status`, `klodi_health`, and
+  `klodi_setup_repair` (the diagnostic / repair targets of recovery
+  hints) continue to return their structured payloads — not the
+  envelope. `klodi_health` formats `whoami_failed` into its `issues[]`
+  array with inline `err instanceof Error` stringification (no longer
+  uses `formatError` which is gone). The dispatcher's
+  `dispatch_setup_status` and `dispatch_health` in Rust keep their
+  existing behaviour.
+
+**Deliberate trade-offs.**
+
+- We accept that the qa test (`parity_not_registered_creds_path`) pins
+  the default CLI to `klodi-zeroclaw-register`. Moltis and IronClaw
+  test paths go through the `with_cli` variant; this is the documented
+  call site in the dispatcher.
+- We accept that the openclaw `requestAndHandle` path now routes
+  KlodiRequestError → envelope inside the helper rather than rethrowing
+  for per-tool handling. The `rawRequest` path is preserved for tools
+  that need to inspect the raw response (listings / offers /
+  transactions).
+- We accept the bundled-skill-copy step writes
+  `error_envelopes.md` only when the openclaw build runs (`pnpm -C
+  adapters/openclaw build`). Per-adapter publishing wires this in
+  already.
+
+**Definition-of-done audit.**
+
+- [x] Catalog: `error-codes.ts` exists and 13 codes are exported.
+- [x] `cargo test -p klodi-rust-host --features mcp`: 79 lib + 8 parity
+  = 87 green.
+- [x] `cargo build -p klodi-moltis -p klodi-ironclaw -p klodi-zeroclaw`
+  clean. Each bin emits envelope JSON on creds-missing.
+- [x] `uv run pytest` clean in hermes (73) and nanobot (51).
+- [x] `pnpm -C adapters/openclaw test`: 265/265 green. Build clean.
+  Bundled skill copy contains `error_envelopes.md`.
+- [x] Parity test pinned via `envelope-golden.json` — every adapter's
+  test suite reads it and asserts envelope equivalence.
+- [x] `grep -rln 'errorResult(formatError' adapters/openclaw/src/` → 0.
+- [x] Cross-link audit: every error-code in catalog map appears in
+  `skill/references/error_envelopes.md`.
+
+**Not in scope (intentionally deferred).**
+
+- **The ADR document itself** (`docs/decisions/0011-adapter-exception-envelope.md`)
+  is referenced from inline comments throughout but has not been
+  written. Distillation lands it.
+- **Server-code → recovery_hint mapping** (architect open Q2 / PO open
+  Q2). The conservative default ships; the mapping table is a follow-up
+  ADR amendment once real session data shows where the agent gets stuck.
+- **`klodi_unavailable` alias removal** (architect open Q1). The
+  Python path emits `connection_not_ready` directly now — the alias
+  was already gone before this card landed.
 
 ## Review round 1 — code-quality-guardian
 
