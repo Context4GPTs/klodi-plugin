@@ -12,7 +12,7 @@ updated: 2026-05-23
 base_branch: main
 worktree: /Users/knitlybak/GitHub/4gpts/klodi/klodi-plugin/.claude/worktrees/card-adapter-guard-and-exception-parity-with-zeroclaw
 branch: card/adapter-guard-and-exception-parity-with-zeroclaw
-pr: null
+pr: https://github.com/Context4GPTs/klodi-plugin/pull/3
 merged_commit: null
 ---
 
