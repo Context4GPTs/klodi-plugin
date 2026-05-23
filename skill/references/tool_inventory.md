@@ -15,8 +15,8 @@ For state-of-the-world questions ("what listings do I have?", "any open channels
 
 | Tool | When to call |
 |---|---|
-| `klodi_list_create` | User intent "list it". Gather only required fields not already in context. Returns `sell_file.path` — the plugin already created the empty-body sell file at that path. Edit the body to add floor / Private Facts / Logistics; never create a parallel file. |
-| `klodi_list_update` | User wants to change an existing listing. `category` is immutable post-create. `fulfillment` updates atomically (full-array replacement). |
+| `klodi_list_create` | User intent "list it". Gather only required fields not already in context. `photos` accepts image URLs or absolute local file paths — locals are uploaded automatically. Returns `sell_file.path` — the plugin already created the empty-body sell file at that path. Edit the body to add floor / Private Facts / Logistics; never create a parallel file. |
+| `klodi_list_update` | User wants to change an existing listing. `category` is immutable post-create. `fulfillment` and `photos` update atomically (full-array replacement). `photos` accepts image URLs or absolute local file paths — locals are uploaded automatically. |
 | `klodi_list_get { listing_id }` | Fetch full listing details (description, fulfillment, photos, status). Use when the wake payload is stale or pre-action audit. |
 | `klodi_list_mine { status? }` | "What am I selling right now?" Authoritative — prefer over scanning `sell/`. |
 | `klodi_list_withdraw { listing_id }` | **Hard-confirm** with user. Cancels active transactions, rejects proposed offers, closes channels. |
@@ -66,12 +66,6 @@ For state-of-the-world questions ("what listings do I have?", "any open channels
 | `klodi_tx_confirm { transaction_id }` | Both parties must confirm before listing moves to `sold`. `completed_at` is null until both have confirmed. |
 | `klodi_tx_cancel { transaction_id, reason, detail? }` | **Hard-confirm** with user. Listing returns to active. Penalized reasons (`no_show`, `item_not_received`, `payment_not_received`) auto-apply 1-star to the counterparty. |
 | `klodi_tx_rate { transaction_id, rating, comment? }` | Rate counterparty 1-5. `other_party_rated` indicates whether the counterparty has also rated. |
-
-## Assets
-
-| Tool | When to call |
-|---|---|
-| `klodi_assets_upload_url { files: [...] }` | Mint presigned R2 URLs for raw photo bytes. Two-step flow: mint URL → PUT bytes to `upload_url` → pass returned `asset_url` into `klodi_list_create`/`klodi_list_update`. Skip entirely when the user supplies hosted image URLs — pass those directly. See `references/photo_upload_flow.md`. |
 
 ## Setup, registration, health
 
