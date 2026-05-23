@@ -405,9 +405,29 @@ product-owner will append the behaviour-side handoff guidance below. From the ar
 - If this card merges first: the sibling adopts the envelope on rebase; the sibling's P2.2 closes structurally.
 - If both PRs are open simultaneously past a certain point: pause this card's dev pair, escalate to founder. Two PRs touching `packages/tool-catalog/src/index.ts` and `adapters/openclaw/src/tools/listings.ts` with overlapping intent is a coordination cost.
 
+### → Handoff to In Dev (next agents: expert-developer, qa-developer) — product-owner
+
+The architect above owns the engineering sequencing, what's-shared-vs-per-adapter, constraints, and the DoD checklist. From the product side, three things the dev pair should hold the line on while implementing:
+
+1. **The agent's perspective is the source of truth on the criteria.** When in doubt about *what* to produce, write a test that mocks the failure mode, run it against the golden fixture, and ask: "Would an agent reading this response know what to do next?" If `recovery_hint` doesn't tell the agent a concrete action (tool to call, CLI to run, wait + retry, re-call with corrected args), the fixture is wrong, not the test. Recovery hints that say "see message" or "transaction failed" or "something went wrong" are anti-patterns — caught by the R8 / recovery-hint-quality criterion.
+
+2. **Zeroclaw is the reference, not the floor.** The criteria say "identical to zeroclaw" because zeroclaw currently has the most-structured envelope path (`KlodiError::Marketplace → {error, message, details}`). But zeroclaw today does *not* ship a `recovery_hint` field — this card adds it. The dev pair's first move is to add `recovery_hint` to the Rust shared host's envelope, then mirror to TS/Py. The five lagging adapters never "catch up to zeroclaw" — they all migrate to the new contract together, with zeroclaw landing the changes first by virtue of being the simplest delta (Rust adds one field; TS/Py add a field *and* restructure).
+
+3. **The skill (`skill/references/error_envelopes.md`) is the agent's documentation of the envelope.** Distillation must write it, and the architect's DoD checklist pins the cross-link audit. From the product side: write the skill *before* the parity tests are green, not after. The skill is the contract the agent reads; the tests verify the adapters implement what the skill describes. Writing tests first and the skill later means the skill is an after-thought; writing the skill first means the tests have a north-star.
+
+**Smoke-check the dev pair should run by hand** (separate from automated tests; this is a "would a real agent understand this" sanity check):
+
+- Boot openclaw, call `klodi_tx_confirm { transaction_id: "00000000-0000-4000-8000-000000000000" }` (a UUID that doesn't exist in the marketplace). Inspect the JSON the agent sees. Confirm `error: "not_found"`, `details.resource_id` carries the UUID, `recovery_hint` either is `null` or points to `klodi_tx_status` or `klodi_offer_mine`.
+- Boot hermes, repeat. Compare byte-for-byte on `error` and `recovery_hint`.
+- Boot the Rust trio (one of them is enough — they share the host), repeat.
+- Disconnect the network, repeat any call. Confirm `error: "connection_not_ready"` (or `klodi_unavailable` alias) and `recovery_hint: {kind: "tool", tool: "klodi_setup_status"}` on every adapter.
+- Delete `${KLODI_HOME}/nats.creds`, repeat any call. Confirm `error: "not_registered"` and `recovery_hint: {kind: "cli", ...}`.
+
+These five hand-checks are the cross-language parity sanity test the founder will run when they pick up the PR. If any of them produce a divergent envelope between adapters, the card isn't done.
+
 ### → Handoff to Stand-by (next agents: expert-developer, qa-developer)
 
-<!-- product-owner appends final stage flip; the architect's handoff guidance is the last edit on this stage. The dispatcher routes to Stand By once status flips to `stand-by`. -->
+<!-- architect closes out here with the final flip to status: stand-by (or the agreed next stage). -->
 
 
 ## In Dev — <agents>
