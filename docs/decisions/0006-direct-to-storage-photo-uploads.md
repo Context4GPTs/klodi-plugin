@@ -4,8 +4,8 @@ title: Direct-to-storage photo uploads via signed URLs
 tags: [uploads, r2, marketplace]
 card: pre-harness
 commit: d365332
-updated_at: 2026-04-30
-updated_by_card: pre-harness
+updated_at: 2026-05-23
+updated_by_card: fold-uploads-into-listing-tools
 ---
 
 # ADR-0006 — Direct-to-storage photo uploads via signed URLs
