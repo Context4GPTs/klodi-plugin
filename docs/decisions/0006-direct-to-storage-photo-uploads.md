@@ -35,7 +35,9 @@ There are three problems with that:
 5. Issue concurrent PUTs to each `upload_url` with `Content-Type` matching the sniffed type. R2 enforces both content type and size at the storage layer.
 6. Assemble the listing payload's `photos` array by index — URLs pass through, locals are replaced with the matching `asset_url` — and dispatch the listing call.
 
-Atomicity: any rejection at steps 1-3, any mint failure at step 4, or any PUT failure at step 5 aborts the entire call. No listing is created or updated. The error envelope names the offending path and the stage at which it failed.
+Atomicity: any rejection at steps 1-3, any mint failure at step 4, or any PUT failure at step 5 aborts the entire call. No listing is created or updated. The error envelope is `{error: <stage>, message: <human>, path: <offending path | null>}` where `<stage>` is one of the closed vocabulary `absolute_path`, `missing`, `sensitive_dir`, `size`, `content_type`, `count`, `type`, `mint`, `put`, `internal`. All four adapter languages (TypeScript / Python / Rust) emit this shape identically — openclaw, hermes, nanobot in the MCP `content[0].text` body as JSON; the Rust host on `McpError::data`. The shape is pinned by unit tests in each helper's test module and by the cross-stack assertions in `adapters/{openclaw,hermes,nanobot}/tests` plus `packages/klodi-rust-host/src/mcp/photos.rs::tests`.
+
+This envelope is the photo-resolution-specific shape. A broader adapter-wide exception envelope (carrying `details` and `recovery_hint`) is being defined separately and supersets this one — `path` becomes a member of `details`. The stage-tag vocabulary above remains the canonical photo-error code set under that superset.
 
 The standalone `klodi_assets_upload_url` agent tool is removed. The NATS subject (`p2p.v1.assets.upload-url`) is retained as an internal adapter dependency — it is no longer agent-facing.
 
@@ -57,6 +59,10 @@ The standalone `klodi_assets_upload_url` agent tool is removed. The NATS subject
 
 ## References
 
-- Code: `adapters/openclaw/src/tools/photos.ts` — the per-adapter helper that runs the validate / sniff / mint / PUT / substitute pipeline. The Python (hermes, nanobot) and Rust (moltis, ironclaw, zeroclaw via `packages/klodi-rust-host`) adapters carry parallel implementations with the same magic-number table and error envelope.
+- Code (one helper per language, byte-identical magic-number table + stage-tag vocabulary + envelope shape):
+  - `adapters/openclaw/src/tools/photos.ts` — TypeScript
+  - `adapters/hermes/src/klodi_hermes/photos.py` — Python (sync, used by hermes)
+  - `adapters/nanobot/nanobot_photos.py` — Python (async, used by nanobot)
+  - `packages/klodi-rust-host/src/mcp/photos.rs` — Rust (used by moltis, ironclaw, zeroclaw)
 - [SECURITY.md § Network behavior](../../SECURITY.md) (`Photo uploads bypass the klodi API entirely`)
 - `skill/references/photos.md` — agent-facing one-step flow (URLs or absolute local paths in `photos`).

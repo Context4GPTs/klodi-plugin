@@ -433,6 +433,11 @@ async fn resolve_local(raw: &str, index: usize) -> Result<Element, PhotoResoluti
     };
 
     let canonical_str = canonical.to_string_lossy().into_owned();
+    // Sensitive-dir check on the canonical (resolved) path, not the input.
+    // A symlink under /tmp/safe.jpg → /etc/passwd canonicalizes to /etc/passwd
+    // and gets rejected here. canonicalize() above also closes a symlink-race
+    // TOCTOU between sniff and PUT — subsequent fs::metadata, fs::read, and
+    // the PUT all operate on `canonical`, not `raw`. See ADR-0006.
     for prefix in sensitive_prefixes() {
         let bare = prefix.trim_end_matches('/');
         if canonical_str == bare || canonical_str.starts_with(&prefix) {

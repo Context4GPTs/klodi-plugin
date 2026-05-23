@@ -318,6 +318,11 @@ def _resolve_local(raw: str, index: int) -> _LocalElement:
         ) from err
 
     for prefix in _sensitive_prefixes():
+        # Sensitive-dir check on the REAL path, not the input path. A
+        # symlink under /tmp/safe.jpg → /etc/passwd resolves to /etc/passwd
+        # and gets rejected here. realpath(strict=True) above also closes
+        # a symlink-race TOCTOU between sniff and PUT — the helper reads
+        # bytes from `resolved`, not `raw`. See ADR-0006.
         bare = prefix.rstrip(os.sep)
         if resolved == bare or resolved.startswith(prefix):
             raise PhotoResolutionError(

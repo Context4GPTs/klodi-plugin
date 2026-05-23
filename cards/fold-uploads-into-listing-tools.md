@@ -4,8 +4,8 @@ title: Remove standalone upload tool, fold uploads into listing tools
 slug: fold-uploads-into-listing-tools
 work_type: feature
 tiers: [unit, integration, e2e]
-status: distilling
-agents: [solutions-architect]
+status: pr-ready
+agents: []
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -667,8 +667,14 @@ PASS. Flip to `distilling`. The architect should pick up the distillation sweep 
 4. **TOCTOU note.** The realpath-before-sniff pattern is non-obvious — worth an inline `// See ADR-0006` comment in each `_resolve_local` / `resolveLocal` / `resolve_local` function pointing at the symlink-escape mitigation rationale, or a short distillation entry in `docs/knowledge/`.
 5. **Envelope shape contract.** The `{error, message, path}` shape is the canonical cross-language contract. Whoever adds a new adapter language (Go, Swift, etc.) must replicate it exactly. Consider an inline comment at the top of each `photos.{ts,py,rs}` module pointing to ADR-0006 for the wire shape, or a `docs/knowledge/photo-envelope-contract.md` capturing the contract.
 
+## Distillation — solutions-architect
 
+Pre-write search: `docs/decisions/INDEX.md` matched ADR-0006 directly; `docs/knowledge/` and `docs/product/` do not exist in this worktree (gitignored per CLAUDE.md). The sibling worktree `card-adapter-guard-and-exception-parity-with-zeroclaw` claims `docs/decisions/0011-adapter-exception-envelope.md` as the canonical broader envelope-contract slot and explicitly extends this card's `{error, message, path}` to `{error, message, details: {path}, recovery_hint}`. To avoid an ADR-number collision, no new ADR was written; ADR-0006 was extended instead to pin the photo-specific envelope shape so the sibling card has a stable thing to superset.
 
-<!-- PR url; founder notification fires here -->
+- `docs/decisions/0006-direct-to-storage-photo-uploads.md` — extended the Decision section to pin the envelope shape `{error, message, path}` and the closed stage-tag vocabulary (`absolute_path`, `missing`, `sensitive_dir`, `size`, `content_type`, `count`, `type`, `mint`, `put`, `internal`) as the per-adapter wire contract. Added a forward-looking note that a broader adapter-wide envelope (carrying `details` and `recovery_hint`) is being defined separately and supersets this shape. Rewrote the References block to list all four helper paths (TS, Python sync/async, Rust) instead of only openclaw.
+- `CHANGELOG.md` — lifted the product-marketer's `[Unreleased] — fold uploads into listing tools` block verbatim from this card body (lines 287–301 of the discovery output). Added a one-character correction: the rewrite renamed `skill/references/photo_upload_flow.md` to `skill/references/photos.md` during dev, so the Removed bullet now reads "(now `skill/references/photos.md`)".
+- Inline `// See ADR-0006` WHY comment added at the realpath sensitive-dir check in `adapters/hermes/src/klodi_hermes/photos.py:_resolve_local`, `adapters/nanobot/nanobot_photos.py:_resolve_local`, and `packages/klodi-rust-host/src/mcp/photos.rs::resolve_local`. The openclaw helper already carried the equivalent comment; the three other helpers were silent on why the sensitive-dir check runs against the canonical path rather than the input — the comment now names the symlink-race TOCTOU between sniff and PUT as the rationale, and confirms downstream reads operate on the resolved path. Per-helper tests (hermes 21/21, nanobot 21/21, rust-host mcp::photos 7/7) re-run GREEN; tool-catalog 8/8 GREEN.
+- `docs/decisions/INDEX.md` — no row change (ADR-0006 row already at top with `2026-05-23`).
+- Skipped: magic-byte table consolidation knowledge doc (no `docs/knowledge/` exists yet; the pattern is visible in code, and the HEIC/AVIF "next-touch" trigger will produce its own card). Skipped: a separate envelope-contract ADR (would collide with the sibling card's claim on ADR-0011).
 
 <!-- Abandoned section: appended by /board-close. Records date, reason, PR state at close, worktree teardown. Heading is "## Abandoned — founder". -->
