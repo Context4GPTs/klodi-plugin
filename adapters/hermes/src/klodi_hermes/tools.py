@@ -22,6 +22,7 @@ This module owns:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
@@ -39,10 +40,17 @@ from klodi_nats_client.envelope import (
     envelope_from_unknown,
     make_envelope,
 )
+from klodi_nats_client.guards import guard_creds
+from klodi_nats_client.paths import default_klodi_home
 
 from .client import get_client, run_async
 
 log = logging.getLogger("klodi_hermes.tools")
+
+# Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+# Substituted into the catalog's `klodi-<host>-register` placeholder so
+# the agent surfaces the literal command the operator runs.
+HERMES_REGISTER_CLI = "klodi-hermes-register"
 
 
 # ── Emojis ───────────────────────────────────────────────────────────
@@ -73,7 +81,6 @@ _TOOL_EMOJIS: dict[str, str] = {
     "klodi_tx_confirm": "✅",
     "klodi_tx_cancel": "❎",
     "klodi_tx_rate": "⭐",
-    "klodi_assets_upload_url": "📸",
     "klodi_searches_create": "👁️",
     "klodi_searches_delete": "✖️",
     "klodi_searches_list": "📔",
@@ -109,26 +116,53 @@ def build_request_handler(tool_name: str) -> Callable[..., str]:
         # All error paths return the canonical four-key envelope
         # (ADR-0011). The agent reads `error`, follows `recovery_hint`,
         # never pattern-matches on `message`.
+
+        # R4 — creds guard fails BEFORE any I/O. No NATS round-trip
+        # gets issued if creds are absent.
+        creds_env = guard_creds(default_klodi_home(), HERMES_REGISTER_CLI)
+        if creds_env is not None:
+            return json.dumps(creds_env)
+
         try:
             client = get_client()
             result = run_async(client.request(subject, args))
         except KlodiRequestError as err:
             return json.dumps(envelope_from_klodi_request_error(err))
+        except _CONNECTION_ERROR_TYPES as err:
+            # Transport / connection state — agent calls
+            # klodi_setup_status to diagnose.
+            log.warning(
+                "klodi_tool_handler_connection_failed tool=%s subject=%s error=%s",
+                tool_name,
+                subject,
+                err,
+            )
+            return json.dumps(envelope_from_not_connected())
         except BaseException as err:  # noqa: BLE001 — boundary
+            # Everything else (ValueError, JSONDecodeError, KeyError,
+            # RuntimeError, …) is an adapter-internal failure. R2 says
+            # `internal_error` — agent retries once or surfaces.
             log.warning(
                 "klodi_tool_handler_failed tool=%s subject=%s error=%s",
                 tool_name,
                 subject,
                 err,
             )
-            # Connection-state errors surface as `connection_not_ready`
-            # with a `klodi_setup_status` recovery hint. The agent picks
-            # up the hint, calls setup_status, reads the next_action,
-            # and acts on it.
-            return json.dumps(envelope_from_not_connected())
+            return json.dumps(envelope_from_unknown(err))
         return json.dumps(result)
 
     return handler
+
+
+# Exception types that signal "transport / connection is not ready".
+# Catching these specifically (rather than the BaseException catch-all
+# from round 1) means non-connection failures route to `internal_error`
+# instead of being mis-labelled `connection_not_ready` (P1.3, R2).
+_CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    ConnectionError,
+    asyncio.TimeoutError,
+    TimeoutError,
+)
 
 
 # ── klodi_channel_message — direct JetStream publish ──────────────────
@@ -141,6 +175,11 @@ def handle_channel_message(args: dict[str, Any], **_kwargs: Any) -> str:
     proof that the message is durably stored and queued for the
     recipient's consumer.
     """
+    # R4 — creds guard fails BEFORE any I/O.
+    creds_env = guard_creds(default_klodi_home(), HERMES_REGISTER_CLI)
+    if creds_env is not None:
+        return json.dumps(creds_env)
+
     channel_id = args.get("channel_id")
     content = args.get("content")
     if not isinstance(channel_id, str) or not channel_id:
@@ -161,13 +200,22 @@ def handle_channel_message(args: dict[str, Any], **_kwargs: Any) -> str:
         # ValueError from publish_channel_message means the server-side
         # validator rejected the body shape (content max-length, etc.).
         return json.dumps(envelope_from_unknown(err))
+    except _CONNECTION_ERROR_TYPES as err:
+        log.warning(
+            "klodi_channel_message_connection_failed channel_id=%s error=%s",
+            channel_id,
+            err,
+        )
+        return json.dumps(envelope_from_not_connected())
     except BaseException as err:  # noqa: BLE001 — boundary
+        # Adapter-internal failure — agent gets `internal_error`, not a
+        # mis-labelled `connection_not_ready` (P1.3).
         log.warning(
             "klodi_channel_message_failed channel_id=%s error=%s",
             channel_id,
             err,
         )
-        return json.dumps(envelope_from_not_connected())
+        return json.dumps(envelope_from_unknown(err))
     return json.dumps(result)
 
 
@@ -222,9 +270,11 @@ def register_request_tools(ctx: Any) -> int:
     gating used to hide these when the NATS client wasn't connected,
     but that created a discoverability cliff (the model can only
     call tools whose schema it received last turn). The handlers
-    return ``error=klodi_unavailable`` when dispatch fails because
-    of connection state, which keeps the tool discoverable while
-    making the failure mode actionable.
+    return the canonical four-key envelope (ADR-0011) on failure —
+    `connection_not_ready` for transport-state errors, `not_registered`
+    when creds are missing (guard catches it before any I/O), and
+    `internal_error` for everything else — keeping the tool
+    discoverable while making the failure mode actionable.
 
     Returns the number of tools registered.
     """

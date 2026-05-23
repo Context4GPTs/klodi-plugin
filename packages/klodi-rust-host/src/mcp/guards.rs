@@ -21,9 +21,9 @@
 //!
 //! See ADR-0011.
 
-use super::envelope::ToolEnvelope;
+use super::envelope::{ToolEnvelope, invalid_request_envelope};
 use crate::setup_status::NextAction;
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use std::path::Path;
 
 /// Argument-shape vocabulary for `guard_args`. Mirrors the small set the
@@ -94,14 +94,14 @@ pub fn guard_args(
     for (field, kind) in required {
         match args.get(*field) {
             None => {
-                return Some(invalid_request(field, "missing"));
+                return Some(invalid_request_envelope(field, "missing"));
             }
             Some(Value::Null) => {
-                return Some(invalid_request(field, "missing"));
+                return Some(invalid_request_envelope(field, "missing"));
             }
             Some(value) => {
                 if let Some(problem) = check_value(value, *kind) {
-                    return Some(invalid_request(field, problem));
+                    return Some(invalid_request_envelope(field, problem));
                 }
             }
         }
@@ -125,20 +125,11 @@ pub fn run_pre_call_guards(
     guard_args(args, required)
 }
 
-fn invalid_request(field: &str, problem: &str) -> ToolEnvelope {
-    ToolEnvelope {
-        error: "invalid_request".to_string(),
-        message: format!("argument `{field}` is {problem}; re-call with a corrected value"),
-        details: Some(json!({ "field": field, "problem": problem })),
-        recovery_hint: None,
-    }
-}
-
 fn check_value(value: &Value, kind: ArgKind) -> Option<&'static str> {
     match kind {
         ArgKind::Uuid => match value.as_str() {
             None => Some("wrong_type"),
-            Some(s) if s.is_empty() => Some("empty"),
+            Some("") => Some("empty"),
             Some(s) if !is_uuid_v4(s) => Some("wrong_type"),
             Some(_) => None,
         },
@@ -151,7 +142,7 @@ fn check_value(value: &Value, kind: ArgKind) -> Option<&'static str> {
         }
         ArgKind::NonEmptyString => match value.as_str() {
             None => Some("wrong_type"),
-            Some(s) if s.is_empty() => Some("empty"),
+            Some("") => Some("empty"),
             Some(_) => None,
         },
         ArgKind::Integer => {

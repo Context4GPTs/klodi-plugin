@@ -60,6 +60,7 @@ describe("klodi_search", () => {
   });
 
   it("returns the canonical envelope on NATS error", async () => {
+    // Round 2 P2.1 — marketplace codes collapse to the R2 catch-all.
     mockNatsError(
       "p2p.v1.listings.search",
       new KlodiRequestError({ error: "INVALID", message: "Bad query" }),
@@ -68,7 +69,8 @@ describe("klodi_search", () => {
     const result = await tool.execute("call-1", { query: "x" });
     expect(result.isError).toBe(true);
     const env = JSON.parse(result.content[0].text!);
-    expect(env.error).toBe("INVALID");
+    expect(env.error).toBe("marketplace_error");
+    expect(env.details.marketplace_error_code).toBe("INVALID");
     expect(env.recovery_hint).toBeNull();
   });
 
@@ -191,7 +193,8 @@ describe("klodi_unwatch", () => {
     expect(listBuySlugs()).toHaveLength(0);
   });
 
-  it("returns the canonical envelope when the server delete fails", async () => {
+  it("returns the marketplace_error envelope when the server delete fails", async () => {
+    // Round 2 P2.1 — marketplace codes collapse to the R2 catch-all.
     mockNatsError(
       "p2p.v1.searches.delete",
       new KlodiRequestError({ error: "NOT_FOUND", message: "not found" }),
@@ -200,7 +203,8 @@ describe("klodi_unwatch", () => {
     const result = await tool.execute("call-1", { buy_slug: "missing" });
     expect(result.isError).toBe(true);
     const env = JSON.parse(result.content[0].text!);
-    expect(env.error).toBe("NOT_FOUND");
+    expect(env.error).toBe("marketplace_error");
+    expect(env.details.marketplace_error_code).toBe("NOT_FOUND");
   });
 });
 

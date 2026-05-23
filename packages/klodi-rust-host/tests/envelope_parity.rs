@@ -221,8 +221,13 @@ fn parity_consumer_missing_channels() {
 // ── marketplace passthrough ──────────────────────────────────────────
 
 #[test]
-fn parity_marketplace_passthrough_preserves_server_code() {
-    let expected = envelope_for("marketplace_passthrough_listing_not_owned");
+fn parity_marketplace_error_collapses_to_marketplace_error() {
+    // Round 2 P2.1 — every marketplace error now collapses to the R2
+    // catch-all `marketplace_error`; the original code rides in
+    // `details.marketplace_error_code`. The fixture name kept its
+    // historical label for grep-discoverability, but the entry shape
+    // changed.
+    let expected = envelope_for("marketplace_error_unknown_code");
     let err = KlodiError::Marketplace {
         code: "listing_not_owned_by_caller".to_string(),
         message: "Listing belongs to another user".to_string(),
@@ -233,6 +238,11 @@ fn parity_marketplace_passthrough_preserves_server_code() {
     let actual = envelope_from_klodi_err(err);
     let actual_v = serde_json::to_value(&actual).unwrap();
     assert_eq!(actual_v["error"], expected["error"]);
+    assert_eq!(actual_v["error"], "marketplace_error");
+    assert_eq!(
+        actual_v["details"]["marketplace_error_code"],
+        "listing_not_owned_by_caller"
+    );
     assert!(
         actual_v["recovery_hint"].is_null(),
         "marketplace passthrough must NOT synthesise a recovery_hint"

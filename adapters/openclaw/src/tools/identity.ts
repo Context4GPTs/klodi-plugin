@@ -15,9 +15,12 @@ import {
   envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCredsEnvelope,
 } from "../lib/tool-result.js";
+import { runPreCallGuardsResult } from "../lib/guards.js";
 import { envelopeToToolResult, makeEnvelope } from "../lib/envelope.js";
+
+// Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
 import {
   connectClient,
   getClient,
@@ -210,7 +213,7 @@ function registerWhoami(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute() {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult({}, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, {});
@@ -364,7 +367,7 @@ function registerRatings(api: PluginAPI): void {
     description: tool.description,
     parameters: Type.Object({ handle: Handle }),
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, {

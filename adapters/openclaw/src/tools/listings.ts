@@ -12,14 +12,17 @@ import {
   envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCredsEnvelope,
 } from "../lib/tool-result.js";
+import { runPreCallGuardsResult } from "../lib/guards.js";
 import {
   onListingCreated,
   onListingRelisted,
   onListingWithdrawn,
 } from "../service/state.js";
 import { getSellFilePath } from "../lib/paths.js";
+
+// Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
 
 const SELL_FILE_HINT =
   "Write private context (floor price, logistics, private facts) into"
@@ -43,7 +46,7 @@ function registerCreate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
 
       let result: Record<string, unknown>;
@@ -89,7 +92,7 @@ function registerGet(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);
@@ -109,7 +112,7 @@ function registerMine(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       const payload: Record<string, unknown> = {};
       if (params["status"]) payload["status"] = params["status"];
@@ -131,7 +134,7 @@ function registerUpdate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       let result: Record<string, unknown>;
       try {
@@ -158,7 +161,7 @@ function registerWithdraw(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       const listingId = params["listing_id"] as string;
       try {
@@ -183,7 +186,7 @@ function registerRelist(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       const listingId = params["listing_id"] as string;
       const payload: Record<string, unknown> = {
@@ -217,7 +220,7 @@ function registerComments(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       const payload: Record<string, unknown> = {
         listing_id: params["listing_id"],

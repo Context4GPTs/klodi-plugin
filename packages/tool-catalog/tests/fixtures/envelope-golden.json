@@ -114,20 +114,8 @@
     }
   },
 
-  "marketplace_passthrough_listing_not_owned": {
-    "_when": "server rejects state-mutating tool because caller does not own the target listing (passthrough path; recovery_hint stays null per architect open Q2 conservative default)",
-    "envelope": {
-      "error": "listing_not_owned_by_caller",
-      "message": null,
-      "details": {
-        "listing_id": "<uuid>"
-      },
-      "recovery_hint": null
-    }
-  },
-
   "marketplace_error_unknown_code": {
-    "_when": "server returns an error code outside the closed R2 vocabulary; adapter collapses to marketplace_error and preserves the original code under details.marketplace_error_code",
+    "_when": "server returns ANY error code from the marketplace request/reply path; adapter collapses to `marketplace_error` (the R2 closed-vocabulary catch-all) and preserves the original code under details.marketplace_error_code. The architect's open Q5 (marketplace vocabulary not enumerated in this repo) and PO's Q5 recommendation defer the more-specific subset mapping (`unauthorized` / `not_found` / `conflict` / `validation_failed` / `rate_limited`) to an ADR-0011 amendment once the marketplace's error vocabulary is documented server-side. Until then, marketplace passthrough is single-arm: `marketplace_error` with `details.marketplace_error_code` carrying the server's original code. recovery_hint stays null per architect open Q2 conservative default.",
     "envelope": {
       "error": "marketplace_error",
       "message": null,

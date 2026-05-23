@@ -42,18 +42,33 @@
  * This file is QA-owned during RED. NEVER weaken these asserts.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { writeFileSync } from "node:fs";
+
+// The expert's round-2 wiring made `runPreCallGuards` call
+// `guardConnection()` between creds + args (R4 ordering). The connection
+// guard reads `isClientConnected()` from `lib/client.ts`, which in
+// production returns false until `connectClient(api)` has run. Tests in
+// this file exercise the guards in isolation (no plugin lifecycle),
+// so we route `client.ts` to the test mock — `isClientConnected()`
+// then reflects the mock's `connected` flag (default true).
+vi.mock("../../lib/client.js", () => import("../helpers/mock-nats.js"));
 
 import {
   type ArgKind,
   guardArgs,
   guardCreds,
+  guardConnection,
   runPreCallGuards,
+  runPreCallGuardsResult,
 } from "../../lib/guards.js";
 import type { RecoveryHint, ToolEnvelope } from "../../lib/envelope.js";
 import { getConfigPath, getCredsPath } from "../../lib/paths.js";
 import { createTempHome, type TempHome } from "../helpers/temp-home.js";
+import {
+  clearNatsResponses,
+  setConnected,
+} from "../helpers/mock-nats.js";
 
 const ENVELOPE_KEYS = ["details", "error", "message", "recovery_hint"];
 
@@ -65,6 +80,9 @@ let home: TempHome;
 
 beforeEach(() => {
   home = createTempHome();
+  // Default: connection guard passes. Tests that exercise the
+  // connection-down path explicitly call `setConnected(false)`.
+  clearNatsResponses();
 });
 
 afterEach(() => {
@@ -292,5 +310,166 @@ describe("runPreCallGuards", () => {
     );
     expect(env).not.toBeNull();
     assertEnvelopeShape(env!);
+  });
+
+  it("does NOT check the connection (pure-function helper)", () => {
+    // `runPreCallGuards` is the synchronous helper — it covers creds +
+    // args only. The connection check is part of `runPreCallGuardsResult`
+    // (the production caller), which composes all three guards in R4
+    // order. This separation lets pure-function callers validate
+    // creds + args without depending on the client singleton.
+    writeFileSync(getCredsPath(), "fake-creds");
+    writeFileSync(getConfigPath(), "{}");
+    setConnected(false);
+    const env = runPreCallGuards(
+      { transaction_id: "550e8400-e29b-41d4-a716-446655440000" },
+      [{ field: "transaction_id", kind: "uuid" }],
+      { registerCli: "klodi-openclaw-register" },
+    );
+    // Even with the client disconnected, `runPreCallGuards` returns
+    // null — connection is not its concern.
+    expect(env).toBeNull();
+  });
+});
+
+// ── runPreCallGuardsResult — production caller, full R4 chain ───────────
+
+describe("runPreCallGuardsResult", () => {
+  it("returns null when every guard passes (creds + connection + args)", () => {
+    writeFileSync(getCredsPath(), "fake-creds");
+    writeFileSync(getConfigPath(), "{}");
+    setConnected(true);
+    const result = runPreCallGuardsResult(
+      { transaction_id: "550e8400-e29b-41d4-a716-446655440000" },
+      [{ field: "transaction_id", kind: "uuid" }],
+      { registerCli: "klodi-openclaw-register" },
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns connection_not_ready when the client is disconnected (R4 ordering)", () => {
+    // Creds present + args well-formed, but client disconnected →
+    // connection guard fires between creds and args. Pinned by P1.2:
+    // the per-tool path must surface `connection_not_ready`, NOT flow
+    // through to `request()` and produce `internal_error`.
+    writeFileSync(getCredsPath(), "fake-creds");
+    writeFileSync(getConfigPath(), "{}");
+    setConnected(false);
+    const result = runPreCallGuardsResult(
+      { transaction_id: "550e8400-e29b-41d4-a716-446655440000" },
+      [{ field: "transaction_id", kind: "uuid" }],
+      { registerCli: "klodi-openclaw-register" },
+    );
+    expect(result).not.toBeNull();
+    expect(result!.isError).toBe(true);
+    const body = JSON.parse(
+      (result!.content[0] as { text: string }).text,
+    ) as ToolEnvelope;
+    expect(body.error).toBe("connection_not_ready");
+    const hint = body.recovery_hint as RecoveryHint;
+    expect(hint.kind).toBe("tool");
+    expect(hint["tool"]).toBe("klodi_setup_status");
+  });
+
+  it("reports creds failure BEFORE the connection failure (R4 ordering)", () => {
+    // Creds absent + connection down — creds guard fires first per R4.
+    setConnected(false);
+    const result = runPreCallGuardsResult(
+      { transaction_id: "550e8400-e29b-41d4-a716-446655440000" },
+      [{ field: "transaction_id", kind: "uuid" }],
+      { registerCli: "klodi-openclaw-register" },
+    );
+    expect(result).not.toBeNull();
+    const body = JSON.parse(
+      (result!.content[0] as { text: string }).text,
+    ) as ToolEnvelope;
+    expect(body.error).toBe(
+      "not_registered",
+      // creds-first per R4 — connection guard does not run when creds
+      // are absent.
+    );
+  });
+
+  it("reports connection failure BEFORE the args failure (R4 ordering)", () => {
+    // Creds present, args bad, connection down — connection guard
+    // fires before args. The agent learns about transport state
+    // before being asked to fix args.
+    writeFileSync(getCredsPath(), "fake-creds");
+    writeFileSync(getConfigPath(), "{}");
+    setConnected(false);
+    const result = runPreCallGuardsResult(
+      {},  // missing transaction_id
+      [{ field: "transaction_id", kind: "uuid" }],
+      { registerCli: "klodi-openclaw-register" },
+    );
+    expect(result).not.toBeNull();
+    const body = JSON.parse(
+      (result!.content[0] as { text: string }).text,
+    ) as ToolEnvelope;
+    expect(body.error).toBe(
+      "connection_not_ready",
+      // connection-before-args: R4 ordering. Agent fixes transport
+      // first; if args are also bad, that surfaces on the next call.
+    );
+  });
+
+  it("reports args failure when creds + connection pass", () => {
+    writeFileSync(getCredsPath(), "fake-creds");
+    writeFileSync(getConfigPath(), "{}");
+    setConnected(true);
+    const result = runPreCallGuardsResult(
+      {},  // missing transaction_id
+      [{ field: "transaction_id", kind: "uuid" }],
+      { registerCli: "klodi-openclaw-register" },
+    );
+    expect(result).not.toBeNull();
+    const body = JSON.parse(
+      (result!.content[0] as { text: string }).text,
+    ) as ToolEnvelope;
+    expect(body.error).toBe("invalid_request");
+    expect((body.details as Record<string, unknown>)["field"]).toBe(
+      "transaction_id",
+    );
+    expect((body.details as Record<string, unknown>)["problem"]).toBe(
+      "missing",
+    );
+  });
+
+  it("returns a ToolResult (not a bare ToolEnvelope)", () => {
+    // The production caller wires this in `tool.execute()` arms:
+    //   const guard = runPreCallGuardsResult(params, ...);
+    //   if (guard) return guard;
+    // So the return type MUST be `ToolResult | null`, not
+    // `ToolEnvelope | null`. The body is in `content[0].text`.
+    setConnected(false);
+    const result = runPreCallGuardsResult(
+      {},
+      [{ field: "x", kind: "uuid" }],
+      { registerCli: "klodi-openclaw-register" },
+    );
+    expect(result).not.toBeNull();
+    expect(result).toHaveProperty("content");
+    expect(result!.isError).toBe(true);
+  });
+});
+
+// ── guardConnection — standalone helper ─────────────────────────────────
+
+describe("guardConnection", () => {
+  it("returns null when the client reports connected", () => {
+    setConnected(true);
+    expect(guardConnection()).toBeNull();
+  });
+
+  it("returns the connection_not_ready envelope when disconnected", () => {
+    setConnected(false);
+    const env = guardConnection();
+    expect(env).not.toBeNull();
+    assertEnvelopeShape(env!);
+    expect(env!.error).toBe("connection_not_ready");
+    expect(env!.recovery_hint).not.toBeNull();
+    const hint = env!.recovery_hint as RecoveryHint;
+    expect(hint.kind).toBe("tool");
+    expect(hint["tool"]).toBe("klodi_setup_status");
   });
 });

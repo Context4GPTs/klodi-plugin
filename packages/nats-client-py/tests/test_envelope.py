@@ -168,10 +168,13 @@ def test_make_envelope_with_recovery_hint_tool_preserves_kind_discriminant() -> 
 # ── envelope_from_klodi_request_error (R1 marketplace passthrough) ────
 
 
-def test_envelope_from_marketplace_request_error_passes_through() -> None:
-    """Marketplace passthrough: code/message preserved verbatim,
-    recovery_hint stays ``None`` (architect open Q2 conservative
-    default — adapter does NOT synthesise a hint for server codes)."""
+def test_envelope_from_marketplace_request_error_collapses_to_marketplace_error() -> None:
+    """Round 2 P2.1 — marketplace errors collapse to the R2 catch-all
+    `marketplace_error`; the server's original code rides in
+    `details.marketplace_error_code`, the message in
+    `details.marketplace_message`, and extra server payload in
+    `details.marketplace_details`. `recovery_hint` stays `None` per
+    architect open Q2 conservative default."""
     err = KlodiRequestError(
         {
             "error": "listing_not_owned_by_caller",
@@ -181,22 +184,28 @@ def test_envelope_from_marketplace_request_error_passes_through() -> None:
     )
     env = envelope_from_klodi_request_error(err)
     _assert_envelope_keys(env)
-    assert env["error"] == "listing_not_owned_by_caller"
-    assert env["message"] == "Listing belongs to another user"
-    assert env["details"] == {"listing_id": "abc"}
+    assert env["error"] == "marketplace_error"
+    assert env["details"]["marketplace_error_code"] == "listing_not_owned_by_caller"
+    assert env["details"]["marketplace_message"] == "Listing belongs to another user"
+    assert env["details"]["marketplace_details"] == {"listing_id": "abc"}
     assert env["recovery_hint"] is None, (
         "marketplace passthrough must NOT synthesise a recovery_hint"
     )
 
 
-def test_envelope_from_request_error_without_details_uses_none_placeholder() -> None:
+def test_envelope_from_request_error_without_details_omits_marketplace_details() -> None:
+    # Round 2 P2.1 — when the server omits `details`, the envelope
+    # `details` object still carries `marketplace_error_code` +
+    # `marketplace_message` but skips `marketplace_details`.
     err = KlodiRequestError(
         {"error": "validation_failed", "message": "bad payload"}
     )
     env = envelope_from_klodi_request_error(err)
     _assert_envelope_keys(env)
-    assert env["error"] == "validation_failed"
-    assert env["details"] is None
+    assert env["error"] == "marketplace_error"
+    assert env["details"]["marketplace_error_code"] == "validation_failed"
+    assert env["details"]["marketplace_message"] == "bad payload"
+    assert "marketplace_details" not in env["details"]
     assert env["recovery_hint"] is None
 
 

@@ -150,11 +150,13 @@ describe("makeEnvelope (R1 wire shape)", () => {
 // ── envelopeFromError: KlodiRequestError marketplace passthrough ──────
 
 describe("envelopeFromError — KlodiRequestError", () => {
-  it("passes marketplace code/message/details through verbatim", () => {
-    // Marketplace returns a structured envelope; the adapter preserves
-    // `code` as `error`, `message`, and the `details` object. R8 + open Q2
-    // conservative default — recovery_hint stays null for server-side
-    // rejections (until an ADR amendment authorises a mapping).
+  it("collapses marketplace errors to the R2 catch-all `marketplace_error`", () => {
+    // Round 2 P2.1 — every marketplace error now collapses to the
+    // closed-vocabulary catch-all `marketplace_error`; the server's
+    // original code rides in `details.marketplace_error_code`, the
+    // message in `details.marketplace_message`, and extra server
+    // payload in `details.marketplace_details`. Recovery_hint stays
+    // null per architect open Q2 conservative default.
     const err = new KlodiRequestError({
       error: "listing_not_owned_by_caller",
       message: "Listing belongs to another user",
@@ -162,21 +164,26 @@ describe("envelopeFromError — KlodiRequestError", () => {
     });
     const env = envelopeFromError(err);
     assertEnvelopeShape(env);
-    expect(env.error).toBe("listing_not_owned_by_caller");
+    expect(env.error).toBe("marketplace_error");
     expect(env.message).toBe("Listing belongs to another user");
-    expect(env.details).toEqual({ listing_id: "abc" });
+    const details = env.details as Record<string, unknown>;
+    expect(details["marketplace_error_code"]).toBe("listing_not_owned_by_caller");
+    expect(details["marketplace_message"]).toBe("Listing belongs to another user");
+    expect(details["marketplace_details"]).toEqual({ listing_id: "abc" });
     expect(env.recovery_hint).toBeNull();
   });
 
-  it("uses `null` for details when the marketplace omits them", () => {
+  it("omits `marketplace_details` when the marketplace returns no details", () => {
     const err = new KlodiRequestError({
       error: "validation_failed",
       message: "bad payload",
     });
     const env = envelopeFromError(err);
     assertEnvelopeShape(env);
-    expect(env.error).toBe("validation_failed");
-    expect(env.details).toBeNull();
+    expect(env.error).toBe("marketplace_error");
+    const details = env.details as Record<string, unknown>;
+    expect(details["marketplace_error_code"]).toBe("validation_failed");
+    expect("marketplace_details" in details).toBe(false);
     expect(env.recovery_hint).toBeNull();
   });
 });

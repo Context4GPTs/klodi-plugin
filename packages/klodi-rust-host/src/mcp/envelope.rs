@@ -50,17 +50,46 @@ pub struct ToolEnvelope {
     pub recovery_hint: Option<NextAction>,
 }
 
-/// Map a [`KlodiError`] into a [`ToolEnvelope`] using the R2 vocabulary
-/// (see card body — closed code set). Server-side codes pass through
-/// verbatim with no synthesised recovery hint (open Q2 default).
+/// Map a [`KlodiError`] into a [`ToolEnvelope`] using the R2 closed
+/// vocabulary (see card body — `errorCodes` in
+/// `packages/tool-catalog/src/error-codes.ts`).
+///
+/// Marketplace errors collapse to the catch-all
+/// [`marketplace_error`](https://...) code; the server's original code
+/// rides in `details.marketplace_error_code`, the server's message in
+/// `details.marketplace_message`, and any additional server payload in
+/// `details.marketplace_details`. This preserves the R2 invariant
+/// ("every `error` value is drawn from a fixed, append-only set") even
+/// before the more-specific subset mapping (`unauthorized` / `not_found`
+/// / `conflict` / `validation_failed` / `rate_limited`) lands —
+/// deferred to an ADR-0011 amendment once the marketplace's error
+/// vocabulary is enumerated (architect open Q5 / PO Q5).
+///
+/// `recovery_hint` stays `None` on the passthrough path (open Q2
+/// conservative default — the adapter does NOT synthesise a hint for a
+/// server code it does not recognise).
 pub fn envelope_from_klodi_err(err: KlodiError) -> ToolEnvelope {
     match err {
-        KlodiError::Marketplace { code, message, details } => ToolEnvelope {
-            error: code,
-            message,
-            details,
-            recovery_hint: None,
-        },
+        KlodiError::Marketplace { code, message, details } => {
+            let mut details_obj = serde_json::Map::new();
+            details_obj.insert(
+                "marketplace_error_code".to_string(),
+                Value::String(code),
+            );
+            details_obj.insert(
+                "marketplace_message".to_string(),
+                Value::String(message.clone()),
+            );
+            if let Some(extra) = details {
+                details_obj.insert("marketplace_details".to_string(), extra);
+            }
+            ToolEnvelope {
+                error: "marketplace_error".to_string(),
+                message,
+                details: Some(Value::Object(details_obj)),
+                recovery_hint: None,
+            }
+        }
         KlodiError::CredsNotFound(path) | KlodiError::ConfigNotFound(path) => ToolEnvelope {
             error: "not_registered".to_string(),
             message: format!(
@@ -149,6 +178,39 @@ pub fn envelope_to_call_tool_result(env: ToolEnvelope) -> CallToolResult {
     let mut result = CallToolResult::structured_error(value);
     result.content = vec![Content::text(text)];
     result
+}
+
+/// Adapter-side schema rejection — R2 `invalid_request`. Mirrors the
+/// Python `envelope_from_invalid_request` and the openclaw
+/// `runPreCallGuards` `invalid_request` arm. Used by `guard_args` (in
+/// `super::guards`) and the local-tool dispatchers in
+/// `super::tools::dispatch_*` when args fail the adapter-side schema
+/// check.
+///
+/// `recovery_hint` is `None` — the agent re-calls with corrected args
+/// (no recovery target is meaningful for a programmatic re-issue).
+pub fn invalid_request_envelope(field: &str, problem: &str) -> ToolEnvelope {
+    ToolEnvelope {
+        error: "invalid_request".to_string(),
+        message: format!(
+            "argument `{field}` is {problem}; re-call with a corrected value",
+        ),
+        details: Some(json!({ "field": field, "problem": problem })),
+        recovery_hint: None,
+    }
+}
+
+/// Adapter-internal catch-all — R2 `internal_error`. Mirrors the Python
+/// `envelope_from_unknown` and the openclaw uncategorised-Error arm.
+/// `details.exception_class` lets operators triage; the agent retries
+/// once or surfaces to the operator. `recovery_hint` is `None`.
+pub fn internal_error_envelope(message: &str, exception_class: &str) -> ToolEnvelope {
+    ToolEnvelope {
+        error: "internal_error".to_string(),
+        message: message.to_string(),
+        details: Some(json!({ "exception_class": exception_class })),
+        recovery_hint: None,
+    }
 }
 
 /// Build a `not_registered` envelope for a per-host bin's startup check
@@ -280,22 +342,27 @@ mod tests {
         assert_eq!(v["recovery_hint"]["command"], "klodi-zeroclaw-register");
     }
 
-    /// envelope_from_klodi_err: Marketplace error preserves code,
-    /// message, details verbatim. recovery_hint stays None (server-side
-    /// codes get no hint by default — see architect open Q2).
+    /// envelope_from_klodi_err: Marketplace errors collapse to the R2
+    /// catch-all `marketplace_error` code; the server's original code +
+    /// message + details ride in `details.marketplace_*`. Round 2 P2.1
+    /// fix — the previous round preserved the server code as `error`,
+    /// violating the R2 closed-vocabulary invariant.
     #[test]
-    fn envelope_from_marketplace_error_passes_through() {
+    fn envelope_from_marketplace_error_collapses_to_marketplace_error() {
         let err = KlodiError::Marketplace {
             code: "listing_not_owned_by_caller".to_string(),
             message: "Listing belongs to another user".to_string(),
             details: Some(json!({"listing_id": "abc"})),
         };
         let env = envelope_from_klodi_err(err);
-        // Marketplace passthrough — code is preserved verbatim under
-        // the open-Q2 default (no recovery_hint synthesised).
-        assert_eq!(env.error, "listing_not_owned_by_caller");
-        assert_eq!(env.message, "Listing belongs to another user");
-        assert_eq!(env.details.as_ref().unwrap()["listing_id"], "abc");
+        assert_eq!(
+            env.error, "marketplace_error",
+            "marketplace passthrough collapses to the R2 catch-all"
+        );
+        let details = env.details.as_ref().expect("marketplace_error has details");
+        assert_eq!(details["marketplace_error_code"], "listing_not_owned_by_caller");
+        assert_eq!(details["marketplace_message"], "Listing belongs to another user");
+        assert_eq!(details["marketplace_details"]["listing_id"], "abc");
         assert!(env.recovery_hint.is_none(),
             "marketplace passthrough must NOT synthesise a recovery_hint (open Q2)");
     }

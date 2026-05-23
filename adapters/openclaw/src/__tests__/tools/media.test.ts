@@ -57,6 +57,7 @@ describe("klodi_assets_upload_url", () => {
   });
 
   it("surfaces KlodiRequestError as the canonical envelope", async () => {
+    // Round 2 P2.1 — marketplace codes collapse to the R2 catch-all.
     mockNatsError(
       "p2p.v1.assets.upload-url",
       new KlodiRequestError({ error: "FILE_TOO_LARGE", message: "file too large" }),
@@ -67,7 +68,8 @@ describe("klodi_assets_upload_url", () => {
     });
     expect(result.isError).toBe(true);
     const env = JSON.parse(result.content[0].text!);
-    expect(env.error).toBe("FILE_TOO_LARGE");
+    expect(env.error).toBe("marketplace_error");
+    expect(env.details.marketplace_error_code).toBe("FILE_TOO_LARGE");
     expect(env.recovery_hint).toBeNull();
   });
 

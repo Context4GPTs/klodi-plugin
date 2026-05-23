@@ -41,6 +41,7 @@ __all__ = [
     "envelope_from_not_connected",
     "envelope_from_setup_error",
     "envelope_from_unknown",
+    "envelope_from_invalid_request",
 ]
 
 
@@ -66,18 +67,34 @@ def make_envelope(
 
 
 def envelope_from_klodi_request_error(err: KlodiRequestError) -> dict[str, Any]:
-    """Marketplace passthrough.
+    """Marketplace passthrough — collapses to the R2 catch-all
+    ``marketplace_error`` (closed-vocabulary invariant).
 
-    Code and message are preserved verbatim; ``details`` is copied from
-    the server envelope (or ``None`` when absent). ``recovery_hint``
-    stays ``None`` per architect open Q2 — the adapter does NOT
-    synthesise a hint for server-side codes.
+    The server's original code rides in
+    ``details.marketplace_error_code``; the server's message in
+    ``details.marketplace_message``; any additional server payload in
+    ``details.marketplace_details``. ``recovery_hint`` stays ``None``
+    per architect open Q2 — the adapter does NOT synthesise a hint for
+    a server code it does not recognise.
+
+    Round 2 P2.1 fix: the previous round preserved the server code as
+    ``error``, violating R2. The more-specific subset mapping
+    (``unauthorized`` / ``not_found`` / ``conflict`` / ``validation_failed``
+    / ``rate_limited``) is deferred to an ADR-0011 amendment once the
+    marketplace's error vocabulary is enumerated server-side
+    (architect open Q5 / PO Q5).
     """
-    details = err.details if err.details is not None else None
+    details_in = err.details if err.details is not None else None
+    details: dict[str, Any] = {
+        "marketplace_error_code": err.code,
+        "marketplace_message": str(err),
+    }
+    if isinstance(details_in, Mapping):
+        details["marketplace_details"] = dict(details_in)
     return make_envelope(
-        error=err.code,
+        error="marketplace_error",
         message=str(err),
-        details=details if isinstance(details, Mapping) else None,
+        details=details,
         recovery_hint=None,
     )
 
@@ -152,6 +169,23 @@ def envelope_from_unknown(err: BaseException) -> dict[str, Any]:
         error="internal_error",
         message=str(err) or err.__class__.__name__,
         details={"exception_class": err.__class__.__name__},
+        recovery_hint=None,
+    )
+
+
+def envelope_from_invalid_request(field: str, problem: str) -> dict[str, Any]:
+    """Adapter-side schema rejection (R2 ``invalid_request``).
+
+    Used by ``guard_args`` and the local-tool dispatchers in hermes /
+    nanobot when an adapter-side schema check rejects a required field.
+    ``recovery_hint`` is ``None`` — the agent re-calls with corrected
+    args (no recovery target is meaningful for a programmatic
+    re-issue).
+    """
+    return make_envelope(
+        error="invalid_request",
+        message=f"argument `{field}` is {problem}; re-call with a corrected value",
+        details={"field": field, "problem": problem},
         recovery_hint=None,
     )
 

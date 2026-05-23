@@ -53,6 +53,7 @@ function runScript(scriptPath) {
 
 await runScript(join(PKG_ROOT, "src", "codegen", "json-schema.ts"));
 await runScript(join(PKG_ROOT, "src", "codegen", "rust-types.ts"));
+await runScript(join(PKG_ROOT, "src", "codegen", "error-codes.ts"));
 
 // Mirror dist/schemas.json into each Python package's resource dir so
 // `klodi_nats_client` + `klodi_logger` see the same canonical artifact
@@ -69,5 +70,21 @@ for (const [pkgDir, pyModule] of PY_TARGETS) {
   copyFileSync(join(DIST_DIR, "schemas.json"), target);
   console.log(`[tool-catalog] mirrored schemas.json → ${target}`);
 }
+
+// Mirror dist/error-codes.json into klodi_nats_client so the Python
+// adapter pair (hermes + nanobot) can load the canonical R2 vocabulary
+// at runtime — closing the drift gap that the round-2 test gates.
+// Round 2 P2.2: full codegen of the Python module + the Rust const file
+// is the future fix; for now the JSON mirror lets the Python side
+// lookup-test against the source of truth.
+const ERROR_CODES_TARGET = join(
+  PACKAGES_ROOT,
+  "nats-client-py",
+  "src",
+  "klodi_nats_client",
+  "error_codes.json",
+);
+copyFileSync(join(DIST_DIR, "error-codes.json"), ERROR_CODES_TARGET);
+console.log(`[tool-catalog] mirrored error-codes.json → ${ERROR_CODES_TARGET}`);
 
 console.log("[tool-catalog] codegen complete.");

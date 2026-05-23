@@ -26,9 +26,15 @@
 
 import { existsSync } from "node:fs";
 
+import type { ToolResult } from "openclaw/plugin-sdk";
+import { isClientConnected } from "./client.js";
 import { hasCredentials } from "./config.js";
-import { makeEnvelope, type ToolEnvelope } from "./envelope.js";
-import { getConfigPath, getCredsPath } from "./paths.js";
+import {
+  envelopeToToolResult,
+  makeEnvelope,
+  type ToolEnvelope,
+} from "./envelope.js";
+import { getConfigPath } from "./paths.js";
 
 export type ArgKind = "uuid" | "string" | "integer" | "bool" | "non_empty_string";
 
@@ -90,9 +96,13 @@ export function guardArgs(
 }
 
 /**
- * Synchronous pre-call guard composition: creds → args. The async
- * `guardConnection` lives in the dispatcher because it depends on the
- * singleton client; tests for it live in the tools tests.
+ * Synchronous pre-call guard composition: creds → args (pure-function
+ * helper). The connection check is part of `runPreCallGuardsResult`
+ * (the production caller, full R4 chain) — this helper covers the
+ * creds + args pair so test-side callers + future synchronous callers
+ * can validate without depending on the client singleton.
+ *
+ * Returns the first failing envelope or `null` if every guard passes.
  */
 export function runPreCallGuards(
   args: Record<string, unknown>,
@@ -102,6 +112,49 @@ export function runPreCallGuards(
   const credsEnv = guardCreds(opts);
   if (credsEnv !== null) return credsEnv;
   return guardArgs(args, required);
+}
+
+/**
+ * Pre-call guard composition that returns a `ToolResult` directly —
+ * the production caller for per-tool `execute()` arms (replaces the
+ * legacy `requireCredsEnvelope()`, P1.2 + P2.4 round-2 fix).
+ *
+ * Composes the full guard chain in R4 order:
+ *   creds → connection → args
+ *
+ * Usage:
+ *
+ *     const guard = runPreCallGuardsResult(
+ *       params,
+ *       [{ field: "transaction_id", kind: "uuid" }],
+ *     );
+ *     if (guard) return guard;
+ */
+export function runPreCallGuardsResult(
+  args: Record<string, unknown>,
+  required: ReadonlyArray<ArgRule>,
+  opts: GuardOptions = {},
+): ToolResult | null {
+  const credsEnv = guardCreds(opts);
+  if (credsEnv !== null) return envelopeToToolResult(credsEnv);
+  const connEnv = guardConnection();
+  if (connEnv !== null) return envelopeToToolResult(connEnv);
+  const argsEnv = guardArgs(args, required);
+  return argsEnv === null ? null : envelopeToToolResult(argsEnv);
+}
+
+/**
+ * `connection_ready` guard — returns the `connection_not_ready`
+ * envelope when the singleton `KlodiClient` is not connected. The check
+ * is synchronous against the singleton's cached `isConnected()` flag;
+ * the actual transport state is tracked by the persistent WS connection
+ * lifecycle (`connectClient` / on-error callback in `lib/client.ts`).
+ *
+ * Returns `null` when connected.
+ */
+export function guardConnection(): ToolEnvelope | null {
+  if (isClientConnected()) return null;
+  return connectionNotReadyEnvelope();
 }
 
 /**

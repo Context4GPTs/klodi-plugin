@@ -86,19 +86,33 @@ export interface EnvelopeFromErrorOptions {
 /**
  * Map any thrown value to a `ToolEnvelope`.
  *
- * Today the only structured error the openclaw client raises is
- * `KlodiRequestError` (marketplace passthrough). Everything else
- * degrades to `internal_error`; the agent retries once or surfaces.
+ * `KlodiRequestError` (marketplace passthrough) collapses to the R2
+ * catch-all `marketplace_error`; the server's original code rides in
+ * `details.marketplace_error_code`, the message in
+ * `details.marketplace_message`, and any extra server payload in
+ * `details.marketplace_details`. This preserves the R2 closed-vocabulary
+ * invariant — agents pattern-match on a fixed set of `error` values.
+ *
+ * Everything else degrades to `internal_error`; the agent retries once
+ * or surfaces. Round 2 P2.1 fix — the previous round preserved the
+ * server code as `error`, violating R2.
  */
 export function envelopeFromError(
   err: unknown,
   _options: EnvelopeFromErrorOptions = {},
 ): ToolEnvelope {
   if (isKlodiRequestError(err)) {
+    const details: Record<string, unknown> = {
+      marketplace_error_code: err.code,
+      marketplace_message: err.message,
+    };
+    if (isRecord(err.details)) {
+      details["marketplace_details"] = err.details;
+    }
     return makeEnvelope({
-      error: err.code,
+      error: "marketplace_error",
       message: err.message,
-      details: isRecord(err.details) ? err.details : null,
+      details,
       recovery_hint: null,
     });
   }

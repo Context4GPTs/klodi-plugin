@@ -13,8 +13,11 @@ import {
   envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCredsEnvelope,
 } from "../lib/tool-result.js";
+import { runPreCallGuardsResult } from "../lib/guards.js";
+
+// Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
 
 const UPLOAD_URL_TIMEOUT_MS = 30_000;
 
@@ -26,7 +29,7 @@ export function registerMediaTools(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       try {
         const result = await rawRequest(

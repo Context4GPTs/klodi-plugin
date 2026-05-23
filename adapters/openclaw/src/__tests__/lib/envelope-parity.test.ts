@@ -134,11 +134,14 @@ describe("openclaw envelope-parity — not_registered", () => {
   });
 });
 
-// ── marketplace passthrough ──────────────────────────────────────────
+// ── marketplace_error (R2 collapse — round 2 P2.1) ────────────────────
 
-describe("openclaw envelope-parity — marketplace passthrough", () => {
-  it("preserves the server code; recovery_hint stays null", () => {
-    const expected = envelopeFor("marketplace_passthrough_listing_not_owned");
+describe("openclaw envelope-parity — marketplace_error (R2 collapse)", () => {
+  it("collapses any server code to `marketplace_error` with the original in details", () => {
+    // R2 closed-vocabulary: every marketplace failure surfaces as
+    // `marketplace_error` (the catch-all in the closed code set).
+    // The server's original code rides in `details.marketplace_error_code`.
+    const expected = envelopeFor("marketplace_error_unknown_code");
     const err = new KlodiRequestError({
       error: "listing_not_owned_by_caller",
       message: "Listing belongs to another user",
@@ -147,6 +150,12 @@ describe("openclaw envelope-parity — marketplace passthrough", () => {
     const actual = envelopeFromError(err);
     assertEnvelopeKeys(actual);
     expect(actual.error).toBe(expected.error);
+    expect(actual.error).toBe("marketplace_error");
+    const details = actual.details as Record<string, unknown>;
+    expect(details["marketplace_error_code"]).toBe(
+      "listing_not_owned_by_caller",
+    );
+    // Conservative open Q2 default — no synthesised recovery_hint.
     expect(actual.recovery_hint).toBeNull();
   });
 });
@@ -199,14 +208,15 @@ describe("openclaw envelope-parity — invalid_request", () => {
 describe("openclaw envelope-parity — fixture coverage", () => {
   it("the openclaw adapter has a parity assertion for every failure mode it can hit", () => {
     // Sanity meta-check: the openclaw adapter reaches creds-not-found,
-    // marketplace passthrough, internal_error, and invalid_request.
+    // marketplace_error (R2 collapse of every server passthrough),
+    // internal_error, and invalid_request.
     // (klodi_home_missing only matters for tools with on-disk side
     // effects, but the fixture row exists so we ensure the catalog
     // documents it.)
     const fixtures = loadFixture();
     const opencrawReachable = [
       "not_registered",
-      "marketplace_passthrough_listing_not_owned",
+      "marketplace_error_unknown_code",  // R2 collapse (round 2 P2.1)
       "internal_error_generic",
       "invalid_request_missing_field",
     ];

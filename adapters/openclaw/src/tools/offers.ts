@@ -12,9 +12,12 @@ import {
   envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCredsEnvelope,
 } from "../lib/tool-result.js";
+import { runPreCallGuardsResult } from "../lib/guards.js";
 import { onOfferAccepted } from "../service/state.js";
+
+// Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
 
 export function registerOfferTools(api: PluginAPI): void {
   registerOfferCreate(api);
@@ -30,7 +33,7 @@ function registerOfferCreate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       const payload: Record<string, unknown> = {
         listing_id: params["listing_id"],
@@ -58,7 +61,7 @@ function registerOfferRespond(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       let result: Record<string, unknown>;
       try {
@@ -89,7 +92,7 @@ function registerOfferMine(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       const payload: Record<string, unknown> = {};
       if (params["status"]) payload["status"] = params["status"];

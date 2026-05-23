@@ -1,15 +1,19 @@
 /**
  * Tests for adapters/openclaw/src/lib/tool-result.ts
  *
- * The legacy `errorResult / formatError / requireCreds` helpers were
- * removed in the ADR-0011 envelope rollout. Their replacements
- * (`envelopeToolResult`, `requireCredsEnvelope`) emit the canonical
- * four-key envelope; `requestAndHandle` now routes errors through
- * the envelope helper so every adapter tool sees the same shape.
+ * The legacy `errorResult / formatError / requireCreds / requireCredsEnvelope`
+ * helpers were removed in the ADR-0011 envelope rollout (rounds 1 + 2).
+ * Their replacements live in `lib/envelope.ts` (`envelopeFromError`,
+ * `envelopeToToolResult`, `makeEnvelope`) and `lib/guards.ts`
+ * (`runPreCallGuards`, `runPreCallGuardsResult`, `guardCreds`,
+ * `guardConnection`, `guardArgs`). The per-tool dispatch path now flows
+ * through `runPreCallGuardsResult` exclusively — there is one canonical
+ * pre-call guard helper, not two parallel paths.
  *
- * See `envelope.test.ts` for the envelope-shape contract; this file
- * covers the `tool-result.ts` orchestration layer (jsonResult,
- * requireCredsEnvelope, requestAndHandle, rawRequest).
+ * See `envelope.test.ts` for the envelope-shape contract;
+ * `guards.test.ts` for the guard chain. This file covers the
+ * `tool-result.ts` orchestration layer (jsonResult, requestAndHandle,
+ * rawRequest, envelopeToolResult).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -23,7 +27,6 @@ import {
   jsonResult,
   rawRequest,
   requestAndHandle,
-  requireCredsEnvelope,
 } from "../../lib/tool-result.js";
 import { KlodiRequestError } from "../helpers/mock-nats.js";
 import {
@@ -63,7 +66,10 @@ describe("jsonResult", () => {
 });
 
 describe("envelopeToolResult", () => {
-  it("converts a KlodiRequestError into the canonical envelope tool-result", () => {
+  it("converts a KlodiRequestError into the `marketplace_error` envelope tool-result", () => {
+    // Round 2 P2.1 — marketplace errors collapse to the R2 catch-all
+    // `marketplace_error`; the server's original code rides in
+    // `details.marketplace_error_code`.
     const err = new KlodiRequestError({
       error: "listing_not_owned_by_caller",
       message: "Listing belongs to another user",
@@ -74,7 +80,9 @@ describe("envelopeToolResult", () => {
     expect(result.isError).toBe(true);
     const env = parseEnvelope(result.content[0]!.text!);
     expect(Object.keys(env).sort()).toEqual(ENVELOPE_KEYS);
-    expect(env["error"]).toBe("listing_not_owned_by_caller");
+    expect(env["error"]).toBe("marketplace_error");
+    expect((env["details"] as Record<string, unknown>)["marketplace_error_code"])
+      .toBe("listing_not_owned_by_caller");
     expect(env["recovery_hint"]).toBeNull();
   });
 
@@ -97,19 +105,9 @@ describe("envelopeToolResult", () => {
   });
 });
 
-describe("requireCredsEnvelope", () => {
-  it("returns a not_registered envelope tool-result when credentials are absent", () => {
-    // hasCredentials() reads from disk; with no temp-home wired, the
-    // config path resolves to a default that won't exist in CI.
-    const result = requireCredsEnvelope();
-    expect(result).not.toBeNull();
-    const env = parseEnvelope(result!.content[0]!.text!);
-    expect(env["error"]).toBe("not_registered");
-    const hint = env["recovery_hint"] as Record<string, unknown>;
-    expect(hint["kind"]).toBe("cli");
-    expect(hint["command"]).toBe("klodi-openclaw-register");
-  });
-});
+// `requireCredsEnvelope` was deleted in round 2 (P1.2 + P2.4). The
+// canonical pre-call guard path is `runPreCallGuardsResult` in
+// `lib/guards.ts`; its tests live in `guards.test.ts`.
 
 describe("requestAndHandle", () => {
   beforeEach(() => clearNatsResponses());
@@ -124,7 +122,7 @@ describe("requestAndHandle", () => {
     });
   });
 
-  it("returns the canonical envelope when KlodiRequestError is thrown", async () => {
+  it("returns the marketplace_error envelope when KlodiRequestError is thrown", async () => {
     mockNatsError(
       "klodi_test_subject",
       new KlodiRequestError({
@@ -136,7 +134,9 @@ describe("requestAndHandle", () => {
     const result = await requestAndHandle("klodi_test_subject", {});
     expect(result.isError).toBe(true);
     const env = parseEnvelope(result.content[0]!.text!);
-    expect(env["error"]).toBe("listing_not_owned_by_caller");
+    expect(env["error"]).toBe("marketplace_error");
+    expect((env["details"] as Record<string, unknown>)["marketplace_error_code"])
+      .toBe("listing_not_owned_by_caller");
     expect(env["recovery_hint"]).toBeNull();
   });
 

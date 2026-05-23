@@ -198,7 +198,9 @@ describe("klodi_ratings", () => {
     expect(env.error).toBe("not_registered");
   });
 
-  it("surfaces NATS errors as envelope tool-results", async () => {
+  it("surfaces NATS errors as marketplace_error envelope tool-results", async () => {
+    // Round 2 P2.1 — marketplace codes collapse to the R2 catch-all;
+    // server code rides in details.marketplace_error_code.
     withCreds();
     mockNatsError(
       "p2p.v1.ratings.query",
@@ -208,6 +210,7 @@ describe("klodi_ratings", () => {
     const result = await tool.execute("call-1", { handle: "missing" });
     expect(result.isError).toBe(true);
     const env = JSON.parse(result.content[0].text!);
-    expect(env.error).toBe("NOT_FOUND");
+    expect(env.error).toBe("marketplace_error");
+    expect(env.details.marketplace_error_code).toBe("NOT_FOUND");
   });
 });

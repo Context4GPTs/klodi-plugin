@@ -1,21 +1,26 @@
 /**
  * Shared helpers for formatting tool results.
  *
- * Every tool follows the same shape: validate creds, dispatch to a
+ * Every tool follows the same shape: pre-call guards, dispatch to a
  * subject from the catalog, format the response. `requestAndHandle`
  * wraps that in one call so individual tool files stay short.
  *
  * Error paths use the canonical four-key envelope (ADR-0011). Tools
- * call `requireCredsEnvelope()` to short-circuit when creds are
- * missing, then dispatch via `requestAndHandle` / `rawRequest`. Any
- * thrown value is converted to an envelope by `envelopeToolResult`
+ * call `runPreCallGuards()` from `lib/guards.js` (the single canonical
+ * pre-call guard path) to short-circuit when creds are missing OR args
+ * are malformed, then dispatch via `requestAndHandle` / `rawRequest`.
+ * Any thrown value is converted to an envelope by `envelopeToolResult`
  * which carries the structured payload to the agent.
+ *
+ * The legacy `requireCredsEnvelope()` helper has been deleted (round 2
+ * P1.2 + P2.4). It duplicated `guardCreds()` in `lib/guards.ts` with a
+ * slightly different `message` string — a silent-drift trap. The
+ * production path is now exclusively `runPreCallGuards()`.
  */
 
 import type { ToolResult } from "openclaw/plugin-sdk";
-import { hasCredentials } from "./config.js";
 import { getClient } from "./client.js";
-import { envelopeFromError, envelopeToToolResult, makeEnvelope } from "./envelope.js";
+import { envelopeFromError, envelopeToToolResult } from "./envelope.js";
 
 /** Format a successful JSON response as a tool result. */
 export function jsonResult(data: unknown): ToolResult {
@@ -31,37 +36,6 @@ export function jsonResult(data: unknown): ToolResult {
  */
 export function envelopeToolResult(err: unknown): ToolResult {
   return envelopeToToolResult(envelopeFromError(err));
-}
-
-/**
- * Return a `not_registered` envelope `ToolResult` when creds are
- * missing, `null` otherwise. Replaces the legacy `requireCreds()`
- * helper that returned a flat string.
- *
- * Tools call this as:
- *
- *     const guard = requireCredsEnvelope();
- *     if (guard) return guard;
- *     try { ... } catch (e) { return envelopeToolResult(e); }
- */
-export function requireCredsEnvelope(): ToolResult | null {
-  if (hasCredentials()) return null;
-  return envelopeToToolResult(
-    makeEnvelope({
-      error: "not_registered",
-      message:
-        "klodi is not registered on this host. Run klodi-openclaw-register " +
-        "from a shell to mint nats.creds and config.json.",
-      details: null,
-      recovery_hint: {
-        kind: "cli",
-        command: "klodi-openclaw-register",
-        message:
-          "Run klodi-openclaw-register — opens a browser link, polls for " +
-          "completion, writes nats.creds + config.json.",
-      },
-    }),
-  );
 }
 
 

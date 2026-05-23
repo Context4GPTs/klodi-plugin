@@ -181,7 +181,9 @@ def test_parity_consumer_missing_channels() -> None:
 # ── marketplace passthrough ──────────────────────────────────────────
 
 
-def test_parity_marketplace_passthrough_preserves_server_code() -> None:
+def test_parity_marketplace_error_collapses_to_marketplace_error() -> None:
+    # Round 2 P2.1 — marketplace codes collapse to the R2 catch-all;
+    # original code rides in details.marketplace_error_code.
     err = KlodiRequestError(
         {
             "error": "listing_not_owned_by_caller",
@@ -191,10 +193,10 @@ def test_parity_marketplace_passthrough_preserves_server_code() -> None:
     )
     actual = envelope_from_klodi_request_error(err)
     _assert_envelope_keys_match(actual)
-    # The marketplace-passthrough fixture row says recovery_hint is
-    # null (architect open Q2 conservative default).
-    expected = _envelope_for("marketplace_passthrough_listing_not_owned")
+    expected = _envelope_for("marketplace_error_unknown_code")
     assert actual["error"] == expected["error"]
+    assert actual["error"] == "marketplace_error"
+    assert actual["details"]["marketplace_error_code"] == "listing_not_owned_by_caller"
     assert actual["recovery_hint"] is None
 
 

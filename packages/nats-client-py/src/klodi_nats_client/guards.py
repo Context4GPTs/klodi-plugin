@@ -33,7 +33,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from klodi_nats_client.envelope import envelope_from_creds_not_found, make_envelope
+from klodi_nats_client.envelope import (
+    envelope_from_creds_not_found,
+    envelope_from_invalid_request,
+)
 
 __all__ = ["ArgKind", "guard_creds", "guard_args", "run_pre_call_guards"]
 
@@ -107,12 +110,7 @@ def run_pre_call_guards(
 
 
 def _invalid_request(field: str, problem: str) -> dict[str, Any]:
-    return make_envelope(
-        error="invalid_request",
-        message=f"argument `{field}` is {problem}; re-call with a corrected value",
-        details={"field": field, "problem": problem},
-        recovery_hint=None,
-    )
+    return envelope_from_invalid_request(field, problem)
 
 
 def _check_value(value: Any, kind: ArgKind) -> str | None:

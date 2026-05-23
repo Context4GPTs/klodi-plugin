@@ -28,6 +28,7 @@ fails when nanobot stops registering one.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -43,12 +44,27 @@ from klodi_nats_client.envelope import (
     envelope_from_unknown,
     make_envelope,
 )
+from klodi_nats_client.guards import guard_creds
+from klodi_nats_client.paths import default_klodi_home
 
 from nanobot_client import get_client
 from nanobot_local_tools import (
     LOCAL_TOOL_DEFINITIONS,
     LOCAL_TOOL_NAMES,
     dispatch_local_tool,
+)
+
+# Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+NANOBOT_REGISTER_CLI = "klodi-nanobot-register"
+
+# Exception types that signal "transport / connection is not ready".
+# Catching these specifically routes non-connection failures to
+# `internal_error` instead of the round-1 mis-labelling as
+# `connection_not_ready` (P1.3, R2).
+_CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    ConnectionError,
+    asyncio.TimeoutError,
+    TimeoutError,
 )
 
 
@@ -168,11 +184,22 @@ async def handle(name: str, args: dict[str, Any]) -> str:
          :mod:`nanobot_local_tools` (filesystem state, browser OAuth).
       3. Anything else — generic catalog request/reply via
          :func:`call_tool`.
+
+    R4 — every state-mutating arm runs the creds guard BEFORE any I/O.
+    The two local diagnostic tools (`klodi_setup_status`, `klodi_health`)
+    are exempt per R5 (they are the *target* of recovery hints and must
+    always return their diagnostic payload). The guard chain is checked
+    on the non-exempt local-tool path too — agents see `not_registered`
+    when creds are absent, not whatever the local handler raises.
     """
     # All error paths return the canonical four-key envelope (ADR-0011).
     # The agent reads `error`, follows `recovery_hint`, never
     # pattern-matches on `message`.
     if name == "klodi_channel_message":
+        # R4 — creds guard fails BEFORE any I/O.
+        creds_env = guard_creds(default_klodi_home(), NANOBOT_REGISTER_CLI)
+        if creds_env is not None:
+            return json.dumps(creds_env)
         try:
             channel_id = args["channel_id"]
             content = args["content"]
@@ -182,11 +209,19 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             result = await publish_channel_message(channel_id, content)
         except ValueError as err:
             return json.dumps(envelope_from_unknown(err))
-        except BaseException as err:  # noqa: BLE001 — boundary
+        except _CONNECTION_ERROR_TYPES:
             return json.dumps(envelope_from_not_connected())
+        except BaseException as err:  # noqa: BLE001 — boundary
+            # Adapter-internal failure — R2 says `internal_error`, not
+            # `connection_not_ready` (P1.3 fix).
+            return json.dumps(envelope_from_unknown(err))
         return json.dumps(result)
 
     if name in LOCAL_TOOL_NAMES:
+        # R5 — diagnostic targets of recovery hints must always return
+        # their diagnostic payload, even when creds are missing.
+        # nanobot_local_tools owns the per-tool diagnostic logic; it
+        # surfaces structured diagnostics that drive the recovery loop.
         try:
             local_result = dispatch_local_tool(name, args)
         except KeyError as err:
@@ -198,14 +233,21 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             return json.dumps(envelope_from_unknown(err))
         return json.dumps(local_result)
 
+    # R4 — creds guard fails BEFORE any I/O for the request/reply path.
+    creds_env = guard_creds(default_klodi_home(), NANOBOT_REGISTER_CLI)
+    if creds_env is not None:
+        return json.dumps(creds_env)
     try:
         result = await call_tool(name, args)
     except KeyError as err:
         return json.dumps(envelope_from_unknown(err))
     except KlodiRequestError as err:
         return json.dumps(envelope_from_klodi_request_error(err))
-    except BaseException as err:  # noqa: BLE001 — boundary
+    except _CONNECTION_ERROR_TYPES:
         return json.dumps(envelope_from_not_connected())
+    except BaseException as err:  # noqa: BLE001 — boundary
+        # Adapter-internal failure — R2 says `internal_error` (P1.3 fix).
+        return json.dumps(envelope_from_unknown(err))
     return json.dumps(result)
 
 

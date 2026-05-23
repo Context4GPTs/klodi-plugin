@@ -11,9 +11,12 @@ import {
   envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCredsEnvelope,
 } from "../lib/tool-result.js";
+import { runPreCallGuardsResult } from "../lib/guards.js";
 import { onTransactionTerminal } from "../service/state.js";
+
+// Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
 
 export function registerTransactionTools(api: PluginAPI): void {
   registerTxConfirm(api);
@@ -30,7 +33,11 @@ function registerTxConfirm(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "transaction_id", kind: "uuid" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
       if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);
@@ -50,7 +57,11 @@ function registerTxCancel(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "transaction_id", kind: "uuid" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
       if (guard) return guard;
       let result: Record<string, unknown>;
       try {
@@ -74,7 +85,11 @@ function registerTxRate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "transaction_id", kind: "uuid" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
       if (guard) return guard;
       const payload: Record<string, unknown> = {
         transaction_id: params["transaction_id"],
@@ -106,7 +121,11 @@ function registerTxStatus(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "transaction_id", kind: "uuid" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
       if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);

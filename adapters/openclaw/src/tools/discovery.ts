@@ -23,14 +23,17 @@ import {
   envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCredsEnvelope,
 } from "../lib/tool-result.js";
+import { runPreCallGuardsResult } from "../lib/guards.js";
 import { getBuyFilePath } from "../lib/paths.js";
 import { slugify, type ActionOnMatch } from "../lib/sell-buy-files.js";
 import {
   onBuySearchCreated,
   onBuySearchRemoved,
 } from "../service/state.js";
+
+// Per-host register CLI surfaced in `not_registered` recovery hints (R8).
+const OPENCLAW_REGISTER_CLI = "klodi-openclaw-register";
 
 const BUY_FILE_HINT =
   "Write evaluation criteria and logistics constraints into this"
@@ -52,7 +55,7 @@ function registerSearch(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       const payload = compactPayload(params);
       try {
@@ -96,7 +99,7 @@ function registerWatch(api: PluginAPI): void {
       )),
     }),
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       const persist = params["persist"] === true;
       return persist
@@ -173,7 +176,11 @@ function registerUnwatch(api: PluginAPI): void {
       }),
     }),
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "buy_slug", kind: "non_empty_string" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
       if (guard) return guard;
       const slug = params["buy_slug"] as string;
       try {
@@ -196,7 +203,7 @@ function registerSearchesList(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute() {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult({}, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, {});
@@ -223,7 +230,7 @@ function registerComment(api: PluginAPI): void {
       }),
     }),
     async execute(_id, params) {
-      const guard = requireCredsEnvelope();
+      const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, {
