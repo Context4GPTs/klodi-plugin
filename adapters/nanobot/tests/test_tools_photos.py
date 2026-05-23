@@ -518,3 +518,68 @@ async def test_klodi_list_create_fails_atomic_on_one_bad_file_in_mixed_array(
     assert pdf in (envelope.get("message") or "")
     subjects = [c.args[0] for c in fake_client.request.await_args_list]
     assert "p2p.v1.listings.create" not in subjects
+
+
+# ── Failure modes mirroring the openclaw red layer ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_klodi_list_create_fails_when_mint_request_errors(
+    fake_client: MagicMock,
+    fixtures_dir: Path,
+) -> None:
+    """Mint marketplace error halts the entire flow before R2 PUT
+    or listings.create dispatch."""
+    from klodi_nats_client import KlodiRequestError
+
+    path = _write(fixtures_dir, "ok.jpg", JPEG_MAGIC)
+
+    async def _mock_request(subject: str, args: dict[str, Any]) -> Any:
+        if subject == "p2p.v1.assets.upload-url":
+            raise KlodiRequestError("rate limited", "RATE_LIMITED")
+        raise AssertionError(f"Unexpected subject reached: {subject}")
+
+    fake_client.request.side_effect = _mock_request
+
+    envelope = await _handle(
+        "klodi_list_create",
+        {
+            "title": "x",
+            "description": "x",
+            "category": "home",
+            "asking_price": 100,
+            "fulfillment": [{"method": "pickup"}],
+            "photos": [path],
+        },
+    )
+
+    assert envelope.get("error")
+    subjects = [c.args[0] for c in fake_client.request.await_args_list]
+    assert "p2p.v1.listings.create" not in subjects
+    assert "p2p.v1.assets.upload-url" in subjects
+
+
+@pytest.mark.asyncio
+async def test_klodi_list_update_passes_urls_verbatim_and_does_not_mint(
+    fake_client: MagicMock,
+) -> None:
+    fake_client.request.return_value = {
+        "listing_id": LISTING_ID,
+        "photos": [
+            "https://cdn.example/x.jpg",
+            "https://cdn.example/y.png",
+        ],
+    }
+    envelope = await _handle(
+        "klodi_list_update",
+        {
+            "listing_id": LISTING_ID,
+            "photos": [
+                "https://cdn.example/x.jpg",
+                "https://cdn.example/y.png",
+            ],
+        },
+    )
+    assert envelope.get("listing_id") == LISTING_ID
+    assert fake_client.request.await_count == 1
+    assert fake_client.request.await_args.args[0] == "p2p.v1.listings.update"
