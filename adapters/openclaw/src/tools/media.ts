@@ -10,11 +10,10 @@
 import type { PluginAPI } from "openclaw/plugin-sdk";
 import { klodiTools } from "@klodi/tool-catalog";
 import {
-  errorResult,
-  formatError,
+  envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCreds,
+  requireCredsEnvelope,
 } from "../lib/tool-result.js";
 
 const UPLOAD_URL_TIMEOUT_MS = 30_000;
@@ -27,8 +26,8 @@ export function registerMediaTools(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       try {
         const result = await rawRequest(
           tool.subject,
@@ -37,7 +36,7 @@ export function registerMediaTools(api: PluginAPI): void {
         );
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });

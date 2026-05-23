@@ -163,15 +163,25 @@ async def test_handle_returns_envelope_on_request_error() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_returns_envelope_on_unknown_tool() -> None:
+    # An unknown tool name lands in the catch-all `internal_error` arm —
+    # the dispatcher no longer special-cases an `UNKNOWN_TOOL` code per
+    # the closed R2 vocabulary (ADR-0011). The shape is the canonical
+    # four-key envelope; the agent reads `error` + `details`.
     client.set_client(_make_fake_client())
     raw = await tools.handle("klodi_nope", {})
     parsed = json.loads(raw)
-    assert parsed["error"] == "UNKNOWN_TOOL"
+    assert parsed["error"] == "internal_error"
+    assert set(parsed.keys()) == {"error", "message", "details", "recovery_hint"}
 
 
 @pytest.mark.asyncio
 async def test_handle_returns_envelope_on_missing_channel_field() -> None:
+    # Missing required field surfaces as the canonical R2
+    # `invalid_request` envelope; `details.field` names the offending
+    # arg and `details.problem` carries the reason. See ADR-0011.
     client.set_client(_make_fake_client())
     raw = await tools.handle("klodi_channel_message", {"channel_id": "x"})
     parsed = json.loads(raw)
-    assert parsed["error"] == "INVALID_REQUEST"
+    assert parsed["error"] == "invalid_request"
+    assert parsed["details"] == {"field": "content", "problem": "missing"}
+    assert parsed["recovery_hint"] is None

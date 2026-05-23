@@ -37,6 +37,12 @@ from klodi_nats_client import (
     TOOL_SCHEMAS,
     ToolSchema,
 )
+from klodi_nats_client.envelope import (
+    envelope_from_klodi_request_error,
+    envelope_from_not_connected,
+    envelope_from_unknown,
+    make_envelope,
+)
 
 from nanobot_client import get_client
 from nanobot_local_tools import (
@@ -163,24 +169,21 @@ async def handle(name: str, args: dict[str, Any]) -> str:
       3. Anything else — generic catalog request/reply via
          :func:`call_tool`.
     """
+    # All error paths return the canonical four-key envelope (ADR-0011).
+    # The agent reads `error`, follows `recovery_hint`, never
+    # pattern-matches on `message`.
     if name == "klodi_channel_message":
         try:
             channel_id = args["channel_id"]
             content = args["content"]
         except KeyError as err:
-            return json.dumps({
-                "error": "INVALID_REQUEST",
-                "message": f"missing required field: {err.args[0]}",
-            })
+            return json.dumps(_invalid_request(err.args[0], "missing"))
         try:
             result = await publish_channel_message(channel_id, content)
         except ValueError as err:
-            return json.dumps({"error": "INVALID_REQUEST", "message": str(err)})
+            return json.dumps(envelope_from_unknown(err))
         except BaseException as err:  # noqa: BLE001 — boundary
-            return json.dumps({
-                "error": "transport_error",
-                "message": str(err),
-            })
+            return json.dumps(envelope_from_not_connected())
         return json.dumps(result)
 
     if name in LOCAL_TOOL_NAMES:
@@ -188,33 +191,32 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             local_result = dispatch_local_tool(name, args)
         except KeyError as err:
             # Defensive — LOCAL_TOOL_NAMES + dispatch_local_tool are in
-            # the same module, but keep the envelope shape consistent.
-            return json.dumps({"error": "UNKNOWN_TOOL", "message": str(err)})
+            # the same module, but degrade safely to internal_error so
+            # the agent sees the canonical envelope.
+            return json.dumps(envelope_from_unknown(err))
         except BaseException as err:  # noqa: BLE001 — boundary
-            return json.dumps({
-                "error": "transport_error",
-                "message": str(err),
-            })
+            return json.dumps(envelope_from_unknown(err))
         return json.dumps(local_result)
 
     try:
         result = await call_tool(name, args)
     except KeyError as err:
-        return json.dumps({
-            "error": "UNKNOWN_TOOL",
-            "message": str(err),
-        })
+        return json.dumps(envelope_from_unknown(err))
     except KlodiRequestError as err:
-        return json.dumps({
-            "error": err.code or "request_failed",
-            "message": str(err),
-        })
+        return json.dumps(envelope_from_klodi_request_error(err))
     except BaseException as err:  # noqa: BLE001 — boundary
-        return json.dumps({
-            "error": "transport_error",
-            "message": str(err),
-        })
+        return json.dumps(envelope_from_not_connected())
     return json.dumps(result)
+
+
+def _invalid_request(field: str, problem: str) -> dict[str, Any]:
+    """Local envelope for adapter-side schema rejections (R2 invalid_request)."""
+    return make_envelope(
+        error="invalid_request",
+        message=f"argument `{field}` is {problem}; re-call with a corrected value",
+        details={"field": field, "problem": problem},
+        recovery_hint=None,
+    )
 
 
 __all__ = [

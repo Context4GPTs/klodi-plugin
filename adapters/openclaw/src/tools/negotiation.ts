@@ -13,11 +13,10 @@ import type { PluginAPI } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { Uuid, klodiTools } from "@klodi/tool-catalog";
 import {
-  errorResult,
-  formatError,
+  envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCreds,
+  requireCredsEnvelope,
 } from "../lib/tool-result.js";
 import { getClient } from "../lib/client.js";
 
@@ -37,13 +36,13 @@ function registerChannelCreate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -57,15 +56,15 @@ function registerChannelMine(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       const payload: Record<string, unknown> = {};
       if (params["status"]) payload["status"] = params["status"];
       try {
         const result = await rawRequest(tool.subject, payload);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -92,8 +91,8 @@ function registerChannelMessage(api: PluginAPI): void {
       }),
     }),
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       const channelId = params["channel_id"] as string;
       const content = params["content"] as string;
       // UUID v4 validation runs inside `publishChannelMessage` itself
@@ -114,7 +113,7 @@ function registerChannelMessage(api: PluginAPI): void {
           sent_at: new Date().toISOString(),
         });
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -128,8 +127,8 @@ function registerChannelHistory(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       const payload: Record<string, unknown> = {
         channel_id: params["channel_id"],
       };
@@ -147,7 +146,7 @@ function registerChannelHistory(api: PluginAPI): void {
         }
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -161,13 +160,13 @@ function registerChannelClose(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });

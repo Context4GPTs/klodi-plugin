@@ -9,11 +9,10 @@
 import type { PluginAPI } from "openclaw/plugin-sdk";
 import { klodiTools } from "@klodi/tool-catalog";
 import {
-  errorResult,
-  formatError,
+  envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCreds,
+  requireCredsEnvelope,
 } from "../lib/tool-result.js";
 import { onOfferAccepted } from "../service/state.js";
 
@@ -31,8 +30,8 @@ function registerOfferCreate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       const payload: Record<string, unknown> = {
         listing_id: params["listing_id"],
         channel_id: params["channel_id"],
@@ -45,7 +44,7 @@ function registerOfferCreate(api: PluginAPI): void {
         const result = await rawRequest(tool.subject, payload);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -59,13 +58,13 @@ function registerOfferRespond(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       let result: Record<string, unknown>;
       try {
         result = await rawRequest(tool.subject, params);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
       if (
         params["action"] === "accept"
@@ -90,8 +89,8 @@ function registerOfferMine(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       const payload: Record<string, unknown> = {};
       if (params["status"]) payload["status"] = params["status"];
       if (params["role"]) payload["role"] = params["role"];
@@ -101,7 +100,7 @@ function registerOfferMine(api: PluginAPI): void {
         const result = await rawRequest(tool.subject, payload);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });

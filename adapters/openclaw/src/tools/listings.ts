@@ -9,11 +9,10 @@
 import type { PluginAPI } from "openclaw/plugin-sdk";
 import { klodiTools } from "@klodi/tool-catalog";
 import {
-  errorResult,
-  formatError,
+  envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCreds,
+  requireCredsEnvelope,
 } from "../lib/tool-result.js";
 import {
   onListingCreated,
@@ -44,14 +43,14 @@ function registerCreate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
 
       let result: Record<string, unknown>;
       try {
         result = await rawRequest(tool.subject, params);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
 
       if (typeof result["listing_id"] === "string") {
@@ -90,13 +89,13 @@ function registerGet(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, params);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -110,15 +109,15 @@ function registerMine(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       const payload: Record<string, unknown> = {};
       if (params["status"]) payload["status"] = params["status"];
       try {
         const result = await rawRequest(tool.subject, payload);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -132,13 +131,13 @@ function registerUpdate(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       let result: Record<string, unknown>;
       try {
         result = await rawRequest(tool.subject, params);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
       // Note: no local sell-file mirror happens here. After D3 the floor
       // is preserved literally on disk; deriving it from `asking_price`
@@ -159,8 +158,8 @@ function registerWithdraw(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       const listingId = params["listing_id"] as string;
       try {
         const result = await rawRequest(tool.subject, {
@@ -170,7 +169,7 @@ function registerWithdraw(api: PluginAPI): void {
         api.logger.info("sell_file_deleted", { listing_id: listingId });
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -184,8 +183,8 @@ function registerRelist(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       const listingId = params["listing_id"] as string;
       const payload: Record<string, unknown> = {
         listing_id: listingId, status: "active",
@@ -197,7 +196,7 @@ function registerRelist(api: PluginAPI): void {
       try {
         result = await rawRequest(tool.subject, payload);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
       const title = (result["title"] as string) ?? listingId;
       const slug = onListingRelisted(listingId, title);
@@ -218,8 +217,8 @@ function registerComments(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       const payload: Record<string, unknown> = {
         listing_id: params["listing_id"],
       };
@@ -230,7 +229,7 @@ function registerComments(api: PluginAPI): void {
         const result = await rawRequest(tool.subject, payload);
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });

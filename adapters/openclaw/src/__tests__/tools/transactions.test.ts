@@ -100,7 +100,7 @@ describe("klodi_tx_cancel", () => {
     });
     mockNatsError(
       "p2p.v1.transactions.cancel",
-      new KlodiRequestError("not your tx", "FORBIDDEN"),
+      new KlodiRequestError({ error: "FORBIDDEN", message: "not your tx" }),
     );
     const tool = getTool(api, "klodi_tx_cancel");
     const result = await tool.execute("call-1", {

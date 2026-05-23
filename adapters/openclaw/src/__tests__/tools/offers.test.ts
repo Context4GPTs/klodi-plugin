@@ -71,7 +71,7 @@ describe("klodi_offer_create", () => {
   it("returns errorResult on NATS error", async () => {
     mockNatsError(
       "p2p.v1.offers.create",
-      new KlodiRequestError("offer too low", "OFFER_TOO_LOW"),
+      new KlodiRequestError({ error: "OFFER_TOO_LOW", message: "offer too low" }),
     );
     const tool = getTool(api, "klodi_offer_create");
     const result = await tool.execute("call-1", {
@@ -129,7 +129,7 @@ describe("klodi_offer_respond (accept)", () => {
   it("formats NATS errors as tool errors", async () => {
     mockNatsError(
       "p2p.v1.offers.respond",
-      new KlodiRequestError("expired", "EXPIRED"),
+      new KlodiRequestError({ error: "EXPIRED", message: "expired" }),
     );
     const tool = getTool(api, "klodi_offer_respond");
     const result = await tool.execute("call-1", {

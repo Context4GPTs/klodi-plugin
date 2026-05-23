@@ -1,9 +1,15 @@
 /**
  * Tests for adapters/openclaw/src/lib/tool-result.ts
  *
- * Pure helpers (jsonResult, errorResult, formatError) are unit-tested
- * directly. requestAndHandle / rawRequest go through getClient() and
- * have coverage in the per-tool test files via the mock-nats helper.
+ * The legacy `errorResult / formatError / requireCreds` helpers were
+ * removed in the ADR-0011 envelope rollout. Their replacements
+ * (`envelopeToolResult`, `requireCredsEnvelope`) emit the canonical
+ * four-key envelope; `requestAndHandle` now routes errors through
+ * the envelope helper so every adapter tool sees the same shape.
+ *
+ * See `envelope.test.ts` for the envelope-shape contract; this file
+ * covers the `tool-result.ts` orchestration layer (jsonResult,
+ * requireCredsEnvelope, requestAndHandle, rawRequest).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -13,12 +19,11 @@ vi.mock("../../lib/client.js", () =>
 );
 
 import {
+  envelopeToolResult,
   jsonResult,
-  errorResult,
-  formatError,
-  requireCreds,
-  requestAndHandle,
   rawRequest,
+  requestAndHandle,
+  requireCredsEnvelope,
 } from "../../lib/tool-result.js";
 import { KlodiRequestError } from "../helpers/mock-nats.js";
 import {
@@ -27,65 +32,82 @@ import {
   clearNatsResponses,
 } from "../helpers/mock-nats.js";
 
+const ENVELOPE_KEYS = ["details", "error", "message", "recovery_hint"];
+
+function parseEnvelope(text: string): Record<string, unknown> {
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
 describe("jsonResult", () => {
   it("wraps data in text content with JSON formatting", () => {
     const data = { id: "abc", price: 1500, active: true };
     const result = jsonResult(data);
 
     expect(result.content).toHaveLength(1);
-    expect(result.content[0].type).toBe("text");
-    expect(result.content[0].text).toBe(JSON.stringify(data, null, 2));
+    expect(result.content[0]!.type).toBe("text");
+    expect(result.content[0]!.text).toBe(JSON.stringify(data, null, 2));
     expect(result.isError).toBeUndefined();
   });
 
   it("handles arrays", () => {
-    expect(jsonResult([1, 2, 3]).content[0].text).toBe(
+    expect(jsonResult([1, 2, 3]).content[0]!.text).toBe(
       JSON.stringify([1, 2, 3], null, 2),
     );
   });
 
   it("handles null and primitives", () => {
-    expect(jsonResult(null).content[0].text).toBe("null");
-    expect(jsonResult("hello").content[0].text).toBe('"hello"');
-    expect(jsonResult(42).content[0].text).toBe("42");
+    expect(jsonResult(null).content[0]!.text).toBe("null");
+    expect(jsonResult("hello").content[0]!.text).toBe('"hello"');
+    expect(jsonResult(42).content[0]!.text).toBe("42");
   });
 });
 
-describe("errorResult", () => {
-  it("sets isError: true and preserves the message verbatim", () => {
-    const msg = "NOT_FOUND: Listing abc-123 does not exist";
-    const result = errorResult(msg);
+describe("envelopeToolResult", () => {
+  it("converts a KlodiRequestError into the canonical envelope tool-result", () => {
+    const err = new KlodiRequestError({
+      error: "listing_not_owned_by_caller",
+      message: "Listing belongs to another user",
+      details: { listing_id: "abc" },
+    });
+    const result = envelopeToolResult(err);
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].type).toBe("text");
-    expect(result.content[0].text).toBe(msg);
-  });
-});
-
-describe("formatError", () => {
-  it("renders KlodiRequestError as 'CODE: message'", () => {
-    const err = new KlodiRequestError("Listing not found", "NOT_FOUND");
-    expect(formatError(err)).toBe("NOT_FOUND: Listing not found");
+    const env = parseEnvelope(result.content[0]!.text!);
+    expect(Object.keys(env).sort()).toEqual(ENVELOPE_KEYS);
+    expect(env["error"]).toBe("listing_not_owned_by_caller");
+    expect(env["recovery_hint"]).toBeNull();
   });
 
-  it("renders generic Error as 'Request failed: <message>'", () => {
-    expect(formatError(new Error("socket closed"))).toBe(
-      "Request failed: socket closed",
+  it("converts a generic Error into internal_error envelope", () => {
+    const result = envelopeToolResult(new Error("socket closed"));
+
+    expect(result.isError).toBe(true);
+    const env = parseEnvelope(result.content[0]!.text!);
+    expect(env["error"]).toBe("internal_error");
+    expect(env["recovery_hint"]).toBeNull();
+  });
+
+  it("converts non-Error throws into internal_error envelope", () => {
+    expect(parseEnvelope(envelopeToolResult("boom").content[0]!.text!)["error"]).toBe(
+      "internal_error",
+    );
+    expect(parseEnvelope(envelopeToolResult(42).content[0]!.text!)["error"]).toBe(
+      "internal_error",
     );
   });
-
-  it("renders non-Error values via String()", () => {
-    expect(formatError("boom")).toBe("Request failed: boom");
-    expect(formatError(42)).toBe("Request failed: 42");
-  });
 });
 
-describe("requireCreds", () => {
-  it("returns an error string when credentials are absent", () => {
+describe("requireCredsEnvelope", () => {
+  it("returns a not_registered envelope tool-result when credentials are absent", () => {
     // hasCredentials() reads from disk; with no temp-home wired, the
     // config path resolves to a default that won't exist in CI.
-    const result = requireCreds();
-    expect(result).toBe("Not registered. Use klodi_register first.");
+    const result = requireCredsEnvelope();
+    expect(result).not.toBeNull();
+    const env = parseEnvelope(result!.content[0]!.text!);
+    expect(env["error"]).toBe("not_registered");
+    const hint = env["recovery_hint"] as Record<string, unknown>;
+    expect(hint["kind"]).toBe("cli");
+    expect(hint["command"]).toBe("klodi-openclaw-register");
   });
 });
 
@@ -96,27 +118,34 @@ describe("requestAndHandle", () => {
     mockNatsResponse("klodi_test_subject", { ok: true, id: "x" });
     const result = await requestAndHandle("klodi_test_subject", {});
     expect(result.isError).toBeUndefined();
-    expect(JSON.parse(result.content[0].text!)).toEqual({
+    expect(JSON.parse(result.content[0]!.text!)).toEqual({
       ok: true,
       id: "x",
     });
   });
 
-  it("formats KlodiRequestError into errorResult", async () => {
+  it("returns the canonical envelope when KlodiRequestError is thrown", async () => {
     mockNatsError(
       "klodi_test_subject",
-      new KlodiRequestError("Listing not found", "NOT_FOUND"),
+      new KlodiRequestError({
+        error: "listing_not_owned_by_caller",
+        message: "Listing belongs to another user",
+        details: { listing_id: "abc" },
+      }),
     );
     const result = await requestAndHandle("klodi_test_subject", {});
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toBe("NOT_FOUND: Listing not found");
+    const env = parseEnvelope(result.content[0]!.text!);
+    expect(env["error"]).toBe("listing_not_owned_by_caller");
+    expect(env["recovery_hint"]).toBeNull();
   });
 
-  it("formats generic transport errors into errorResult", async () => {
+  it("returns the internal_error envelope for generic transport errors", async () => {
     mockNatsError("klodi_test_subject", new Error("connection lost"));
     const result = await requestAndHandle("klodi_test_subject", {});
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toBe("Request failed: connection lost");
+    const env = parseEnvelope(result.content[0]!.text!);
+    expect(env["error"]).toBe("internal_error");
   });
 });
 
@@ -130,7 +159,10 @@ describe("rawRequest", () => {
   });
 
   it("propagates errors", async () => {
-    const err = new KlodiRequestError("Boom", "INTERNAL_ERROR");
+    const err = new KlodiRequestError({
+      error: "internal_error",
+      message: "Boom",
+    });
     mockNatsError("klodi_raw", err);
     await expect(rawRequest("klodi_raw", {})).rejects.toBe(err);
   });

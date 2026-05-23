@@ -56,20 +56,22 @@ describe("klodi_assets_upload_url", () => {
     expect(data.uploads[0].upload_url).toBe("https://upload");
   });
 
-  it("propagates KlodiRequestError as a tool error", async () => {
+  it("surfaces KlodiRequestError as the canonical envelope", async () => {
     mockNatsError(
       "p2p.v1.assets.upload-url",
-      new KlodiRequestError("file too large", "FILE_TOO_LARGE"),
+      new KlodiRequestError({ error: "FILE_TOO_LARGE", message: "file too large" }),
     );
     const tool = getTool(api, "klodi_assets_upload_url");
     const result = await tool.execute("call-1", {
       files: [{ filename: "huge.jpg", content_type: "image/jpeg", size: 99 }],
     });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("FILE_TOO_LARGE");
+    const env = JSON.parse(result.content[0].text!);
+    expect(env.error).toBe("FILE_TOO_LARGE");
+    expect(env.recovery_hint).toBeNull();
   });
 
-  it("returns 'Not registered' when credentials are missing", async () => {
+  it("returns the not_registered envelope when credentials are missing", async () => {
     temp.cleanup();
     temp = createTempHome();
     api = createMockPluginApi();
@@ -77,6 +79,7 @@ describe("klodi_assets_upload_url", () => {
     const tool = getTool(api, "klodi_assets_upload_url");
     const result = await tool.execute("call-1", { files: [] });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Not registered");
+    const env = JSON.parse(result.content[0].text!);
+    expect(env.error).toBe("not_registered");
   });
 });

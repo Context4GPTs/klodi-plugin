@@ -84,11 +84,14 @@ describe("klodi_register", () => {
 });
 
 describe("klodi_register_poll", () => {
-  it("rejects a non-UUID session_id with a clear message", async () => {
+  it("rejects a non-UUID session_id with the invalid_request envelope", async () => {
     const tool = getTool(api, "klodi_register_poll");
     const result = await tool.execute("call-1", { session_id: "not-a-uuid" });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("UUID");
+    const env = JSON.parse(result.content[0].text!);
+    expect(env.error).toBe("invalid_request");
+    expect(env.details.field).toBe("session_id");
+    expect(env.message).toContain("UUID");
   });
 });
 
@@ -102,11 +105,13 @@ describe("klodi_whoami", () => {
     expect(JSON.parse(result.content[0].text!)).toEqual({ handle: "tester" });
   });
 
-  it("returns 'Not registered' when credentials are missing", async () => {
+  it("returns the not_registered envelope when credentials are missing", async () => {
     const tool = getTool(api, "klodi_whoami");
     const result = await tool.execute("call-1", {});
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Not registered");
+    const env = JSON.parse(result.content[0].text!);
+    expect(env.error).toBe("not_registered");
+    expect(env.recovery_hint.kind).toBe("cli");
   });
 });
 
@@ -139,7 +144,7 @@ describe("klodi_health", () => {
     withCreds();
     mockNatsError(
       "p2p.v1.users.whoami",
-      new KlodiRequestError("server down", "INTERNAL"),
+      new KlodiRequestError({ error: "INTERNAL", message: "server down" }),
     );
     setConnected(true);
     const tool = getTool(api, "klodi_health");
@@ -185,22 +190,24 @@ describe("klodi_ratings", () => {
     expect(data.handle).toBe("alice");
   });
 
-  it("returns 'Not registered' without creds", async () => {
+  it("returns the not_registered envelope without creds", async () => {
     const tool = getTool(api, "klodi_ratings");
     const result = await tool.execute("call-1", { handle: "alice" });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Not registered");
+    const env = JSON.parse(result.content[0].text!);
+    expect(env.error).toBe("not_registered");
   });
 
-  it("formats NATS errors as tool errors", async () => {
+  it("surfaces NATS errors as envelope tool-results", async () => {
     withCreds();
     mockNatsError(
       "p2p.v1.ratings.query",
-      new KlodiRequestError("not found", "NOT_FOUND"),
+      new KlodiRequestError({ error: "NOT_FOUND", message: "not found" }),
     );
     const tool = getTool(api, "klodi_ratings");
     const result = await tool.execute("call-1", { handle: "missing" });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("NOT_FOUND");
+    const env = JSON.parse(result.content[0].text!);
+    expect(env.error).toBe("NOT_FOUND");
   });
 });

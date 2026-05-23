@@ -4,11 +4,18 @@
  * Every tool follows the same shape: validate creds, dispatch to a
  * subject from the catalog, format the response. `requestAndHandle`
  * wraps that in one call so individual tool files stay short.
+ *
+ * Error paths use the canonical four-key envelope (ADR-0011). Tools
+ * call `requireCredsEnvelope()` to short-circuit when creds are
+ * missing, then dispatch via `requestAndHandle` / `rawRequest`. Any
+ * thrown value is converted to an envelope by `envelopeToolResult`
+ * which carries the structured payload to the agent.
  */
 
 import type { ToolResult } from "openclaw/plugin-sdk";
 import { hasCredentials } from "./config.js";
-import { getClient, KlodiRequestError } from "./client.js";
+import { getClient } from "./client.js";
+import { envelopeFromError, envelopeToToolResult, makeEnvelope } from "./envelope.js";
 
 /** Format a successful JSON response as a tool result. */
 export function jsonResult(data: unknown): ToolResult {
@@ -17,21 +24,46 @@ export function jsonResult(data: unknown): ToolResult {
   };
 }
 
-/** Format an error string as a tool result. */
-export function errorResult(message: string): ToolResult {
-  return {
-    content: [{ type: "text", text: message }],
-    isError: true,
-  };
+/**
+ * Convert any thrown value into the canonical four-key envelope
+ * `ToolResult`. Per ADR-0011 the agent sees `error`, `message`,
+ * `details`, `recovery_hint` — no bare strings.
+ */
+export function envelopeToolResult(err: unknown): ToolResult {
+  return envelopeToToolResult(envelopeFromError(err));
 }
 
-/** Return error message if not registered, null if OK. */
-export function requireCreds(): string | null {
-  if (!hasCredentials()) {
-    return "Not registered. Use klodi_register first.";
-  }
-  return null;
+/**
+ * Return a `not_registered` envelope `ToolResult` when creds are
+ * missing, `null` otherwise. Replaces the legacy `requireCreds()`
+ * helper that returned a flat string.
+ *
+ * Tools call this as:
+ *
+ *     const guard = requireCredsEnvelope();
+ *     if (guard) return guard;
+ *     try { ... } catch (e) { return envelopeToolResult(e); }
+ */
+export function requireCredsEnvelope(): ToolResult | null {
+  if (hasCredentials()) return null;
+  return envelopeToToolResult(
+    makeEnvelope({
+      error: "not_registered",
+      message:
+        "klodi is not registered on this host. Run klodi-openclaw-register " +
+        "from a shell to mint nats.creds and config.json.",
+      details: null,
+      recovery_hint: {
+        kind: "cli",
+        command: "klodi-openclaw-register",
+        message:
+          "Run klodi-openclaw-register — opens a browser link, polls for " +
+          "completion, writes nats.creds + config.json.",
+      },
+    }),
+  );
 }
+
 
 export interface RequestOptions {
   timeout?: number;
@@ -39,8 +71,9 @@ export interface RequestOptions {
 
 /**
  * Send a NATS request and return a formatted ToolResult.
- * Catches both transport errors and KlodiRequestError ({error, message}
- * envelopes from the server) and surfaces them as errorResult.
+ * Catches both transport errors and `KlodiRequestError` (`{error,
+ * message, details}` envelopes from the server) and surfaces them as a
+ * canonical four-key envelope `ToolResult`. See ADR-0011.
  */
 export async function requestAndHandle(
   subject: string,
@@ -55,18 +88,20 @@ export async function requestAndHandle(
     );
     return jsonResult(result);
   } catch (err) {
-    return errorResult(formatError(err));
+    return envelopeToolResult(err);
   }
 }
 
 /**
  * Send a NATS request and return the raw parsed response.
- * Tools that need to inspect the response (e.g. listings.create writes
- * a sell file when the response includes listing_id) use this; they
- * format the final ToolResult themselves.
+ *
+ * Tools that need to inspect the response (e.g. `listings.create`
+ * writes a sell file when the response includes `listing_id`) use this;
+ * they format the final `ToolResult` themselves.
  *
  * Throws on error so the caller's try/catch can decide. Use
- * formatError() for the error string.
+ * {@link envelopeToolResult} from the catch arm to produce the
+ * canonical envelope `ToolResult`.
  */
 export async function rawRequest<T = Record<string, unknown>>(
   subject: string,
@@ -74,15 +109,4 @@ export async function rawRequest<T = Record<string, unknown>>(
   options?: RequestOptions,
 ): Promise<T> {
   return getClient().request<T>(subject, payload, options);
-}
-
-/** Translate any error into a flat user-visible string. */
-export function formatError(err: unknown): string {
-  if (err instanceof KlodiRequestError) {
-    const code = err.code;
-    const message = err.message;
-    return `${code}: ${message}`;
-  }
-  if (err instanceof Error) return `Request failed: ${err.message}`;
-  return `Request failed: ${String(err)}`;
 }

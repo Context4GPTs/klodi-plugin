@@ -33,6 +33,12 @@ from klodi_nats_client import (
     TOOL_SCHEMAS,
     ToolSchema,
 )
+from klodi_nats_client.envelope import (
+    envelope_from_klodi_request_error,
+    envelope_from_not_connected,
+    envelope_from_unknown,
+    make_envelope,
+)
 
 from .client import get_client, run_async
 
@@ -99,14 +105,15 @@ def build_request_handler(tool_name: str) -> Callable[..., str]:
         # Hermes runtime passes extra kwargs (task_id, tool_call_id,
         # etc.) — we accept-and-discard so future runtime params don't
         # break the plugin on upgrade.
+        #
+        # All error paths return the canonical four-key envelope
+        # (ADR-0011). The agent reads `error`, follows `recovery_hint`,
+        # never pattern-matches on `message`.
         try:
             client = get_client()
             result = run_async(client.request(subject, args))
         except KlodiRequestError as err:
-            return json.dumps({
-                "error": err.code or "request_failed",
-                "message": str(err),
-            })
+            return json.dumps(envelope_from_klodi_request_error(err))
         except BaseException as err:  # noqa: BLE001 — boundary
             log.warning(
                 "klodi_tool_handler_failed tool=%s subject=%s error=%s",
@@ -114,20 +121,11 @@ def build_request_handler(tool_name: str) -> Callable[..., str]:
                 subject,
                 err,
             )
-            # Connection-state errors get surfaced as a recoverable
-            # `klodi_unavailable` so the agent has a clear next step
-            # (run klodi_setup_status / klodi_register). Without this
-            # the agent receives a raw transport message and tends to
-            # hallucinate that the tool doesn't exist.
-            return json.dumps({
-                "error": "klodi_unavailable",
-                "message": (
-                    "klodi NATS connection is not ready. Run"
-                    " klodi_setup_status to diagnose, or klodi_register"
-                    " if you haven't signed up."
-                ),
-                "underlying": str(err),
-            })
+            # Connection-state errors surface as `connection_not_ready`
+            # with a `klodi_setup_status` recovery hint. The agent picks
+            # up the hint, calls setup_status, reads the next_action,
+            # and acts on it.
+            return json.dumps(envelope_from_not_connected())
         return json.dumps(result)
 
     return handler
@@ -146,15 +144,13 @@ def handle_channel_message(args: dict[str, Any], **_kwargs: Any) -> str:
     channel_id = args.get("channel_id")
     content = args.get("content")
     if not isinstance(channel_id, str) or not channel_id:
-        return json.dumps({
-            "error": "INVALID_REQUEST",
-            "message": "channel_id is required (string)",
-        })
+        return json.dumps(_invalid_request("channel_id", "missing" if channel_id is None else (
+            "empty" if channel_id == "" else "wrong_type"
+        )))
     if not isinstance(content, str) or not content:
-        return json.dumps({
-            "error": "INVALID_REQUEST",
-            "message": "content is required (non-empty string)",
-        })
+        return json.dumps(_invalid_request("content", "missing" if content is None else (
+            "empty" if content == "" else "wrong_type"
+        )))
 
     try:
         client = get_client()
@@ -162,23 +158,27 @@ def handle_channel_message(args: dict[str, Any], **_kwargs: Any) -> str:
             client.publish_channel_message(channel_id, {"content": content})
         )
     except ValueError as err:
-        return json.dumps({"error": "INVALID_REQUEST", "message": str(err)})
+        # ValueError from publish_channel_message means the server-side
+        # validator rejected the body shape (content max-length, etc.).
+        return json.dumps(envelope_from_unknown(err))
     except BaseException as err:  # noqa: BLE001 — boundary
         log.warning(
             "klodi_channel_message_failed channel_id=%s error=%s",
             channel_id,
             err,
         )
-        return json.dumps({
-            "error": "klodi_unavailable",
-            "message": (
-                "klodi NATS connection is not ready. Run"
-                " klodi_setup_status to diagnose, or klodi_register"
-                " if you haven't signed up."
-            ),
-            "underlying": str(err),
-        })
+        return json.dumps(envelope_from_not_connected())
     return json.dumps(result)
+
+
+def _invalid_request(field: str, problem: str) -> dict[str, Any]:
+    """Local envelope for adapter-side schema rejections (R2 invalid_request)."""
+    return make_envelope(
+        error="invalid_request",
+        message=f"argument `{field}` is {problem}; re-call with a corrected value",
+        details={"field": field, "problem": problem},
+        recovery_hint=None,
+    )
 
 
 # Per **R § P2-13**: ``CHANNEL_MESSAGE_PARAMS`` is the JSON-Schema for

@@ -12,12 +12,12 @@ import { existsSync } from "node:fs";
 import { Handle, klodiTools } from "@klodi/tool-catalog";
 import { WHOAMI_PROBE_TIMEOUT_MS } from "@klodi/nats-client";
 import {
-  errorResult,
-  formatError,
+  envelopeToolResult,
   jsonResult,
   rawRequest,
-  requireCreds,
+  requireCredsEnvelope,
 } from "../lib/tool-result.js";
+import { envelopeToToolResult, makeEnvelope } from "../lib/envelope.js";
 import {
   connectClient,
   getClient,
@@ -104,9 +104,15 @@ function registerRegister(api: PluginAPI): void {
     async execute(_id, params) {
       const sessionId = params["session_id"] as string;
       if (!UUID_RE.test(sessionId)) {
-        return errorResult(
-          "session_id must be a UUID. Run klodi_register to obtain"
-          + " a fresh one.",
+        return envelopeToToolResult(
+          makeEnvelope({
+            error: "invalid_request",
+            message:
+              "session_id must be a UUID; re-call with a corrected value " +
+              "(run klodi_register to obtain a fresh one).",
+            details: { field: "session_id", problem: "wrong_type" },
+            recovery_hint: null,
+          }),
         );
       }
       stopRegisterPoll("tool_preempts");
@@ -134,26 +140,64 @@ function toolResultFor(result: ClaimResult) {
           "Registration not yet completed. Try again in a few seconds.",
       });
     case "expired":
-      return errorResult(
-        "Registration session expired. Run klodi_register again.",
+      return envelopeToToolResult(
+        makeEnvelope({
+          error: "not_registered",
+          message: "Registration session expired. Run klodi_register again.",
+          details: null,
+          recovery_hint: {
+            kind: "tool",
+            tool: "klodi_register",
+            message: "Start a fresh registration session.",
+          },
+        }),
       );
     case "already_claimed":
-      return errorResult(
-        "Registration credentials were already claimed on another"
-        + " device or process. Run klodi_register again if you need"
-        + " fresh credentials.",
+      return envelopeToToolResult(
+        makeEnvelope({
+          error: "not_registered",
+          message:
+            "Registration credentials were already claimed on another " +
+            "device or process. Run klodi_register again if you need " +
+            "fresh credentials.",
+          details: null,
+          recovery_hint: {
+            kind: "tool",
+            tool: "klodi_register",
+            message: "Mint fresh credentials.",
+          },
+        }),
       );
     case "http_error":
-      return errorResult(
-        `Registration poll failed: HTTP ${result.status} ${result.statusText}`,
+      return envelopeToToolResult(
+        makeEnvelope({
+          error: "internal_error",
+          message: `Registration poll failed: HTTP ${result.status} ${result.statusText}`,
+          details: { http_status: result.status, http_status_text: result.statusText },
+          recovery_hint: null,
+        }),
       );
     case "transport_error":
-      return errorResult(
-        `Failed to poll registration: ${result.message}`,
+      return envelopeToToolResult(
+        makeEnvelope({
+          error: "connection_not_ready",
+          message: `Failed to poll registration: ${result.message}`,
+          details: null,
+          recovery_hint: {
+            kind: "tool",
+            tool: "klodi_setup_status",
+            message: "Inspect setup state — connection is not ready.",
+          },
+        }),
       );
     case "invalid_response":
-      return errorResult(
-        `Invalid registration response: ${result.message}`,
+      return envelopeToToolResult(
+        makeEnvelope({
+          error: "internal_error",
+          message: `Invalid registration response: ${result.message}`,
+          details: { reason: result.message },
+          recovery_hint: null,
+        }),
       );
   }
 }
@@ -166,13 +210,13 @@ function registerWhoami(api: PluginAPI): void {
     description: tool.description,
     parameters: tool.params,
     async execute() {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, {});
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });
@@ -274,10 +318,14 @@ async function probeAndReport(
       issues,
     });
   } catch (err) {
+    // R5 — klodi_health returns its diagnostic payload, not the error
+    // envelope. Stringify the underlying error verbatim for the
+    // operator-facing `issues[].message`.
+    const errText = err instanceof Error ? err.message : String(err);
     const issues = [...preexisting, {
       code: "whoami_failed",
       severity: "error" as const,
-      message: `whoami_failed: ${formatError(err)}`,
+      message: `whoami_failed: ${errText}`,
     }];
     return jsonResult({
       status: "unhealthy",
@@ -316,15 +364,15 @@ function registerRatings(api: PluginAPI): void {
     description: tool.description,
     parameters: Type.Object({ handle: Handle }),
     async execute(_id, params) {
-      const err = requireCreds();
-      if (err) return errorResult(err);
+      const guard = requireCredsEnvelope();
+      if (guard) return guard;
       try {
         const result = await rawRequest(tool.subject, {
           handle: params["handle"],
         });
         return jsonResult(result);
       } catch (e) {
-        return errorResult(formatError(e));
+        return envelopeToolResult(e);
       }
     },
   });

@@ -59,18 +59,20 @@ describe("klodi_search", () => {
     expect(data).toEqual({ results: [], total: 0 });
   });
 
-  it("returns errorResult on NATS error", async () => {
+  it("returns the canonical envelope on NATS error", async () => {
     mockNatsError(
       "p2p.v1.listings.search",
-      new KlodiRequestError("Bad query", "INVALID"),
+      new KlodiRequestError({ error: "INVALID", message: "Bad query" }),
     );
     const tool = getTool(api, "klodi_search");
     const result = await tool.execute("call-1", { query: "x" });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("INVALID: Bad query");
+    const env = JSON.parse(result.content[0].text!);
+    expect(env.error).toBe("INVALID");
+    expect(env.recovery_hint).toBeNull();
   });
 
-  it("returns 'Not registered' when credentials are missing", async () => {
+  it("returns the not_registered envelope when credentials are missing", async () => {
     temp.cleanup();
     temp = createTempHome();
     api = createMockPluginApi();
@@ -78,7 +80,9 @@ describe("klodi_search", () => {
     const tool = getTool(api, "klodi_search");
     const result = await tool.execute("call-1", { query: "x" });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Not registered");
+    const env = JSON.parse(result.content[0].text!);
+    expect(env.error).toBe("not_registered");
+    expect(env.recovery_hint.kind).toBe("cli");
   });
 });
 
@@ -150,7 +154,7 @@ describe("klodi_watch (persistent)", () => {
   it("does not write a buy file when the server call fails", async () => {
     mockNatsError(
       "p2p.v1.searches.create",
-      new KlodiRequestError("Already exists", "ALREADY_EXISTS"),
+      new KlodiRequestError({ error: "ALREADY_EXISTS", message: "Already exists" }),
     );
     const tool = getTool(api, "klodi_watch");
     const result = await tool.execute("call-1", {
@@ -187,14 +191,16 @@ describe("klodi_unwatch", () => {
     expect(listBuySlugs()).toHaveLength(0);
   });
 
-  it("returns errorResult when the server delete fails", async () => {
+  it("returns the canonical envelope when the server delete fails", async () => {
     mockNatsError(
       "p2p.v1.searches.delete",
-      new KlodiRequestError("not found", "NOT_FOUND"),
+      new KlodiRequestError({ error: "NOT_FOUND", message: "not found" }),
     );
     const tool = getTool(api, "klodi_unwatch");
     const result = await tool.execute("call-1", { buy_slug: "missing" });
     expect(result.isError).toBe(true);
+    const env = JSON.parse(result.content[0].text!);
+    expect(env.error).toBe("NOT_FOUND");
   });
 });
 
@@ -230,7 +236,7 @@ describe("klodi_comment", () => {
   it("returns errorResult on NATS error", async () => {
     mockNatsError(
       "p2p.v1.comments.create",
-      new KlodiRequestError("rate limited", "RATE_LIMIT"),
+      new KlodiRequestError({ error: "RATE_LIMIT", message: "rate limited" }),
     );
     const tool = getTool(api, "klodi_comment");
     const result = await tool.execute("call-1", {
