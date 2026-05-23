@@ -44,6 +44,7 @@ from nanobot_local_tools import (
     LOCAL_TOOL_NAMES,
     dispatch_local_tool,
 )
+from nanobot_photos import PhotoResolutionError, resolve_photos
 
 
 _PUBLISH_TOOLS: frozenset[str] = frozenset({
@@ -51,6 +52,14 @@ _PUBLISH_TOOLS: frozenset[str] = frozenset({
     # Per **D § D4** (P3-3): canonical name is `klodi_channel_message`;
     # the legacy `klodi_channel_send` was removed in 0012.
     "klodi_channel_message",
+})
+
+# Tools whose `photos` parameter is run through the adapter-internal
+# photo-resolution pipeline before the listing request is dispatched.
+# See `nanobot_photos.resolve_photos` and ADR-0006.
+_PHOTOS_AWARE_TOOLS: frozenset[str] = frozenset({
+    "klodi_list_create",
+    "klodi_list_update",
 })
 
 # Names that must NEVER reach `call_tool` (the request/reply path) —
@@ -197,6 +206,26 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             })
         return json.dumps(local_result)
 
+    if name in _PHOTOS_AWARE_TOOLS:
+        try:
+            resolved = await resolve_photos(
+                args.get("photos"),
+                _client_request,
+            )
+        except PhotoResolutionError as err:
+            return json.dumps({
+                "error": err.stage,
+                "message": str(err),
+                "path": err.path,
+            })
+        except BaseException as err:  # noqa: BLE001 — boundary
+            return json.dumps({
+                "error": "transport_error",
+                "message": str(err),
+            })
+        if resolved is not None:
+            args = {**args, "photos": resolved}
+
     try:
         result = await call_tool(name, args)
     except KeyError as err:
@@ -215,6 +244,13 @@ async def handle(name: str, args: dict[str, Any]) -> str:
             "message": str(err),
         })
     return json.dumps(result)
+
+
+async def _client_request(
+    subject: str, payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Bridge ``resolve_photos`` to the shared KlodiClient singleton."""
+    return await get_client().request(subject, payload)
 
 
 __all__ = [
