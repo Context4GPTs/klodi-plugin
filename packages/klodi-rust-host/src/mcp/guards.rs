@@ -15,8 +15,196 @@
 //! no marketplace request issued. First failure short-circuits; later
 //! guards do not execute (R4).
 //!
-//! This file is QA-owned during RED. The implementer adds the
-//! production items so the tests compile and pass.
+//! `host_authorization` (R-arch) is reserved as an optional pre-flight
+//! hook for adapters whose host can deny a tool independently (e.g. the
+//! ZeroClaw gateway bearer). Not in scope for the shared parity contract.
+//!
+//! See ADR-0011.
+
+use super::envelope::ToolEnvelope;
+use crate::setup_status::NextAction;
+use serde_json::{Map, Value, json};
+use std::path::Path;
+
+/// Argument-shape vocabulary for `guard_args`. Mirrors the small set the
+/// rmcp catalog schemas actually use today; widen only when a new
+/// catalog tool needs a new type.
+#[derive(Debug, Clone, Copy)]
+pub enum ArgKind {
+    /// UUID v4 string (matches catalog's `^[0-9a-f]{8}-…` pattern).
+    Uuid,
+    /// Any non-null string. Empty string is allowed.
+    #[allow(dead_code)]
+    String,
+    /// Integer (JSON number with no fractional component).
+    #[allow(dead_code)]
+    Integer,
+    /// Boolean.
+    #[allow(dead_code)]
+    Bool,
+    /// Non-empty string. Empty string rejected with `problem: "empty"`.
+    NonEmptyString,
+}
+
+const UUID_V4_PATTERN: &str =
+    "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+
+/// `creds_present` guard. Returns `None` when both
+/// `${klodi_home}/nats.creds` and `${klodi_home}/config.json` exist as
+/// regular files; otherwise returns a `not_registered` envelope.
+///
+/// `register_cli` is the per-host CLI name (`klodi-zeroclaw-register`,
+/// `klodi-moltis-register`, …) substituted into the `NextAction::Cli`
+/// recovery hint so the agent surfaces the literal command the operator
+/// runs (R8).
+pub fn guard_creds(klodi_home: &Path, register_cli: &str) -> Option<ToolEnvelope> {
+    let creds_path = klodi_home.join("nats.creds");
+    let config_path = klodi_home.join("config.json");
+    let creds_present = creds_path.is_file();
+    let config_present = config_path.is_file();
+    if creds_present && config_present {
+        return None;
+    }
+    Some(ToolEnvelope {
+        error: "not_registered".to_string(),
+        message: format!(
+            "klodi is not registered on this host. \
+             Run {register_cli} from a shell to mint nats.creds and config.json under \
+             ${{KLODI_HOME}}.",
+        ),
+        details: None,
+        recovery_hint: Some(NextAction::Cli {
+            command: register_cli.to_string(),
+            message: format!(
+                "Run {register_cli} — opens a browser link, polls for completion, \
+                 writes nats.creds + config.json.",
+            ),
+        }),
+    })
+}
+
+/// `args_well_formed` guard. Walks the `required` list in order and
+/// returns the FIRST envelope describing a missing / wrong-type / empty
+/// field. R4 short-circuit: the agent sees one problem at a time and
+/// fixes them in catalog-declared order.
+pub fn guard_args(
+    args: &Map<String, Value>,
+    required: &[(&str, ArgKind)],
+) -> Option<ToolEnvelope> {
+    for (field, kind) in required {
+        match args.get(*field) {
+            None => {
+                return Some(invalid_request(field, "missing"));
+            }
+            Some(Value::Null) => {
+                return Some(invalid_request(field, "missing"));
+            }
+            Some(value) => {
+                if let Some(problem) = check_value(value, *kind) {
+                    return Some(invalid_request(field, problem));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Synchronous pre-call guard composition: creds → args. The
+/// `connection_ready` guard requires the async handler, so it composes
+/// in the dispatcher (`tools::dispatch`) rather than here; this helper
+/// covers the test path and any future synchronous caller.
+pub fn run_pre_call_guards(
+    klodi_home: &Path,
+    register_cli: &str,
+    args: &Map<String, Value>,
+    required: &[(&str, ArgKind)],
+) -> Option<ToolEnvelope> {
+    if let Some(env) = guard_creds(klodi_home, register_cli) {
+        return Some(env);
+    }
+    guard_args(args, required)
+}
+
+fn invalid_request(field: &str, problem: &str) -> ToolEnvelope {
+    ToolEnvelope {
+        error: "invalid_request".to_string(),
+        message: format!("argument `{field}` is {problem}; re-call with a corrected value"),
+        details: Some(json!({ "field": field, "problem": problem })),
+        recovery_hint: None,
+    }
+}
+
+fn check_value(value: &Value, kind: ArgKind) -> Option<&'static str> {
+    match kind {
+        ArgKind::Uuid => match value.as_str() {
+            None => Some("wrong_type"),
+            Some(s) if s.is_empty() => Some("empty"),
+            Some(s) if !is_uuid_v4(s) => Some("wrong_type"),
+            Some(_) => None,
+        },
+        ArgKind::String => {
+            if value.as_str().is_none() {
+                Some("wrong_type")
+            } else {
+                None
+            }
+        }
+        ArgKind::NonEmptyString => match value.as_str() {
+            None => Some("wrong_type"),
+            Some(s) if s.is_empty() => Some("empty"),
+            Some(_) => None,
+        },
+        ArgKind::Integer => {
+            if value.as_i64().is_none() {
+                Some("wrong_type")
+            } else {
+                None
+            }
+        }
+        ArgKind::Bool => {
+            if value.as_bool().is_none() {
+                Some("wrong_type")
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn is_uuid_v4(s: &str) -> bool {
+    // Hand-rolled instead of pulling in a regex crate — the catalog's
+    // UUID-v4 pattern is small and fixed. See ADR-0011.
+    let bytes = s.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    for (i, b) in bytes.iter().enumerate() {
+        match i {
+            8 | 13 | 18 | 23 => {
+                if *b != b'-' {
+                    return false;
+                }
+            }
+            14 => {
+                if *b != b'4' {
+                    return false;
+                }
+            }
+            19 => {
+                if !matches!(*b, b'8' | b'9' | b'a' | b'b') {
+                    return false;
+                }
+            }
+            _ => {
+                if !matches!(*b, b'0'..=b'9' | b'a'..=b'f') {
+                    return false;
+                }
+            }
+        }
+    }
+    let _ = UUID_V4_PATTERN; // doc reference; lint can't see the pattern
+    true
+}
 
 #[cfg(test)]
 mod tests {

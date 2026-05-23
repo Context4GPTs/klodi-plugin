@@ -14,8 +14,8 @@
 //! Each invocation reuses one persistent NATS-WS connection across
 //! every passthrough call within the same MCP session.
 
-mod envelope;
-mod guards;
+pub mod envelope;
+pub mod guards;
 mod handler;
 mod resources;
 mod schemas;

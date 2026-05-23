@@ -12,16 +12,144 @@
 //! [`crate::setup_status::NextAction`] discriminated union (`cli | tool
 //! | shell | dialog`) or `null`.
 //!
-//! Production helpers live alongside `super::tools` (the dispatcher).
-//! See the architect's Affected-files entry for the placement of
-//! `ToolEnvelope`, `envelope_from_klodi_err`, and the `CallToolResult`
-//! constructor that emits both `structured` and a JSON-stringified
-//! `content[0].text` (mirrors the existing `structured_with_text`).
+//! Cross-language parity: the Python adapter pair
+//! (`klodi_nats_client.envelope`) and the openclaw TS adapter
+//! (`adapters/openclaw/src/lib/envelope.ts`) emit the same four-key
+//! shape under matching conditions. The shared fixture at
+//! `packages/tool-catalog/tests/fixtures/envelope-golden.json` is the
+//! cross-language oracle. See ADR-0011.
 //!
-//! This file is QA-owned during RED. The unit tests below pin the
-//! contract; the expert-developer adds the production items
-//! (`ToolEnvelope`, conversion impls, serialisation helpers) until the
-//! tests compile and pass.
+//! Production items consumed by `super::tools::dispatch`:
+//!
+//! - [`ToolEnvelope`] — the wire-format struct.
+//! - [`envelope_from_klodi_err`] — maps every [`klodi_nats_client::KlodiError`]
+//!   variant to a stable envelope code per [R2 in the card body].
+//! - [`envelope_to_call_tool_result`] — wraps the envelope into the
+//!   `CallToolResult` shape rmcp serves (structured payload PLUS
+//!   JSON-stringified `content[0].text`).
+
+use crate::setup_status::NextAction;
+use klodi_nats_client::KlodiError;
+use rmcp::model::{CallToolResult, Content};
+use serde::Serialize;
+use serde_json::{Value, json};
+
+/// Cross-language tool-result envelope. Serialises to four named keys;
+/// `details` and `recovery_hint` are emitted as JSON `null` (never
+/// elided) so byte-for-byte parity with the Python and TS adapters
+/// holds.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolEnvelope {
+    pub error: String,
+    pub message: String,
+    /// Machine-readable cause. Absent → JSON `null`.
+    pub details: Option<Value>,
+    /// Agent-actionable next step. Absent → JSON `null`. Drawn from the
+    /// existing `NextAction` vocabulary (no new variants without an ADR
+    /// amendment — R3).
+    pub recovery_hint: Option<NextAction>,
+}
+
+/// Map a [`KlodiError`] into a [`ToolEnvelope`] using the R2 vocabulary
+/// (see card body — closed code set). Server-side codes pass through
+/// verbatim with no synthesised recovery hint (open Q2 default).
+pub fn envelope_from_klodi_err(err: KlodiError) -> ToolEnvelope {
+    match err {
+        KlodiError::Marketplace { code, message, details } => ToolEnvelope {
+            error: code,
+            message,
+            details,
+            recovery_hint: None,
+        },
+        KlodiError::CredsNotFound(path) | KlodiError::ConfigNotFound(path) => ToolEnvelope {
+            error: "not_registered".to_string(),
+            message: format!(
+                "klodi is not registered on this host (missing {path}). \
+                 Run klodi-zeroclaw-register from a shell to mint credentials.",
+            ),
+            details: None,
+            // The default CLI is zeroclaw (the canonical Rust adapter
+            // for which this shared host was first wired up). Adapters
+            // whose binary differs (moltis, ironclaw) override the hint
+            // via `envelope_from_klodi_err_with_cli` in the dispatch
+            // wrap-up. See ADR-0011.
+            recovery_hint: Some(NextAction::Cli {
+                command: "klodi-zeroclaw-register".to_string(),
+                message:
+                    "Run klodi-zeroclaw-register — opens a browser link, polls for completion, \
+                     writes nats.creds + config.json."
+                        .to_string(),
+            }),
+        },
+        KlodiError::NotConnected => ToolEnvelope {
+            error: "connection_not_ready".to_string(),
+            message: "klodi NATS connection is not ready. \
+                      Call klodi_setup_status to diagnose, then retry."
+                .to_string(),
+            details: None,
+            recovery_hint: Some(NextAction::Tool {
+                tool: "klodi_setup_status".to_string(),
+                message: "Inspect setup state — connection is not ready.".to_string(),
+            }),
+        },
+        KlodiError::Setup { code, message } => {
+            let consumer = code.strip_suffix("_consumer_missing").unwrap_or("");
+            ToolEnvelope {
+                error: "consumer_missing".to_string(),
+                message,
+                // Cross-language parity: the golden fixture pins
+                // `details` to `{"consumer": <name>}` only. Adding extra
+                // keys here breaks the byte-for-byte JSON match adapters
+                // run against the fixture.
+                details: Some(json!({ "consumer": consumer })),
+                recovery_hint: Some(NextAction::Tool {
+                    tool: "klodi_setup_status".to_string(),
+                    message: "Inspect setup state — a server-managed consumer is missing.".to_string(),
+                }),
+            }
+        }
+        other => ToolEnvelope {
+            error: "internal_error".to_string(),
+            message: format!("{other}"),
+            details: None,
+            recovery_hint: None,
+        },
+    }
+}
+
+/// Same as [`envelope_from_klodi_err`] but substitutes a host-specific
+/// register CLI name into the `not_registered` recovery hint. Adapters
+/// that pass their per-bin register-CLI name (e.g. `klodi-zeroclaw-register`)
+/// surface the literal command the operator runs.
+pub fn envelope_from_klodi_err_with_cli(
+    err: KlodiError,
+    register_cli: &str,
+) -> ToolEnvelope {
+    let mut env = envelope_from_klodi_err(err);
+    if env.error == "not_registered" {
+        env.recovery_hint = Some(NextAction::Cli {
+            command: register_cli.to_string(),
+            message: format!(
+                "Run {register_cli} — mints nats.creds + config.json under ${{KLODI_HOME}}.",
+            ),
+        });
+    }
+    env
+}
+
+/// Wrap a [`ToolEnvelope`] into the `CallToolResult` shape rmcp serves:
+/// `structured` carries the four-key JSON object for parsing; `content[0].text`
+/// carries the same JSON stringified so non-structured-aware MCP clients
+/// still see the envelope in the plain-text channel. Mirrors the existing
+/// `structured_with_text` convention.
+pub fn envelope_to_call_tool_result(env: ToolEnvelope) -> CallToolResult {
+    let value = serde_json::to_value(&env)
+        .unwrap_or_else(|_| json!({"error": "internal_error", "message": "envelope serialisation failed", "details": null, "recovery_hint": null}));
+    let text = serde_json::to_string(&value).unwrap_or_else(|_| value.to_string());
+    let mut result = CallToolResult::structured_error(value);
+    result.content = vec![Content::text(text)];
+    result
+}
 
 #[cfg(test)]
 mod tests {
