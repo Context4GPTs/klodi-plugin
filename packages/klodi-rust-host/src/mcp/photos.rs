@@ -661,4 +661,67 @@ mod tests {
         assert!(is_absolute_path("C:\\Users\\me\\x.jpg"));
         assert!(is_absolute_path("\\\\server\\share\\x.jpg"));
     }
+
+    // P2.2 — envelope-shape parity. The canonical cross-language
+    // envelope is `{error: <stage>, message: <human>, path: <path | null>}`.
+    // The TS adapter emits it as `JSON.stringify(...)`; the Python
+    // adapters emit it via `json.dumps(...)`; this helper attaches the
+    // same JSON via `McpError::invalid_request(message, Some(details))`.
+    // Pin the shape so a refactor of `into_mcp_error` cannot silently
+    // drop a field.
+
+    #[test]
+    fn into_mcp_error_carries_canonical_envelope_with_path() {
+        let err = PhotoResolutionError::new(
+            "photos[0] must be an absolute path: ./img.jpg",
+            "absolute_path",
+            Some("./img.jpg".to_string()),
+        );
+        let mcp = err.into_mcp_error();
+        // The `data` payload is the parity envelope. `rmcp::ErrorData`
+        // surfaces it on the `.data` field as a serde_json::Value.
+        let details = mcp.data.as_ref().expect(
+            "PhotoResolutionError::into_mcp_error must attach a data payload \
+             carrying {error, message, path} — the canonical cross-language envelope",
+        );
+        let obj = details.as_object().expect("data is a JSON object");
+        assert_eq!(
+            obj.get("error").and_then(Value::as_str),
+            Some("absolute_path"),
+            "stage tag must surface as the `error` field",
+        );
+        assert_eq!(
+            obj.get("message").and_then(Value::as_str),
+            Some("photos[0] must be an absolute path: ./img.jpg"),
+            "human message must surface verbatim",
+        );
+        assert_eq!(
+            obj.get("path").and_then(Value::as_str),
+            Some("./img.jpg"),
+            "offending raw input must surface as the `path` field",
+        );
+    }
+
+    #[test]
+    fn into_mcp_error_carries_null_path_for_unbound_failures() {
+        // The `count` and `type` stages aren't bound to a single
+        // element — both the Python helper and the TS adapter surface
+        // `path: null` for these. Rust must match.
+        let err = PhotoResolutionError::new(
+            "Too many photos: 11 entries (max 10 per listing).",
+            "count",
+            None,
+        );
+        let mcp = err.into_mcp_error();
+        let details = mcp.data.as_ref().expect("data payload present");
+        let obj = details.as_object().expect("data is a JSON object");
+        assert_eq!(obj.get("error").and_then(Value::as_str), Some("count"));
+        // Serde serialises `Option::None` as JSON null inside the json!
+        // macro path. Test the runtime serialisation.
+        assert!(
+            obj.get("path").map_or(false, |v| v.is_null()),
+            "unbound failure must carry path=null in the envelope, got {:?}",
+            obj.get("path"),
+        );
+    }
 }
