@@ -4,8 +4,8 @@ title: Adapter guard and exception parity with zeroclaw
 slug: adapter-guard-and-exception-parity-with-zeroclaw
 work_type: feature
 tiers: [unit, integration, e2e]
-status: distilling
-agents: [solutions-architect]
+status: pr-ready
+agents: []
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -1209,6 +1209,26 @@ The dev pair did meaningful integration work in round 2 — the libs are now the
 - No dedicated codegen-pipeline ADR — sub-decision of ADR-0011's R2 section. The drift gate test is the load-bearing artifact; documenting it twice creates a maintenance trap.
 
 **INDEX.md updated:** decisions (rows for ADR-0011 added at top; ADR-0006 bumped + re-sorted).
+
+### Distillation round 3 — solutions-architect (2026-05-23)
+
+**Outcome: nothing new captured. Round-2 distillation + the round-3 dev/qa inline comments already cover everything round-3 added.** This is an explicit, deliberate outcome (the skill treats "nothing to capture" as a positive signal), not a skip.
+
+**Searched.** `docs/decisions/INDEX.md` (read in full); ADR-0011 (read in full); ADR-0006 (read in full); `skill/references/error_envelopes.md` (already the agent-facing surface from round 2). Grepped `docs/decisions/INDEX.md` for `upload|photo|klodi_home|sensitive|fixture`. Confirmed `docs/knowledge/` and `docs/product/` do not exist in this repo (only `docs/decisions/` and `docs/specs/`). Read the full prospective merge diff (`git diff origin/main...HEAD`) — every round-3-touched surface.
+
+**Each round-3 candidate, evaluated against search-first + the critical-thinking rule:**
+
+1. **`upload_failed` collapse on the folded `klodi_list_create`/`klodi_list_update` + the R4-before-photo-mint ordering** (the merge of ADR-0006's photo pipeline into ADR-0011's envelope) — **already documented bidirectionally and inline.** ADR-0006 line 40 ("a broader adapter-wide exception envelope … supersets this one — `path` becomes a member of `details`") + ADR-0006 References line 69 ("… surface to the agent as the `upload_failed` code in R2's closed vocabulary, with `details.stage` and `details.path` naming the failure site"). Reciprocal carry-over in ADR-0011 R2 (line 71). The exact one-line note my brief proposed evaluating — "folded list tools surface as `upload_failed` with `details.stage`" — *is already at ADR-0006 line 69.* The three collapse helpers each carry a thorough WHY docblock naming the collapsed vocabulary, the R2 code, `details.stage`/`details.path`, the ADR-0011 cross-link, and the sibling-language helpers (cross-adapter parity): `envelope_from_upload_failed` (`packages/nats-client-py/src/klodi_nats_client/envelope.py`), `upload_failed_envelope` (`packages/klodi-rust-host/src/mcp/envelope.rs`), `photoErrorResult` (`adapters/openclaw/src/tools/listings.ts`). The Rust dispatcher and `apply_photos` carry matching WHY blocks, and the Rust shape test pins against regression to the pre-R2 `{error: <stage>, …}` form. R4 ordering itself is ADR-0011 R4 (unchanged). Adding a doc note would restate code + two ADRs — forbidden by the critical-thinking rule; re-tensing ADR-0006 line 40 from "being defined" to "defined" would be a doc-restructure, which the distillation skill explicitly forbids ("Distillation is not redesign"), and line 69 already states the realized outcome unambiguously.
+
+2. **The disjoint-`KLODI_HOME`-vs-fixtures test gotcha** (production photo resolver adds `${KLODI_HOME}` to its sensitive-dir reject list, so a fixture that points `KLODI_HOME` at the same subtree as its photo fixtures gets false sensitive-dir rejections) — **already captured as a thorough inline WHY comment at BOTH test fixture sites** (`adapters/hermes/tests/test_tools_photos.py` and `adapters/nanobot/tests/test_tools_photos.py`), exactly the home my brief named as best ("inline comment at the test fixture setup, NOT a new doc"). Each comment names the offending `_sensitive_prefixes` list and the disjoint-`tmp_path/klodi-home` remedy. A `docs/knowledge/` doc would require standing up the (absent) `docs/knowledge/` area to restate what a future test author reads in-place at the exact site they'd hit the trap.
+
+3. **`BaseException`→`Exception` narrowing** (7 boundary catches; `KeyboardInterrupt`/`SystemExit`/`GeneratorExit`/`CancelledError` must propagate to unwind the daemon loop, not become an envelope) — already carries an inline `# noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate` at every site, and the round-3 reconcile audit on the card explains the load-bearing rationale.
+
+4. **`catalog-removal` `IGNORED_DIRS += "cards"`** (the removal-grep walks the gitignored kanban substrate and trips on this card's own prose; `main` has no `cards/` dir) — already carries a 3-line inline WHY at the `IGNORED_DIRS` site.
+
+5. **CHANGELOG** — the fold + `upload_failed` reconcile is already in `[Unreleased]`.
+
+**Not captured (and why).** No ADR edit (the cross-link and R2 row are complete from round 2 and the reconcile). No new `docs/knowledge/` or `docs/product/` doc (folders absent; both would restate inline comments or ADRs that already sit at the smallest viable scope). No `CLAUDE.md` convention (the guard chain / envelope shape are already enforced by `code-quality-guardian` discipline). **No `docs/decisions/INDEX.md` `updated_at` bump** — no ADR body was materially changed this round, so the `commit`/`updated_at` fields stay at round-2's values per the skill's frontmatter discipline.
 
 ## PR Ready
 
