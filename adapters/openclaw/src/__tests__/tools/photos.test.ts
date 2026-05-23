@@ -753,4 +753,115 @@ describe("klodi_list_create — atomic failure (integration)", () => {
     );
     expect(subjects).not.toContain("p2p.v1.listings.create");
   });
+
+  it("fails the call when the mint NATS request errors (no PUT, no create)", async () => {
+    const path = writeFixture("ok.jpg", JPEG_MAGIC);
+    const { mockNatsError, KlodiRequestError } = await import(
+      "../helpers/mock-nats.js"
+    );
+    mockNatsError(
+      "p2p.v1.assets.upload-url",
+      new KlodiRequestError("rate limited", "RATE_LIMITED"),
+    );
+
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-mint-fail", {
+      title: "x",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [path],
+    });
+
+    expect(result.isError).toBe(true);
+    const body = result.content[0].text ?? "";
+    // Marketplace error code surfaces so the agent can branch on it.
+    expect(body).toMatch(/RATE_LIMITED|rate.?limit/);
+
+    // No R2 PUT — bytes never moved because no presigned URL was minted.
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // listings.create must not have been dispatched.
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    const subjects = client.request.mock.calls.map(
+      (c: unknown[]) => c[0] as string,
+    );
+    expect(subjects).toEqual(["p2p.v1.assets.upload-url"]);
+  });
+
+  it("fails the call when one R2 PUT errors (no listing dispatched)", async () => {
+    // Two locals: first PUT succeeds, second returns 500. The criterion
+    // forbids partial success — the entire listings.create call must
+    // be skipped.
+    const a = writeFixture("a.jpg", JPEG_MAGIC);
+    const b = writeFixture("b.png", PNG_MAGIC);
+
+    mockNatsResponse("p2p.v1.assets.upload-url", {
+      uploads: [
+        {
+          upload_url: "https://r2.example/upA",
+          asset_url: "https://cdn.example/asset-a.jpg",
+        },
+        {
+          upload_url: "https://r2.example/upB",
+          asset_url: "https://cdn.example/asset-b.png",
+        },
+      ],
+    });
+
+    fetchSpy.mockImplementation(async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.endsWith("upB")) {
+        return new Response("storage error", { status: 500 });
+      }
+      return new Response(null, { status: 200 });
+    });
+
+    const tool = getTool(api, "klodi_list_create");
+    const result = await tool.execute("call-put-fail", {
+      title: "x",
+      description: "x",
+      category: "home",
+      asking_price: 100,
+      fulfillment: [{ method: "pickup" }],
+      photos: [a, b],
+    });
+
+    expect(result.isError).toBe(true);
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    const subjects = client.request.mock.calls.map(
+      (c: unknown[]) => c[0] as string,
+    );
+    // Mint happened (it's the first step). Create must not have fired.
+    expect(subjects).toEqual(["p2p.v1.assets.upload-url"]);
+  });
+});
+
+// ── URL pass-through for klodi_list_update (regression) ─────────────────
+
+describe("klodi_list_update — URL pass-through (regression)", () => {
+  it("forwards URLs verbatim and never mints", async () => {
+    mockNatsResponse("p2p.v1.listings.update", {
+      listing_id: LISTING_ID,
+      photos: [
+        "https://cdn.example/x.jpg",
+        "https://cdn.example/y.png",
+      ],
+    });
+    const tool = getTool(api, "klodi_list_update");
+    const result = await tool.execute("call-upd-url", {
+      listing_id: LISTING_ID,
+      photos: [
+        "https://cdn.example/x.jpg",
+        "https://cdn.example/y.png",
+      ],
+    });
+    expect(result.isError).toBeFalsy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const client = (await import("../helpers/mock-nats.js")).getClient();
+    expect(client.request.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+      "p2p.v1.listings.update",
+    ]);
+  });
 });
