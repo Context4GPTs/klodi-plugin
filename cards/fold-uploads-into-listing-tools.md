@@ -201,6 +201,109 @@ None blocking. Two judgment calls baked into the criteria above that the founder
 1. **Atomic failure semantics.** Partial-success (create the listing with the photos that uploaded successfully) is explicitly rejected in favour of all-or-nothing. Rationale: the agent reasoned about the photos as a set; a quietly truncated listing diverges from intent and is harder to debug than a clean error. If the founder prefers partial success with a warning in the reply, that flips one criterion and changes the error-path contract — flag now, not in dev.
 2. **Absolute-path-only.** Relative paths (`./img.jpg`), tilde-expansion (`~/img.jpg`), and `file://` URLs are rejected. Rationale: any of those forces the adapter to make assumptions about the host's working directory or user identity that the marketplace can't audit. Telegram-style hosts already produce absolute paths (the OS materialises them under `/tmp/` or similar), so this matches the dominant case without papering over edge cases.
 
+### Product framing — product-marketer
+
+**1. Tool description copy (proposed).**
+
+Both strings live in `packages/tool-catalog/src/index.ts` (lines 215–219 and 245–249 today) and propagate verbatim to every adapter via `tool.description`. Voice: instructive, agent-facing, terse — match the existing catalog tone ("Cannot change `category`...", "Updates atomically..."). Each ≤140 chars in the body, with the photo line appended as a second sentence so the per-tool description still leads with the tool's primary job.
+
+`klodi_list_create`:
+
+```
+Create a new marketplace listing. Prices in integer cents. `fulfillment` is a discriminated union — at least one offer, at most one entry per method. Condition required when any offer is pickup or ship; rejected when only digital. `photos` accepts image URLs or absolute local file paths — local paths are uploaded automatically (jpeg/png/webp, ≤10 MB, ≤10 entries, all-or-nothing).
+```
+
+`klodi_list_update`:
+
+```
+Update an existing listing. Cannot change `category` (withdraw and relist instead). Updating `fulfillment` replaces the entire array atomically. `expires_hours` sets a fresh TTL from now, or pass null to clear the expiry entirely. `photos` accepts image URLs or absolute local file paths — local paths are uploaded automatically (jpeg/png/webp, ≤10 MB, ≤10 entries, full-array replacement is all-or-nothing).
+```
+
+The per-field `description` on the `photos` schema (`Type.Array(Type.String(), { description: "Photo asset URLs" })` at line 228 today) is updated separately, to:
+
+```
+description: "Image URLs or absolute local file paths; locals are uploaded by the adapter (image/jpeg, image/png, image/webp, ≤10 MB each, ≤10 entries)."
+```
+
+**2. Photos parameter wording — canonical phrase.**
+
+Lock this phrase. Reuse verbatim in every surface that documents what `photos` accepts:
+
+> **"image URLs or absolute local file paths"**
+
+Rationale: "image URLs" is the agent's existing vocabulary (the old skill says "hosted image URLs"); "absolute local file paths" is precise enough to discriminate (rules out relative paths, `~`, `file://`) without inventing jargon. Do not vary to "URL or path", "image link or local file", "asset URL or local image" — divergence in tool descriptions vs skill vs AGENTS.md is exactly the bug we're trying to avoid going forward. "Locals are uploaded automatically" is the canonical short-form when expanded behaviour matters; "uploaded by the adapter" is the variant for spec-flavoured prose.
+
+**3. AGENTS.md edits.**
+
+**None required.** Verified via `grep -n "klodi_assets_upload_url\|klodi_list_create\|klodi_list_update\|upload" /Users/knitlybak/GitHub/4gpts/klodi/klodi-plugin/AGENTS.md` → zero matches. The file pitches klodi at the host-adapter level and never names individual tools or the upload flow. The one indirect mention (`README.md` line 199 "Photos upload direct to signed storage — binaries never pass through the klodi API.") is still true after the change and needs no edit. No action.
+
+**4. `skill/references/tool_inventory.md` edits.**
+
+Path confirmed: `/Users/knitlybak/GitHub/4gpts/klodi/klodi-plugin/skill/references/tool_inventory.md`. Three surgical edits:
+
+- **Line 18** (current):
+
+  ```
+  | `klodi_list_create` | User intent "list it". Gather only required fields not already in context. Returns `sell_file.path` — the plugin already created the empty-body sell file at that path. Edit the body to add floor / Private Facts / Logistics; never create a parallel file. |
+  ```
+
+  Replace with:
+
+  ```
+  | `klodi_list_create` | User intent "list it". Gather only required fields not already in context. `photos` accepts image URLs or absolute local file paths — locals are uploaded automatically. Returns `sell_file.path` — the plugin already created the empty-body sell file at that path. Edit the body to add floor / Private Facts / Logistics; never create a parallel file. |
+  ```
+
+- **Line 19** (current):
+
+  ```
+  | `klodi_list_update` | User wants to change an existing listing. `category` is immutable post-create. `fulfillment` updates atomically (full-array replacement). |
+  ```
+
+  Replace with:
+
+  ```
+  | `klodi_list_update` | User wants to change an existing listing. `category` is immutable post-create. `fulfillment` and `photos` update atomically (full-array replacement). `photos` accepts image URLs or absolute local file paths — locals are uploaded automatically. |
+  ```
+
+- **Lines 70–74** (entire "Assets" section — current):
+
+  ```
+  ## Assets
+
+  | Tool | When to call |
+  |---|---|
+  | `klodi_assets_upload_url { files: [...] }` | Mint presigned R2 URLs for raw photo bytes. Two-step flow: mint URL → PUT bytes to `upload_url` → pass returned `asset_url` into `klodi_list_create`/`klodi_list_update`. Skip entirely when the user supplies hosted image URLs — pass those directly. See `references/photo_upload_flow.md`. |
+  ```
+
+  **Delete the entire section** (heading + table). It carries no replacement content — listings own photos now. The `klodi_list_create` and `klodi_list_update` rows already cross-link the behaviour and `photo_upload_flow.md` is rewritten by the architect's plan (step 6 in the in-dev sequencing).
+
+Per the architect's plan, `skill/references/photo_upload_flow.md` is rewritten end-to-end during dev. The marketer framing for that rewrite: open with the rule "Pass photos directly to `klodi_list_create` or `klodi_list_update`. URLs pass through; absolute local paths are uploaded by the adapter." — then enumerate the constraints (allowlist, sizes, atomicity) without describing any "two-step" or "mint" mechanic the agent should reason about. If `photo_upload_flow.md` is renamed to `photos.md` (architect's suggestion), update the `skill/SKILL.md` line 152 cross-link in the same commit.
+
+**5. Deprecation note (CHANGELOG entry for next release).**
+
+Drop into `## [Unreleased]` at the top of `CHANGELOG.md`. Three-section shape matches the existing 0.2.16 / 0.2.15 entries — voice is direct, no padding, names the wire shape that changed:
+
+```markdown
+## [Unreleased] — fold uploads into listing tools
+
+**All adapters.** The standalone `klodi_assets_upload_url` tool is removed. `klodi_list_create` and `klodi_list_update` now accept image URLs *or* absolute local file paths in `photos` — local paths are content-sniffed, uploaded to R2 by the adapter, and substituted with the durable `asset_url` before the listing is dispatched. One tool call replaces the previous mint-PUT-attach dance. Allowlist (`image/jpeg`, `image/png`, `image/webp`), per-file 10 MB ceiling, and per-listing 10-photo cap are unchanged (ADR-0006); enforcement moves into the listing tool. All-or-nothing: any rejected path fails the entire call with a structured error naming the offending path.
+
+### Removed
+
+- `klodi_assets_upload_url` tool and the `p2p.v1.assets.upload-url` agent-facing subject. The subject is still used internally by adapters; only the agent-facing tool is gone.
+- The two-step "mint URL → PUT bytes → attach `asset_url`" flow from `skill/references/photo_upload_flow.md` and the Assets section of `skill/references/tool_inventory.md`.
+
+### Migration
+
+**Agents:** none — the skill teaches the new one-call flow. Restart any long-running agent session after upgrade so the host re-fetches the tool catalog and stops seeing `klodi_assets_upload_url` in its cache.
+
+**External integrators scripting against `klodi_assets_upload_url` directly:** none known (see `registry/listings.yaml` — no third-party tool references this subject). If you are one, switch to passing local paths or URLs straight into `klodi_list_create` / `klodi_list_update`; the adapter does the mint and PUT for you. Open an issue if you need the raw mint endpoint exposed as a host-side primitive.
+```
+
+**6. Integrator audit result.**
+
+**None found in `registry/listings.yaml`.** The registry is a per-host adapter catalog (npm, PyPI, crates.io listings + cross-host `agentskills_io`). No entry references `klodi_assets_upload_url`, `p2p.v1.assets.upload-url`, or the upload flow by name. Tier-B entries (Anthropic Cowork, Nebula, Arahi, Vellum) are status `planned` with no shipped integration. The CHANGELOG note still captures the comms in case an unregistered external integrator exists — low cost to over-communicate a removed surface.
+
 ### → Handoff to In Dev (next agents: expert-developer, qa-developer)
 
 **Suggested adapter ordering (do not parallelise — cross-language parity is the chief risk).**
