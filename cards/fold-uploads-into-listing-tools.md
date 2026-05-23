@@ -4,8 +4,8 @@ title: Remove standalone upload tool, fold uploads into listing tools
 slug: fold-uploads-into-listing-tools
 work_type: feature
 tiers: [unit, integration, e2e]
-status: review
-agents: [code-quality-guardian]
+status: distilling
+agents: [solutions-architect]
 priority: 2
 created: 2026-05-23
 updated: 2026-05-23
@@ -584,11 +584,90 @@ All suites green at HEAD.
 - `formatPhotoError` returns `JSON.stringify({...})`; `errorResult` then wraps that into a `text/plain` content block. The agent gets the JSON in `result.content[0].text` and `result.isError === true`. This is the same shape hermes/nanobot already produce. Confirm no double-stringify anywhere (e.g. inside a different error path that happens to JSON-stringify the message before passing it through `errorResult`).
 - The Rust `apply_photos` signature changed (added `tool_name: &str`). Confirm the only call site (`dispatch_passthrough` in `tools.rs`) was updated; no other crate or feature-gated call exists. `cargo build` was green across `klodi-rust-host` (mcp feature) and all three adapter binaries.
 
+## Review round 2 — code-quality-guardian
+
+**Verdict: PASS.**
+
+Every round-1 fix lands clean. The chief cross-language parity concern flagged in Discovery — that the same input could produce different envelope shapes across the four language stacks — is now closed by a structurally identical `{error, message, path}` envelope across openclaw / hermes / nanobot / klodi-rust-host, plus an enforced repo-wide grep harness that goes RED on regression. The recommendation is to flip to `distilling`; the one remaining observation (CHANGELOG entry, see P3.4) is non-blocking and a natural distillation pickup.
+
+### Round-1 fixes — verified
+
+- **P1.1 catalog-removal grep harness (CRITICAL).** The vacuous `execSync('rg ...')` harness is gone. Replaced by a Node-native walk in `packages/tool-catalog/tests/catalog-removal.test.ts` (read with `node:fs.readdirSync` + `readFileSync`, no shell, no PATH dependency, no exit-code coercion). The allow-list scopes the agent-facing tool name, the Rust enum variant, and the mint NATS subject distinctly — the subject is now legitimately referenced by the new helpers, and only those helper files (plus the ADR / CHANGELOG / card / test itself) are allow-listed.
+   - **Verified RED on inject:** dropped `klodi_assets_upload_url` into `packages/tool-catalog/leak-test.md` → test goes RED on the first assertion with the leaked path surfaced; after removal, GREEN.
+   - **Verified RED on source regression:** appended `// klodi_assets_upload_url` to `packages/tool-catalog/src/index.ts` → 2 assertions go RED (the repo-wide grep + the in-package `src/index.ts` text check). After restore, GREEN.
+   - This is the e2e safety net the cross-language parity criterion depends on. It now has teeth.
+
+- **P2.1 dead ternary in `formatPhotoError`.** Gone. The `err.path ? '<a>' : '<b>'` (where both branches produced identical strings) is replaced by `JSON.stringify({error: err.stage, message: err.message, path: err.path ?? null})`. `err.path` now surfaces as a structured field, not just an interpolation in the message.
+
+- **P2.2 cross-language envelope shape.** Now structurally identical across all four stacks. Traced oversize failure as the parity check:
+  - **openclaw** (`adapters/openclaw/src/tools/listings.ts:298-307`): `JSON.stringify({error: "size", message: "...exceeds the 10 MB ceiling...", path: "/tmp/big.jpg"})` returned as `errorResult` text body.
+  - **hermes** (`adapters/hermes/src/klodi_hermes/tools.py:138-142`): `json.dumps({"error": err.stage, "message": str(err), "path": err.path})`.
+  - **nanobot** (`adapters/nanobot/nanobot_tools.py:233-237`): same.
+  - **klodi-rust-host** (`packages/klodi-rust-host/src/mcp/photos.rs:129-136`): `McpError::invalid_request(self.message, Some(json!({"error": self.stage, "message": self.message, "path": self.path})))`.
+  - The Rust adapter delivers the envelope on `McpError::data` rather than as a string body; that's the standard MCP protocol path for Rust, not a parity violation. The host-SDK shape differs but the envelope contents (field names, types, semantics, stage tag vocabulary) are identical.
+  - Stage tag set agreed: `absolute_path`, `missing`, `sensitive_dir`, `size`, `content_type`, `mint`, `put`, `count`, `type`, `internal`.
+  - The Rust envelope shape is pinned by two co-located unit tests in `packages/klodi-rust-host/src/mcp/photos.rs::tests` (verified RED by commenting out the `"path": self.path` line — both `into_mcp_error_carries_canonical_envelope_with_path` and `into_mcp_error_carries_null_path_for_unbound_failures` go RED; restored, GREEN).
+  - openclaw has six envelope-shape tests covering every failure stage (`absolute_path`, `missing`, `content_type`, `size`, `count`, `type`, `put`) at `adapters/openclaw/src/__tests__/tools/photos.test.ts:962-1110` — all GREEN.
+
+- **P2.3 structured logging on mint/PUT failures.** All four adapters emit `klodi_photos_resolution_failed` at `warn` level for `mint` and `put` stages only (validation stages are agent-driven and stay silent so as not to spam operator logs).
+  - **openclaw** `logPhotoFailure` (`listings.ts:318-327`): `api.logger.warn("klodi_photos_resolution_failed", { tool, stage, path, error })`.
+  - **hermes** `tools.py:129-137`: `log.warning("klodi_photos_resolution_failed tool=%s stage=%s path=%s error=%s", ...)`.
+  - **nanobot** `nanobot_tools.py:224-232`: same printf-style emission.
+  - **klodi-rust-host** `photos.rs:599-605`: `tracing::warn!(tool=..., stage=..., path=..., error=..., "klodi_photos_resolution_failed")`.
+  - Event name uniform across all four. Fields uniform (`tool`, `stage`, `path`, `error`). The Python implementations use printf-style emission (the existing per-module logger convention) rather than the `KlodiLogger` structured-event API in `packages/logger-py/`. That's consistent with how every other module in hermes/nanobot logs — this card scoped the photo failures only. A future refactor to consolidate all Python logging on `KlodiLogger` would belong on its own card.
+
+- **P2.4 openclaw non-array `photos` rejection.** `applyPhotos` now throws `PhotoResolutionError("photos must be an array, got <typeof>.", "type")` on a non-array value, matching hermes (`photos.py:173-177`) and Rust (`photos.rs:200-209`). `photos === undefined` still passes through unchanged. Three new tests in `tools/photos.test.ts:882-940` pin the rejection of number, string, and object values.
+
+- **P2.5 ADR-0006 metadata.** Frontmatter `updated_at: 2026-05-23` and `updated_by_card: fold-uploads-into-listing-tools`. `docs/decisions/INDEX.md` row reflects this and is re-sorted to the top of the newest-first table.
+
+- **P2.6 `except BaseException` → `except Exception`.** Verified at all nine sites flagged in round 1: `hermes/tools.py:143, 169, 225`, `hermes/photos.py:223`, `nanobot/nanobot_tools.py:191, 205, 238, 258`, `nanobot/nanobot_photos.py:204`. Each retains a `# noqa: BLE001` with appended rationale ("propagate KeyboardInterrupt/SystemExit/CancelledError"). Six new tests in hermes (`test_tools_photos.py:680-790`) and nanobot (`test_tools_photos.py:610-720`) pin propagation of `KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError` through both the mint stage and the listings-call stage. Out-of-scope sites in `bridge.py`, `register.py`, `watch.py`, `client.py` were not touched — appropriately limited to the listings / photos boundary.
+
+### Round-1 P3 items — status
+
+- **P3.1 module size.** Helper modules stayed at the upper end (TS 426, Py 388-405, Rust 727 — up from 646 due to envelope-parity tests + `apply_photos`). No individual function exceeds 100 lines. As round 1 noted, factoring `sniff` / `path_predicates` into sub-modules is a follow-up if the magic-byte table grows.
+- **P3.2 Rust adapter `cargo test`.** All three adapter binaries (moltis, ironclaw, zeroclaw) build clean (`cargo build` exit 0). The crates have no per-adapter test suites of their own — they're thin wrappers around `klodi-rust-host`, which holds the integration tests (63/63 GREEN). This is the same shape pre-card and matches the architect's discovery note.
+- **P3.3 live-verification deferred.** Still a known gap. Acceptable for the founder to gate merge on a live boot, but not a quality concern.
+
+### Re-verification — test suites
+
+| Suite | Result | Notes |
+|---|---|---|
+| openclaw | 257/257 GREEN | `pnpm -C adapters/openclaw test` |
+| tool-catalog | 8/8 GREEN | `pnpm -C packages/tool-catalog test`. Verified RED on inject (both file-leak and source-regression). |
+| hermes | 94/94 GREEN | `cd adapters/hermes && uv run pytest` |
+| nanobot | 72/72 GREEN | `cd adapters/nanobot && uv run pytest` |
+| klodi-rust-host (mcp feature) | 63/63 GREEN | `cargo test --features mcp -p klodi-rust-host`. Envelope-parity tests verified RED on inject. |
+| moltis / ironclaw / zeroclaw (build) | clean | `cargo build` in each adapter dir |
+| openclaw build | clean | `pnpm -C adapters/openclaw build` (tsc + copy-skill) |
+| openclaw oxlint | clean | `npx oxlint adapters/openclaw/src/tools/{photos,listings}.ts` |
+| clippy on `photos.rs` | clean | A pre-existing clippy warning in `setup_status.rs` is outside the card scope and not regressed. |
+
+### New observation — non-blocking
+
+- **P3.4 CHANGELOG.md `[Unreleased]` entry missing.** The product-marketer's Discovery output drafted a `## [Unreleased] — fold uploads into listing tools` block with a `### Removed` and `### Migration` section. The catalog-removal test allowlists `CHANGELOG.md`, but the file's `## [Unreleased]` section is still empty. The block exists verbatim in this card body (lines 282–302) and can be lifted into `CHANGELOG.md` during distilling — that's the appropriate stage for "knowledge that exists in the card but hasn't reached its public-facing destination yet". Not a quality gate; flag for distillation.
+
+### What stayed correct — pinning for future review
+
+- Type safety holds across all four stacks. No new `any`, no new `unwrap()`, no loosened types.
+- Magic-byte tables are byte-for-byte identical across TS/Py/Rust (JPEG `FF D8 FF`; PNG `89 50 4E 47 0D 0A 1A 0A`; WebP `RIFF ...... WEBP`).
+- Sensitive-prefix lists agree: `/etc/`, `/var/run/`, `/var/log/`, `/proc/`, `/sys/`, `/root/`, plus `$KLODI_HOME` and `$HOME/.ssh/` dynamically per call.
+- Realpath resolution happens BEFORE sniff/PUT in all four stacks (symlink TOCTOU mitigated).
+- Index-preserving substitution is correct: each stack builds the `(index, local_path, upload_url, asset_url)` tuple and reassembles by index — no by-completion ordering.
+- Mint-before-PUT atomicity unchanged.
+- No backwards-compat shims for the removed `klodi_assets_upload_url`. The tool name appears only in the allow-listed surfaces (ADR history, CHANGELOG migration note, card body, test source code).
+- Public-API parity: `klodi_list_create` and `klodi_list_update` accept `string[]` in `photos` regardless of host; mixed URL + local paths preserve order; URL-only inputs are no-op.
+
+### → Handoff to Distilling (next agent: solutions-architect)
+
+PASS. Flip to `distilling`. The architect should pick up the distillation sweep with these candidates in mind:
+
+1. **CHANGELOG.md `[Unreleased]` block** (P3.4 above) — lift verbatim from card body lines 282–302.
+2. **ADR-0006 — code reference update.** The "Code:" reference at the bottom of the ADR pointed to the deleted `adapters/openclaw/src/tools/media.ts`. The expert-developer updated it in round 1, but worth a re-read to confirm the four new helper paths (openclaw `photos.ts`, hermes `photos.py`, nanobot `nanobot_photos.py`, Rust `photos.rs`) are all named.
+3. **Magic-byte table consolidation candidate.** Three independent implementations of the same `[JPEG | PNG | WebP]` magic-number table is intentional for this card (no abstraction across language boundaries). If the table grows (HEIC, AVIF), capture in `docs/knowledge/` the pattern: catalog metadata + per-language byte tables that must stay in sync, with the cross-language test fixture set as the parity contract.
+4. **TOCTOU note.** The realpath-before-sniff pattern is non-obvious — worth an inline `// See ADR-0006` comment in each `_resolve_local` / `resolveLocal` / `resolve_local` function pointing at the symlink-escape mitigation rationale, or a short distillation entry in `docs/knowledge/`.
+5. **Envelope shape contract.** The `{error, message, path}` shape is the canonical cross-language contract. Whoever adds a new adapter language (Go, Swift, etc.) must replicate it exactly. Consider an inline comment at the top of each `photos.{ts,py,rs}` module pointing to ADR-0006 for the wire shape, or a `docs/knowledge/photo-envelope-contract.md` capturing the contract.
 
 
-<!-- Runs in the worktree on the card branch after Review PASS. Pushes to the same PR. Per the `distillation` skill: SEARCH docs/ INDEX files first; edit existing docs rather than creating duplicates. Captures land at smallest viable scope: inline WHY comments, docs/decisions/, docs/knowledge/, docs/product/, or CLAUDE.md. Then flips status to pr-ready. -->
-
-## PR Ready
 
 <!-- PR url; founder notification fires here -->
 
