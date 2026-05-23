@@ -12,7 +12,7 @@ updated: 2026-05-23
 base_branch: main
 worktree: /Users/knitlybak/GitHub/4gpts/klodi/klodi-plugin/.claude/worktrees/card-fold-uploads-into-listing-tools
 branch: card/fold-uploads-into-listing-tools
-pr: null
+pr: https://github.com/Context4GPTs/klodi-plugin/pull/2
 merged_commit: null
 ---
 
