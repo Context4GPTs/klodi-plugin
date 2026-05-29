@@ -4,15 +4,15 @@ title: Tool→service search parity verification
 slug: tool-service-search-parity-verification
 work_type: feature        # feature | bug | refactor | chore | docs
 tiers: [unit, integration, e2e]  # union of the tiers used in the Discovery acceptance criteria
-status: in-dev            # backlog | discovery | stand-by | in-dev | review | distilling | pr-ready | done | abandoned
-agents: [qa-developer, expert-developer]                # current active agent set; updated by each handoff
+status: review            # backlog | discovery | stand-by | in-dev | review | distilling | pr-ready | done | abandoned
+agents: [code-quality-guardian]                # current active agent set; updated by each handoff
 priority: 2               # 1 = drop-everything, 2 = normal, 3 = nice-to-have
 created: 2026-05-26
 updated: 2026-05-29
 base_branch: dev
 worktree: /Users/knitlybak/GitHub/4gpts/klodi/klodi-plugin/.claude/worktrees/card-tool-service-search-parity-verification
 branch: card/tool-service-search-parity-verification
-pr: null                  # set by expert-developer at in-dev → review
+pr: https://github.com/Context4GPTs/klodi-plugin/pull/4                  # set by expert-developer at in-dev → review
 merged_commit: null       # set by /board-tick on PR-merge detection
 epic_id: ras-tool-parity
 origin: goal:robust-agentic-search
@@ -346,9 +346,75 @@ Format: `[tier] Given <state>, when <action>, then <outcome>`. Tier tags assigne
 
 **Open question for expert (no answer needed before Green starts — flag for discussion if it lands).** SC7.4 expects the `klodi_searches_create.criteria` reply to mirror the agent-submittable shape on `klodi_search`. The catalog's `criteria` object today is `{query, category, delivery, min_price, max_price}` — but `klodi_search.params` ALSO accepts `condition`, `limit`, `cursor`. Is `criteria` deliberately a strict subset (one-shot-only params excluded from standing-search registration), or is this a catalog drift the dev should reconcile? Re-check during Green; if drift, raise it before fixing — the answer affects whether SC7.4 is a test addition or a catalog edit.
 
+### GREEN phase — expert-developer
+
+**Files edited (3, additive only on the production runtime path).**
+
+- `adapters/openclaw/src/tools/discovery.ts` — two surgical edits in one file:
+  - `registerSearch(api)` — replaced `const payload = compactPayload(params);` with the raw `params` pass-through (SC-parity.1). Inline comment block at the edit site documents WHY (the catalog defines the wire shape; `compactPayload` lives on inside `runOneShotSearch` for the `klodi_watch` composite's adapter-internal flags). Single-line behavior change, ~12 lines of comment.
+  - Added `registerSearchesCreate(api)` (~20 lines, alongside `registerSearch`) — mirrors the `registerSearchesList` pass-through pattern; pure forward to `tool.subject` with raw `params`; guards `slug` as `non_empty_string` per the catalog's required-field set. Wired into `registerDiscoveryTools` (SC-parity.2). Inline ADR-0011 comment at the function head documents the architectural rationale.
+- `packages/klodi-rust-host/src/mcp/mod.rs` — `mod tools;` → `pub mod tools;` (one-character visibility tweak). Comment block above documents WHY (cross-language parity test reaches `payload_for_passthrough` / `tool_input_schema_for` without dialing NATS).
+- `packages/klodi-rust-host/src/mcp/tools.rs` — two pure-function helpers + a one-line refactor:
+  - `pub fn payload_for_passthrough(args: JsonObject) -> Value` — lifts the inline `Value::Object(args)` from `dispatch_passthrough` into a named function. SC-parity.1 contract anchor.
+  - `pub fn tool_input_schema_for(name: &str) -> Option<&'static Value>` — reads `catalog().tools.get(name).map(|entry| &entry.params)`. SC-contract.3 contract anchor (the parity test asserts schema parity against the Rust adapter's view of the canonical catalog).
+  - `dispatch_passthrough` now reads `let payload = payload_for_passthrough(args);` at the former `let payload = Value::Object(args);` site — pins the test contract at the production site so a future refactor of one without the other surfaces in the parity test.
+  - Both helpers carry inline ADR-0011 SC-parity comments.
+
+**Behavior change scope.** ONE behavior change reaches the runtime path: openclaw's `klodi_search` now forwards `{query: "", category: null}` verbatim instead of `{}`. This is the architectural fix the discovery + QA Red phases agreed on; every other stack already forwards verbatim. The other edits are pure additive (new tool registration + named helper functions); they introduce no new transform.
+
+**Why no other adapter required code changes.** hermes (`build_request_handler` → `client.request(subject, args)`), nanobot (`call_tool` → raw forward), and Rust (`dispatch_passthrough` → `Value::Object(args)`) were already pass-through-correct. Their parity tests are regression locks the QA pass added; they have stayed GREEN throughout.
+
+**Open question (qa Red note) — resolved, no action.** qa-developer flagged that `klodi_searches_create.criteria` is a strict subset of `klodi_search.params` (omits `condition` / `limit` / `cursor`). After reading the catalog at `packages/tool-catalog/src/index.ts:386-395` the answer is **deliberate catalog design**, not drift:
+- `limit` / `cursor` are pagination concerns on a one-shot result set; standing searches emit one notification per match, no pagination.
+- `condition` IS omitted from the standing-search criteria today; broadening it to support `condition` would be an additive catalog edit (SC-additive.{1,3}) — a separate follow-up, not in this card's scope.
+
+The parity fixture exercises only `slug` + the five common fields per the catalog's actual surface. No catalog edits needed.
+
+**Verification results (all gates GREEN).**
+
+- `pnpm vitest run` in `packages/tool-catalog` (search-payload + schema-snapshot suites) — 84/84 PASS.
+- `pnpm vitest run` in `adapters/openclaw` (full suite, after `pnpm build` copied the skill bundle) — 333/333 PASS. The 22 search-payload-parity tests all GREEN (were 12/22 in QA Red).
+- `uv run pytest` in `adapters/hermes` — 133/133 PASS.
+- `uv run pytest` in `adapters/nanobot` — 101/101 PASS.
+- `cargo test -p klodi-rust-host --features mcp` — 117/117 PASS (99 lib + 4 e2e_envelope + 8 envelope_parity + 6 search_payload_parity). The Rust search_payload_parity suite was 0/6 in QA Red (failed to compile); now 6/6 GREEN.
+- `cargo build -p klodi-rust-host --features mcp` — clean build.
+- `pnpm exec tsc --noEmit` in `adapters/openclaw` — zero type errors.
+- `pnpm build` in `adapters/openclaw` — clean build (the build's `copy-skill` step also reseeds `adapters/openclaw/skill/`, which the worktree was missing; that side-effect is why the worktree's full openclaw suite is now 333/333 instead of 314/333 — the 19 originally-failing tests are policy-seeding / setup tests that depend on the bundled skill dir, unrelated to this card).
+- `cargo clippy -p klodi-rust-host --features mcp --lib` clean on every file this card touched. Pre-existing `clippy::unnecessary_map_or` warnings in `mcp/photos.rs` (unrelated, untouched by this card) — out of scope per the clippy-scope discipline; should be folded into a follow-up cleanup card.
+- `oxlint adapters/openclaw/src/tools/discovery.ts` — clean.
+
+**Live verification.** The integration smoke path for tool→service contract IS the parity test pattern: it drives the registered tool handler end-to-end (`tool.execute("call-1", input)`) against the real `registerDiscoveryTools(api)` registration, captures the actual `client.request(subject, payload)` call via the mock-nats shim, and asserts byte-equal to the fixture's `expected_wire_payload`. Phase 4 (browser verification) is N/A — no UI changes. openclaw has no standalone runnable; the plugin's runtime IS the registered tool surface, which the parity tests exercise faithfully.
+
 ### → Handoff to Review (next agent: code-quality-guardian)
 
-<!-- what to pay attention to, known smells -->
+**What to pay attention to.**
+
+- The openclaw `compactPayload` removal in `registerSearch` is the ONLY behavior change reaching the runtime. Verify the comment block at the deletion site lands the WHY clearly enough for distillation; the architect's earlier note named ADR-0011 extension OR a new ADR-0012 as the call. Inline `// See ADR-0011 SC-parity.{1,2}` markers are present at all three edit sites for distillation to pick up.
+- `registerSearchesCreate` is a brand-new tool registration in openclaw. Confirm:
+  1. It uses `klodiTools.klodi_searches_create.params` directly — same TypeBox schema the other stacks see (SC-contract.3 holds).
+  2. It uses the existing `runPreCallGuardsResult` chain with a single arg-guard on `slug` (the catalog-required field); error-envelope parity with other tools holds via the shared `envelopeToolResult` helper.
+  3. It is wired into `registerDiscoveryTools(api)` so any host instantiating the plugin gets the new tool surface.
+- The Rust visibility tweak (`pub mod tools`) exposes `mcp::tools::*` items to the crate's public API surface. Two `pub fn`s are intentionally added (`payload_for_passthrough`, `tool_input_schema_for`); both are pure, no `unsafe`, no lifetime issues. The Rust `dispatch_passthrough` refactor swaps an inline expression for a helper call — behavior is identical (the helper is the same `Value::Object(args)` line lifted verbatim) and the test substrate verifies it.
+- Function caps: the new `registerSearchesCreate` is 22 lines including the comment block; the Rust helpers are 3 lines each.
+
+**Known smells / trade-offs.**
+
+- `registerSearchesCreate` repeats the `runPreCallGuardsResult(...) → rawRequest(...) → envelopeToolResult` shape from `registerSearch` and `registerSearchesList`. A `simplePassthroughTool` factory could collapse the three. Deliberately NOT abstracted (the "three uses before abstracting" rule from the patterns guide is borderline — three call sites exist but the guards / metadata vary slightly per tool; a factory would have to take more params than the three current sites differ on). Surfaced for review judgement, not deferred silently.
+- The Rust `payload_for_passthrough` helper is a one-liner that, in isolation, looks like over-extraction. Its load-bearing purpose is the parity-test contract anchor — without exposing it, the parity test would have to dial NATS or instantiate a `KlodiClient`. The comment block above it documents why the indirection earns its keep.
+
+**Deliberate non-actions.**
+
+- No edits to hermes / nanobot — they were already pass-through-correct. The 40 Python parity tests (20 + 20) are regression locks the QA pass added.
+- No catalog edits. The `searches_create.criteria` strict-subset issue raised in QA's open question is deliberate catalog design (deferred to a separate additive card if ever needed).
+- No edits to `runOneShotSearch` / `compactPayload` (the helper itself stays — the composite `klodi_watch` legitimately uses it for adapter-internal flags). The deletion is narrowly scoped to `registerSearch`'s pass-through.
+- No edits to the pre-existing `policy-seeding.test.ts` / `setup-state.test.ts` / `setup.test.ts` / `register-poller.test.ts` failures (worktree-only skill-bundle infra; the `pnpm build` step copy-seeds the skill dir; those tests are GREEN after a build).
+- No edits to `clippy::unnecessary_map_or` lints in `mcp/photos.rs` — pre-existing (commits `4ad660a` / `3ca5d2f`), unrelated to this card, follow-up.
+
+**Distillation prep (architect, later pass).** Inline `// See ADR-0011 SC-parity.{1,2}` comments are seeded at all three edit sites for the distillation pass to pick up. The architect's earlier discovery note named two possible doc captures:
+1. Extend ADR-0011 with the input-parity invariant (the envelope parity precedent now covers BOTH input and output).
+2. A new ADR-0012 establishing "raw catalog pass-through is the tool layer's only correct posture; adapter-side payload compaction is forbidden on the catalog path".
+
+Recommendation: extend ADR-0011 — the input-parity contract is the same architectural class as the envelope-output parity it already enshrines. A single ADR covering both directions reads more coherently than two ADRs that cross-reference each other. The final call belongs to the architect at distillation time.
 
 ## Review round 1 — code-quality-guardian
 
