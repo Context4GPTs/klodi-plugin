@@ -41,6 +41,7 @@ const BUY_FILE_HINT =
 
 export function registerDiscoveryTools(api: PluginAPI): void {
   registerSearch(api);
+  registerSearchesCreate(api);
   registerWatch(api);
   registerUnwatch(api);
   registerSearchesList(api);
@@ -57,9 +58,49 @@ function registerSearch(api: PluginAPI): void {
     async execute(_id, params) {
       const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
-      const payload = compactPayload(params);
+      // See ADR-0011 SC-parity.1 — the catalog defines the wire shape;
+      // openclaw forwards catalog-shaped params raw. The previous
+      // `compactPayload(params)` step dropped `null` / `""` / `undefined`
+      // and stripped adapter-internal flags, which silently diverged from
+      // every other stack (hermes, nanobot, klodi-rust-host) and from
+      // the marketplace's matcher contract (empty-string ≠ omitted).
+      // `compactPayload` lives on inside `runOneShotSearch` (the
+      // `klodi_watch` composite) where the strip-fields `persist` /
+      // `action_on_match` / `target_price` ARE legitimately adapter-
+      // internal — those are composite params, not catalog params.
       try {
-        const result = await rawRequest(tool.subject, payload);
+        const result = await rawRequest(tool.subject, params);
+        return jsonResult(result);
+      } catch (e) {
+        return envelopeToolResult(e);
+      }
+    },
+  });
+}
+
+function registerSearchesCreate(api: PluginAPI): void {
+  // See ADR-0011 SC-parity.2 — `klodi_searches_create` is a canonical
+  // catalog tool; agents must be able to register a standing search
+  // directly (with their own slug) without going through the
+  // `klodi_watch` composite. hermes / nanobot / klodi-rust-host all
+  // expose it via their catalog passthrough; openclaw was the outlier.
+  // Pure pass-through (mirrors `registerSearchesList`) — the marketplace
+  // handler is the contract, the tool layer forwards unchanged.
+  const tool = klodiTools.klodi_searches_create;
+  api.registerTool({
+    name: "klodi_searches_create",
+    label: "Register Standing Search",
+    description: tool.description,
+    parameters: tool.params,
+    async execute(_id, params) {
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "slug", kind: "non_empty_string" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
+      if (guard) return guard;
+      try {
+        const result = await rawRequest(tool.subject, params);
         return jsonResult(result);
       } catch (e) {
         return envelopeToolResult(e);

@@ -268,11 +268,39 @@ async fn dispatch_passthrough(
     } else {
         args
     };
-    let payload = Value::Object(args);
+    // See ADR-0011 SC-parity.1 — the wire payload for every catalog
+    // passthrough is the raw `JsonObject` lifted into a `Value::Object`.
+    // The helper pins that contract so the cross-language parity test
+    // can exercise the transform without a live NATS dial.
+    let payload = payload_for_passthrough(args);
     match client.request::<Value, _>(tool.subject(), &payload, None).await {
         Ok(result) => Ok(structured_with_text(result)),
         Err(err) => Ok(envelope_for(handler, err)),
     }
+}
+
+/// Lift the catalog-passthrough payload-construction line from
+/// `dispatch_passthrough` into a pure function. The Rust pass-through is
+/// a one-line identity transform (no compaction, no defaults, no flag-
+/// stripping) — the catalog defines the wire shape; the tool layer
+/// forwards unchanged. This helper exposes that contract so the
+/// cross-language parity test
+/// (`tests/search_payload_parity.rs`) can exercise it without dialing
+/// NATS or instantiating a `KlodiClient`. See ADR-0011 SC-parity.{1,2}.
+pub fn payload_for_passthrough(args: JsonObject) -> Value {
+    Value::Object(args)
+}
+
+/// Look up a tool's input schema by name from the catalog the Rust
+/// dispatcher consumes (the embedded `schemas.json` codegen'd from the
+/// canonical TS catalog). Returns `None` for unknown tool names.
+///
+/// Used by the cross-language parity test to assert that the Rust
+/// adapter's exposed schema for each search tool stays byte-equivalent
+/// to the canonical catalog after codegen normalisation
+/// (SC-contract.3). See ADR-0011.
+pub fn tool_input_schema_for(name: &str) -> Option<&'static Value> {
+    catalog().tools.get(name).map(|entry| &entry.params)
 }
 
 async fn dispatch_setup_status(
