@@ -4,8 +4,8 @@ title: Tool→service search parity verification
 slug: tool-service-search-parity-verification
 work_type: feature        # feature | bug | refactor | chore | docs
 tiers: [unit, integration, e2e]  # union of the tiers used in the Discovery acceptance criteria
-status: review            # backlog | discovery | stand-by | in-dev | review | distilling | pr-ready | done | abandoned
-agents: [code-quality-guardian]                # current active agent set; updated by each handoff
+status: distilling        # backlog | discovery | stand-by | in-dev | review | distilling | pr-ready | done | abandoned
+agents: [solutions-architect]                # current active agent set; updated by each handoff
 priority: 2               # 1 = drop-everything, 2 = normal, 3 = nice-to-have
 created: 2026-05-26
 updated: 2026-05-29
@@ -418,11 +418,67 @@ Recommendation: extend ADR-0011 — the input-parity contract is the same archit
 
 ## Review round 1 — code-quality-guardian
 
-<!-- verdict + issues; runs against the open PR's diff (PR was opened by expert-developer at the in-dev → review transition) -->
+**Verdict: PASS.** Diff reviewed: `git diff dev...HEAD` — 12 files / +2571 / -4. Three production-runtime edits across two languages (openclaw + klodi-rust-host), supported by 6 new test files (1 fixture, 1 schema snapshot, 2 catalog-level validators, 4 per-stack parity suites) and the card body. PR #4 is the mergeable unit; this verdict releases it to `distilling`.
 
-### → Handoff back to In Dev (if FAIL/REVIEW)
+### What changed on the runtime path
 
-<!-- fix list -->
+1. **openclaw — `adapters/openclaw/src/tools/discovery.ts:51-110`.**
+   - `registerSearch` line 60–72: removed `compactPayload(params)` from the `klodi_search` arm; forwards `params` raw to `rawRequest(tool.subject, params)`. Inline 10-line WHY block references ADR-0011 SC-parity.1 and explicitly preserves `compactPayload` inside `runOneShotSearch` (the `klodi_watch` composite at line 158) where the strip-fields `persist` / `action_on_match` / `target_price` ARE legitimately adapter-internal.
+   - `registerSearchesCreate` (new, lines 81–110): mirrors the `registerSearchesList` pass-through pattern. Wired into `registerDiscoveryTools` at line 44. Guards `slug` as `non_empty_string` per the catalog's required-field set (`packages/tool-catalog/src/index.ts:386-389` — `slug` is the only non-Optional field in the catalog schema). Pure forward to `rawRequest(tool.subject, params)`. Inline ADR-0011 SC-parity.2 comment.
+2. **klodi-rust-host — `packages/klodi-rust-host/src/mcp/mod.rs:23-27`.** `mod tools;` → `pub mod tools;` (one character) so the cross-language parity test reaches the helpers without dialing NATS. Matches the existing `pub mod envelope;` / `pub mod guards;` convention. The pre-existing `pub(super)` visibilities on `list_all_tools` and `dispatch` keep the rest of the module crate-internal; only two intentional `pub fn`s are exposed below.
+3. **klodi-rust-host — `packages/klodi-rust-host/src/mcp/tools.rs:271-304`.** Inline `let payload = Value::Object(args);` at line 271 swapped for `let payload = payload_for_passthrough(args);`. Two new `pub fn`s below `dispatch_passthrough`:
+   - `pub fn payload_for_passthrough(args: JsonObject) -> Value` — identity transform lifted to a named function. Pins the SC-parity.1 contract at the production site.
+   - `pub fn tool_input_schema_for(name: &str) -> Option<&'static Value>` — reads `catalog().tools.get(name).map(|entry| &entry.params)`. Anchors SC-contract.3 schema-equivalence assertion in the Rust suite. `'static` lifetime is sound — `catalog()` returns a process-wide static.
+
+### Findings (P1 / P2 / P3)
+
+- **None at P1 (FAIL).** No security issues, no missing types, no `any`, no silent error swallowing, no hardcoded values, no legacy / backwards-compat shims, no architecture violations, no anti-patterns at the FAIL threshold.
+- **None at P2 (REVIEW).** No design smells (feature envy, anemic domain, divergent change, etc.) tripping the structural concern threshold. No premature extractions (the Rust helper has a load-bearing test-contract purpose, documented inline). No missing knowledge capture — every edit site carries an inline `// See ADR-0011 SC-parity.{1,2}` marker plus a paragraph WHY block, and the distillation pass (next stage) will lift these into the canonical ADR.
+- **P3 (observational, non-blocking).**
+  - `registerSearchesCreate` repeats the `runPreCallGuardsResult → rawRequest → envelopeToolResult` triad now visible in four places (`registerSearch`, `registerSearchesCreate`, `registerSearchesList`, `registerComment`). The Green-phase handoff explicitly weighed a `simplePassthroughTool` factory and chose against it — the three call sites differ in their guard sets and pass-through metadata. Agreed: extracting a factory now would have to take more params than the variance, and the pattern stays clearer mirrored. Re-examine only if a 5th near-identical tool lands.
+  - The Rust `payload_for_passthrough` is a one-line helper that, in isolation, would look like over-extraction. Its load-bearing purpose is the parity-test contract anchor; the comment block above it documents WHY the indirection earns its keep. Acceptable as designed.
+
+### Dimensions checked
+
+- **Security (OWASP).** New `slug` input flows from agent → marketplace via NATS — server-side is the authoritative validator. `non_empty_string` guard catches the empty-string edge; TypeBox schema (`klodiTools.klodi_searches_create.params`, surfaced through `registerTool`) validates type at the host SDK boundary. No new sink for injection / XSS / secret exposure. PASS.
+- **Type safety.** `grep -n ': any\b|<any>|as any'` on every changed file: zero hits. TypeBox schema reused verbatim from the catalog (`klodiTools.klodi_searches_create.params`) — no parallel type. Rust helpers carry explicit `JsonObject` / `Value` / `&'static Value` types with sound lifetimes (process-wide static `catalog()`). PASS.
+- **Error handling & logging (per `code-logging` skill).** New tool routes errors through `envelopeToolResult` (the closed-vocabulary ADR-0011 envelope). Guards return structured envelopes via `runPreCallGuardsResult`. No silent swallowing introduced. The new tool intentionally does not log on success — pattern-consistent with `registerSearchesList` / `registerSearch` / `registerComment`. Tool-level observability is handled by the host SDK dispatcher one layer above. PASS.
+- **Performance.** One additional tool registration at startup; no per-call overhead. Rust helper is `Value::Object(args)` — identity-cost. No N+1, no unbounded loops, no blocking calls. PASS.
+- **Complexity caps.** `registerSearchesCreate`: 28 LOC (incl. 8-line comment), cyclomatic 2 (try/catch + guard), 1 param. Rust helpers: 3 LOC each, complexity 1. All well under the 100 LOC / complexity 8 / 5 params / 100 char caps. PASS.
+- **Hardcoded values.** Tool name + label + subject all read from the catalog (`klodiTools.klodi_searches_create.{name,subject,description,params}`). `OPENCLAW_REGISTER_CLI` is module-local constant, pre-existing. No magic numbers or inline URLs introduced. PASS.
+- **Bloat / dead code.** `compactPayload` still used by `runOneShotSearch` (line 158) — not dead. New tests cover real cases, not hypothetical. `unwrap()` in Rust appears only in pre-existing test fixtures inside the file, not introduced by this card. PASS.
+- **Bad-patterns / anti-patterns.** No god objects (`discovery.ts` has 6 register functions, each single-purpose, ≤30 LOC); nesting depth ≤2 everywhere; no copy-paste at the 10+ LOC threshold (the 3–4 line structural mirroring is intentional consistency, evaluated and accepted); no lava flow; no boolean blindness; no stringly-typed code; no long parameter lists. PASS.
+- **Refactor-consolidation / architecture.** `pub mod tools` extends the existing `pub mod envelope` / `pub mod guards` convention in `mcp/mod.rs`; only the two intentional `pub fn`s are exposed crate-wide (`list_all_tools` and `dispatch` keep `pub(super)`). No circular deps. The `compactPayload` removal moves the runtime closer to — not further from — the cross-stack pass-through invariant the Discovery phase named as the architectural risk. Single ADR (0011) cross-referenced at every edit site. PASS.
+- **Knowledge capture.** Every non-obvious edit carries an inline `// See ADR-0011 SC-parity.{1,2}` marker plus a paragraph WHY block (compactPayload deletion, registerSearchesCreate purpose, `pub mod` visibility tweak, both Rust helpers). The distillation pass (next stage, `solutions-architect`) is teed up to extend ADR-0011 with the input-parity invariant or file an ADR-0012 — the handoff section names both options. PASS.
+- **Tier coverage.** Frontmatter `tiers: [unit, integration, e2e]` matches acceptance criteria tier tags. The four new per-stack parity tests + two tool-catalog gates (search-payload-golden, search-schema-snapshot) land the integration tier in this PR; e2e is correctly punted to the klodi-stage sibling card per the architect's discovery handoff. Per-tier test file presence verified in the diff. PASS.
+
+### Live verification status
+
+Per the Green-phase handoff: the integration smoke path for the tool→service contract IS the parity test pattern — it drives the registered tool handler end-to-end (`tool.execute("call-1", input)`) against the real `registerDiscoveryTools(api)` registration, captures the actual `client.request(subject, payload)` call via the mock-nats shim, and asserts byte-equal to the fixture. No UI surface; openclaw has no standalone runnable. Acceptable substitute documented in the handoff — accepted.
+
+### Distillation prep (for the next stage)
+
+Inline anchors are present at all three edit sites. The architect's earlier discovery note named two options:
+1. Extend ADR-0011 with the input-parity invariant (envelope parity now covers BOTH input and output).
+2. New ADR-0012 establishing "raw catalog pass-through is the tool layer's only correct posture".
+
+The expert-developer's handoff already recommends (1) — coherent single ADR over two cross-referencing ones. The architect makes the final call against the merged diff at distillation time.
+
+### Pre-existing concerns NOT addressed by this card (correctly out of scope)
+
+- `policy-seeding.test.ts` / `setup-state.test.ts` / `setup.test.ts` / `register-poller.test.ts` openclaw worktree-only failures (resolved by `pnpm build` re-seeding the skill bundle; not the parity gate).
+- `clippy::unnecessary_map_or` warnings in `mcp/photos.rs` — pre-existing (commits `4ad660a` / `3ca5d2f`), unrelated to this card.
+- The `klodi_watch` composite legacy envelopes (`adapters/hermes/src/klodi_hermes/watch.py:155-164`, `adapters/nanobot/nanobot_local_tools.py:786-797`) — outside SC-parity scope per Discovery's Risks section.
+
+These are correctly flagged and deferred to follow-up cards.
+
+### → Handoff to Distillation (next agent: solutions-architect)
+
+Verdict is PASS. Status flipped `review → distilling`; agents set to `[solutions-architect]`. The PR (#4) is open and stays open through distillation — the architect commits ADR / `docs/decisions/` updates to the same `card/tool-service-search-parity-verification` branch so the PR ends up containing implementation + tests + knowledge capture as one mergeable unit, then flips status to `pr-ready`.
+
+Distillation targets primed by this round:
+- Extend ADR-0011 with input-parity (recommended) OR file ADR-0012 — call belongs to the architect against the final diff.
+- Search `docs/decisions/INDEX.md` first per the `distillation` skill; prefer editing an existing doc over creating a new one (per CLAUDE.md docs taxonomy).
 
 ## Distillation — solutions-architect
 
