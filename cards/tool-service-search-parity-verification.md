@@ -3,9 +3,9 @@ type: card
 title: Tool→service search parity verification
 slug: tool-service-search-parity-verification
 work_type: feature        # feature | bug | refactor | chore | docs
-tiers: []                 # subset of [unit, integration, e2e] — set by solutions-architect during Discovery from the acceptance criteria below
-status: discovery         # backlog | discovery | stand-by | in-dev | review | distilling | pr-ready | done | abandoned
-agents: [solutions-architect, product-owner]  # current active agent set; updated by each handoff
+tiers: [unit, integration, e2e]  # union of the tiers used in the Discovery acceptance criteria
+status: stand-by          # backlog | discovery | stand-by | in-dev | review | distilling | pr-ready | done | abandoned
+agents: []                # current active agent set; updated by each handoff
 priority: 2               # 1 = drop-everything, 2 = normal, 3 = nice-to-have
 created: 2026-05-26
 updated: 2026-05-29
@@ -145,48 +145,93 @@ What is *not* a parity violation:
 
 ### Acceptance criteria
 
-Format: `[tier] Given <state>, when <action>, then <outcome>`. `[?]` = tier tag pending solutions-architect.
+Format: `[tier] Given <state>, when <action>, then <outcome>`. Tier tags assigned by solutions-architect.
 
 **SC7 — Parity gate (headline).**
 
-- `[?] SC7.1` Given a registered klodi-stage harness with the upgraded service active and a known fixture corpus of listings, when the same well-formed query payload is issued through `klodi_search` and directly against `p2p.v1.listings.search`, then both responses return `results` arrays with identical `listing_id` sequences in identical order.
-- `[?] SC7.2` Given the same parity setup, when both calls complete, then every per-item field on the direct-service response (`listing_id`, `listing_url`, `title`, `asking_price`, `currency`, `category`, `fulfillment`, `condition`, `distance_km` when populated, `seller_handle`, `seller_rating`, `seller_trades`, `photos`, `created_at`) is present on the corresponding tool response with byte-equal values modulo JSON-round-trip-equal numerics.
-- `[?] SC7.3` Given a query containing each upgraded-ranking signal the service now exercises (the golden-dataset query set from the dependency card `klodi-stage:golden-dataset-eval-harness-recorded-baseline`), when both calls run against the recorded baseline, then parity holds for every query in the set — no query produces a tool/service divergence.
-- `[?] SC7.4` Given a `klodi_searches_create` registration with criteria `C`, when the marketplace subsequently emits a `search.match` for a listing `L`, then `L` would also appear in a one-shot `klodi_search` issued with `C` against the same service state. (Standing-search criteria are interpreted identically to one-shot search criteria.)
-- `[?] SC7.5` Given the cross-referenced pgvector substrate swap (`4gpts-p2p-marketplace:provision-pgvector-substrate-migrate-embeddings`) has landed, when SC7.1 through SC7.4 are re-executed against the post-swap service, then parity continues to hold; substrate change is invisible at the tool wire.
+- `[e2e] SC7.1` Given a registered klodi-stage harness with the upgraded service active and a known fixture corpus of listings, when the same well-formed query payload is issued through `klodi_search` and directly against `p2p.v1.listings.search`, then both responses return `results` arrays with identical `listing_id` sequences in identical order.
+- `[e2e] SC7.2` Given the same parity setup, when both calls complete, then every per-item field on the direct-service response (`listing_id`, `listing_url`, `title`, `asking_price`, `currency`, `category`, `fulfillment`, `condition`, `distance_km` when populated, `seller_handle`, `seller_rating`, `seller_trades`, `photos`, `created_at`) is present on the corresponding tool response with byte-equal values modulo JSON-round-trip-equal numerics.
+- `[e2e] SC7.3` Given a query containing each upgraded-ranking signal the service now exercises (the golden-dataset query set from the dependency card `klodi-stage:golden-dataset-eval-harness-recorded-baseline`), when both calls run against the recorded baseline, then parity holds for every query in the set — no query produces a tool/service divergence.
+- `[e2e] SC7.4` Given a `klodi_searches_create` registration with criteria `C`, when the marketplace subsequently emits a `search.match` for a listing `L`, then `L` would also appear in a one-shot `klodi_search` issued with `C` against the same service state. (Standing-search criteria are interpreted identically to one-shot search criteria.)
+- `[e2e] SC7.5` Given the cross-referenced pgvector substrate swap (`4gpts-p2p-marketplace:provision-pgvector-substrate-migrate-embeddings`) has landed, when SC7.1 through SC7.4 are re-executed against the post-swap service, then parity continues to hold; substrate change is invisible at the tool wire.
 
 **Stable contract — no breaking changes across openclaw / hermes / nanobot / moltis / ironclaw / zeroclaw.**
 
-- `[?] SC-contract.1` Given the canonical catalog, when the test suite inspects `klodiTools.klodi_search` and `klodiTools.klodi_searches_create`, then both keys exist, both `subject` values equal `p2p.v1.listings.search` and `p2p.v1.searches.create` respectively, and both tools appear in `TOOL_NAMES`.
-- `[?] SC-contract.2` Given a snapshot of each tool's `params` and `result` schemas from the prior release (golden fixture), when the current catalog is diffed against it, then the diff is *additive only*: no removed fields, no renamed fields, no retyped fields, no `Type.Optional` → required promotions.
-- `[?] SC-contract.3` Given each of the six adapters in turn, when the adapter's exposed tool metadata for `klodi_search` and `klodi_searches_create` is inspected (TS via `registerTool`, Python via the `klodi_*` registry, Rust via the MCP `tools/list` handler), then the agent-facing name, full parameter schema, and result schema are byte-equivalent to the canonical catalog after codegen normalisation.
-- `[?] SC-contract.4` Given an agent client written against the pre-upgrade tool schema (a golden agent-payload fixture), when it issues every shape of `klodi_search` and `klodi_searches_create` call it knows, then every call succeeds against every adapter without schema-rejection from the tool's pre-call `args_well_formed` guard (per ADR-0011).
+- `[integration] SC-contract.1` Given the canonical catalog, when the test suite inspects `klodiTools.klodi_search` and `klodiTools.klodi_searches_create`, then both keys exist, both `subject` values equal `p2p.v1.listings.search` and `p2p.v1.searches.create` respectively, and both tools appear in `TOOL_NAMES`.
+- `[integration] SC-contract.2` Given a snapshot of each tool's `params` and `result` schemas from the prior release (golden fixture), when the current catalog is diffed against it, then the diff is *additive only*: no removed fields, no renamed fields, no retyped fields, no `Type.Optional` → required promotions.
+- `[integration] SC-contract.3` Given each of the six adapters in turn, when the adapter's exposed tool metadata for `klodi_search` and `klodi_searches_create` is inspected (TS via `registerTool`, Python via the `klodi_*` registry, Rust via the MCP `tools/list` handler), then the agent-facing name, full parameter schema, and result schema are byte-equivalent to the canonical catalog after codegen normalisation.
+- `[integration] SC-contract.4` Given an agent client written against the pre-upgrade tool schema (a golden agent-payload fixture), when it issues every shape of `klodi_search` and `klodi_searches_create` call it knows, then every call succeeds against every adapter without schema-rejection from the tool's pre-call `args_well_formed` guard (per ADR-0011).
 
 **Additive-only query semantics.**
 
-- `[?] SC-additive.1` Given the canonical catalog post-upgrade, when each new `params` field on `klodi_search` or `klodi_searches_create` is enumerated, then every new field is wrapped in `Type.Optional` and has a documented default value in the catalog description.
-- `[?] SC-additive.2` Given an agent that omits every new optional `params` field, when it issues a `klodi_search` against the upgraded service, then for each query in the pre-upgrade behavior baseline the result set the agent receives matches the pre-upgrade matcher's documented contract (existing keywords still match the listings the skill craft section says they should — no silent expansion that surprises an unaware agent).
-- `[?] SC-additive.3` Given each existing `params` field on `klodi_search` and `klodi_searches_create` (`query`, `category`, `min_price`, `max_price`, `delivery`, `condition`, `limit`, `cursor`, `slug`), when the upgrade is inspected, then no field is renamed, retyped, or repurposed; every field's documented meaning is preserved.
-- `[?] SC-additive.4` Given a new opt-in semantic parameter (if any is introduced), when its catalog description is read, then the description states the pre-upgrade-equivalent default behavior and what an agent gains by setting it — agents discover the new capability from the catalog, not from out-of-band documentation drift.
+- `[integration] SC-additive.1` Given the canonical catalog post-upgrade, when each new `params` field on `klodi_search` or `klodi_searches_create` is enumerated, then every new field is wrapped in `Type.Optional` and has a documented default value in the catalog description.
+- `[e2e] SC-additive.2` Given an agent that omits every new optional `params` field, when it issues a `klodi_search` against the upgraded service, then for each query in the pre-upgrade behavior baseline the result set the agent receives matches the pre-upgrade matcher's documented contract (existing keywords still match the listings the skill craft section says they should — no silent expansion that surprises an unaware agent).
+- `[integration] SC-additive.3` Given each existing `params` field on `klodi_search` and `klodi_searches_create` (`query`, `category`, `min_price`, `max_price`, `delivery`, `condition`, `limit`, `cursor`, `slug`), when the upgrade is inspected, then no field is renamed, retyped, or repurposed; every field's documented meaning is preserved.
+- `[unit] SC-additive.4` Given a new opt-in semantic parameter (if any is introduced), when its catalog description is read, then the description states the pre-upgrade-equivalent default behavior and what an agent gains by setting it — agents discover the new capability from the catalog, not from out-of-band documentation drift.
 
 **Single entry point invariant.**
 
-- `[?] SC-entry.1` Given the agent surface across all six adapters, when the tool registry is inspected, then `klodi_search` and `klodi_searches_create` (the latter exposed via the `klodi_watch` composite in openclaw/Rust) are the only tools whose NATS subject targets `p2p.v1.listings.search` or `p2p.v1.searches.create`; no parallel search path exists.
+- `[unit] SC-entry.1` Given the agent surface across all six adapters, when the tool registry is inspected, then `klodi_search` and `klodi_searches_create` (the latter exposed via the `klodi_watch` composite in openclaw/Rust) are the only tools whose NATS subject targets `p2p.v1.listings.search` or `p2p.v1.searches.create`; no parallel search path exists.
+
+**Cross-stack payload parity (architect-added, addresses Risks → cross-stack payload-transform drift).**
+
+- `[integration] SC-parity.1` Given any input case in `packages/tool-catalog/tests/fixtures/search-payload-golden.json`, when `klodi_search` is invoked through each of openclaw (vitest) / hermes (pytest) / nanobot (pytest) / Rust-shared-host (cargo test), then every stack captures and forwards a `p2p.v1.listings.search` NATS request payload byte-equal to the fixture's `expected_wire_payload`.
+- `[integration] SC-parity.2` Given any input case in the same fixture, when `klodi_searches_create` is invoked through each of openclaw / hermes / nanobot / Rust-shared-host, then every stack captures and forwards a `p2p.v1.searches.create` NATS request payload byte-equal to the fixture's `expected_wire_payload`.
+
+`tiers:` frontmatter: `[unit, integration, e2e]` (union — `unit` from SC-additive.4 + SC-entry.1; `integration` from the SC-contract / SC-additive.{1,3} / SC-parity rows; `e2e` from SC7.* + SC-additive.2).
 
 ### Open questions
 
-1. **Skill drift (`skill/SKILL.md` §6).** The canonical skill currently teaches agents that "the matcher is intentionally simple: substring match on title/description/tags + filter intersection (AND). No fuzzy matching, no synonym expansion." If the upgrade introduces semantic / multilingual / fuzzy matching at the service, this guidance becomes misleading even though parity still holds and the contract stays stable. Should an additional acceptance criterion gate that §6 (and the listing/search craft sub-sections) be updated in this card, or is skill-doc realignment a follow-up card? Surface for solutions-architect to call.
-2. **Golden parity fixture location.** SC-contract.2 needs a frozen snapshot of `klodi_search` / `klodi_searches_create` `params` + `result` schemas to diff against. Does the existing `packages/tool-catalog/tests/golden/` infrastructure extend to a search-schema golden fixture, or does the dev pair create a new one? solutions-architect to specify.
-3. **Per-adapter parity test placement.** SC-contract.3 (six-adapter schema equivalence) has no analogue today. Closest are `packages/tool-catalog/tests/catalog-removal.test.ts` (repo-wide grep) and `packages/tool-catalog/tests/error-codes-cross-language.test.ts` (Py + Rust scan from TS catalog). Does the dev pair extend the cross-language drift gate to cover tool-schema equivalence, or add a new per-adapter assertion? solutions-architect to specify.
-4. **Standing-search match parity (SC7.4) test substrate.** Verifying that a `search.match` wake's matching predicate equals a one-shot `klodi_search`'s requires either (a) a klodi-stage scenario that creates a listing after a standing-search registration and observes both the wake and a follow-up one-shot, or (b) a service-layer guarantee that the two paths share the same matcher. (a) is e2e-heavy; (b) is a marketplace-side invariant we should confirm exists. solutions-architect to choose the test substrate.
+1. **Skill drift (`skill/SKILL.md` §6).** The canonical skill currently teaches agents that "the matcher is intentionally simple: substring match on title/description/tags + filter intersection (AND). No fuzzy matching, no synonym expansion." If the upgrade introduces semantic / multilingual / fuzzy matching at the service, this guidance becomes misleading even though parity still holds and the contract stays stable.
+   **Architect answer (PO Open Q1):** Skill-doc realignment is a **separate, follow-up card**. This card's invariant is *tool↔service wire parity* — the agent surface (catalog params + result) is unchanged. Skill copy edits do not gate the SC7 parity proof and would expand scope unproductively. A follow-up `klodi-plugin:skill-search-guidance-realign` card lands the SKILL.md §6 update after the semantic surface is exercised in tier (2) and a representative agent run informs the new copy. Filed as a non-blocking follow-up; the goal-orchestrator can spin it off `origin: goal:robust-agentic-search` automatically once this card merges.
+
+2. **Golden parity fixture location.** SC-contract.2 needs a frozen snapshot of `klodi_search` / `klodi_searches_create` `params` + `result` schemas to diff against. Does the existing `packages/tool-catalog/tests/golden/` infrastructure extend to a search-schema golden fixture, or does the dev pair create a new one?
+   **Architect answer (PO Open Q2):** **Extend the existing `packages/tool-catalog/tests/golden/`** directory. The directory exists, the convention (one JSON snapshot per assertion target) is established by the prior generation. Add `packages/tool-catalog/tests/golden/search-schemas.json` carrying TypeBox-emitted JSON-Schema for both tools' `params` and `result`. The `search-schema-snapshot.test.ts` (named in Affected files) is the consumer. Same place, same convention.
+
+3. **Per-adapter parity test placement.** SC-contract.3 (six-adapter schema equivalence) has no analogue today. Closest are `packages/tool-catalog/tests/catalog-removal.test.ts` (repo-wide grep) and `packages/tool-catalog/tests/error-codes-cross-language.test.ts` (Py + Rust scan from TS catalog). Does the dev pair extend the cross-language drift gate to cover tool-schema equivalence, or add a new per-adapter assertion?
+   **Architect answer (PO Open Q3):** **Per-adapter assertions inside each adapter's existing test suite, driven by the shared golden fixture from Q2 + the request-payload golden.** Reasoning: the cross-language drift gate scans for literal strings in source (suitable for error-code drift, where the comparable unit is a code literal); tool schema equivalence is a *runtime metadata* check (what does `klodi_search`'s `registerTool` actually expose to the host?). Source-scanning would either reimplement TypeBox→JSON-Schema or rely on brittle regex over schema spread. The per-adapter test instead loads the tool's catalog-registered handler in-process (it already does for the parity test from `SC-parity.{1,2}`), inspects the registered metadata (`api.getTool("klodi_search").parameters` for openclaw, the registry entry for Python, the rmcp `Tool.input_schema` for Rust), and compares to the golden snapshot. The cross-language drift gate stays focused on error-code literals.
+
+4. **Standing-search match parity (SC7.4) test substrate.** Verifying that a `search.match` wake's matching predicate equals a one-shot `klodi_search`'s requires either (a) a klodi-stage scenario that creates a listing after a standing-search registration and observes both the wake and a follow-up one-shot, or (b) a service-layer guarantee that the two paths share the same matcher. (a) is e2e-heavy; (b) is a marketplace-side invariant we should confirm exists.
+   **Architect answer (PO Open Q4):** Closed in Risks (paragraph "PO `SC7.4` — standing-search ↔ one-shot matcher equivalence"). The architectural answer is (b) at the contract level — the marketplace's `searches.create` documentation states the same matcher; the tier (1) parity test for `klodi_searches_create` proves the *registration* payload reaches the service intact; tier (2) covers one end-to-end representative scenario. The full (a) substrate (every standing-search emission re-verified by one-shot) is unnecessary for the SC7 gate.
+
+5. **(architect-added) Single source of truth for the per-stack request capture stub.** Each per-stack test needs a stub that captures `(subject, payload)` calls without dialing NATS. openclaw already has `adapters/openclaw/src/__tests__/helpers/mock-nats.js`. Python lacks an equivalent at the `client.request` boundary — `adapters/hermes/tests/test_tools.py` uses inline `unittest.mock.patch`. Rust has `packages/klodi-rust-host/tests/envelope_parity.rs` but no `KlodiClient` request-capture helper for search payloads. **Architect call:** dev introduces a thin per-stack capture helper inside each adapter's existing test-helpers directory; no shared cross-language fixture infrastructure is needed (the JSON fixture is the contract; the helpers are read-only consumers).
 
 ### → Handoff to In Dev (next agents: expert-developer, qa-developer)
 
-<!-- solutions-architect owns this block. product-owner notes:
-the SC7 e2e against the golden dataset is the headline gate; the
-stable-contract criteria are best caught at unit/integration (catalog
-inspection + per-adapter schema equivalence) so they fail fast in CI
-before the e2e runs. -->
+**Where to start.**
+
+1. **qa-developer first (RED tests).**
+   a. Write `packages/tool-catalog/tests/fixtures/search-payload-golden.json` — the fixed input matrix (one case per shape variant: empty-query, null-category, pickup-with-radius, ship-with-to, digital, any, cursor-set, limit-set, minimal, fully-populated). Mirror the envelope-golden conventions (`_doc`, `_when`, per-entry `_doc`). Each entry pairs an `input` with an `expected_wire_payload` — what should arrive on the NATS subject.
+   b. Generate `packages/tool-catalog/tests/golden/search-schemas.json` — TypeBox-emitted JSON-Schema snapshot of both tools' `params` + `result`. The snapshot is produced once at the start of dev (in-suite helper that serialises the catalog schemas), then frozen; subsequent runs diff against it.
+   c. Write the fixture-shape validator at `packages/tool-catalog/tests/search-payload-golden.test.ts` (catalog conformance per entry, single-entry-point invariant) and the schema-diff validator at `packages/tool-catalog/tests/search-schema-snapshot.test.ts` (PO `SC-contract.2`, `SC-additive.*`).
+   d. Write the four per-stack parity tests: openclaw vitest (`adapters/openclaw/src/__tests__/tools/discovery.test.ts` — extend), hermes pytest (`adapters/hermes/tests/test_tools.py` — extend), nanobot pytest (`adapters/nanobot/tests/test_tools.py` — extend), Rust cargo (`packages/klodi-rust-host/tests/search_payload_parity.rs` — new). Each loads the JSON fixture, drives the tool's handler, captures the request payload via a per-stack capture stub (mock-nats.js / unittest.mock.patch / a cargo-test KlodiClient request-capture helper), asserts payload-equality per case.
+   e. Add per-adapter schema-equivalence tests (PO `SC-contract.3`): each per-adapter suite loads its host-registered tool metadata for `klodi_search` + `klodi_searches_create` and compares to the golden snapshot.
+2. **expert-developer (GREEN).** With the runtime path already a thin pass-through on most stacks, the expected path is:
+   a. Tier (1) RED across openclaw on the `query: ""`/`category: null` cases (per Risks → openclaw `compactPayload`).
+   b. **Remove `compactPayload` from the `klodi_search` arm** in `adapters/openclaw/src/tools/discovery.ts:60` (the call inside `runOneShotSearch` at line 117 stays — that's the `klodi_watch` composite, which keeps the strip-fields). The catalog says what fields exist; the marketplace says what they mean; the tool's job is to forward unchanged. `klodi_watch` keeps `compactPayload` because `persist`/`action_on_match`/`target_price` are adapter-internal flags, not catalog fields.
+   c. Re-run; all four stacks GREEN on tier (1).
+   d. If a fixture case shows real, non-trivial cross-stack disagreement that the architect default doesn't resolve (e.g. a stack outright rejects an input the catalog accepts), surface immediately — the answer is a clarifying assumption, not a workaround.
+
+**Constraints.**
+
+- **No breaking change** to catalog `params` / `result` shapes. The card prohibits renames/removals on the wire. Tier (1) structural gates (`search-schema-snapshot.test.ts`, `catalog-removal.test.ts`) enforce this.
+- **No new runtime dependency.** Existing JSON-fixture loading pattern (envelope-golden) is the precedent. Do not introduce a fixture-DSL or a schema generator.
+- **No production-runtime code changes** outside the one openclaw `compactPayload` removal above. If parity holds across all four stacks for every fixture case (impossible — see Risks), this is a tests-only PR. Either way, the diff is small.
+- **Function caps:** new test helpers stay under 100 lines / complexity 8 / 5 positional params / 100-char lines per `CLAUDE.md`.
+- **CLAUDE.md tooling:** vitest for TS, pytest for Py, cargo test for Rust. Lint with oxlint / ruff / clippy.
+- **No mocks for the catalog or the schemas.** The catalog source-of-truth IS the input to the snapshot test. Per-stack stubs intercept *only* the NATS-client request boundary (so we observe what the tool would have sent without a live broker).
+
+**Test strategy.**
+
+- **Tier (1) integration tests are the bar this PR must clear.** They mechanically prove cross-stack payload-shape equivalence and catalog-shape immutability. Test data: the JSON fixture is the spec — never modify it to make a test pass (per CLAUDE.md `adversarial-testing` discipline).
+- **One failing fixture case on any stack is sufficient to FAIL the parity gate.** The gate is "every stack agrees with the marketplace contract", not "most stacks agree".
+- **Tier (2) is the headline gate but lives in klodi-stage (separate card).** This card's deliverable for tier (2) is the contract those e2e tests must hold; the architect's handoff note in the sibling card will reference the golden fixture by path.
+- **No live NATS broker for tier (1).** Per-stack stubs intercept at the `client.request` boundary. The whole point of tier (1) is that no broker, no marketplace, no service is involved — only the tool layer's input-to-payload mapping.
+- **Skill drift is out of scope** (PO Open Q1 closed) — do not edit `skill/SKILL.md` §6 in this card.
+
+**Distillation note (architect's later pass).** Two doc captures look likely if dev confirms the openclaw `compactPayload` removal:
+- Inline WHY comment at the deletion site in `adapters/openclaw/src/tools/discovery.ts` referencing the parity rule.
+- Possible new ADR-0012 (sole-entry-point + raw payload pass-through invariant) **or** an extension to ADR-0011 (envelope parity → input parity). The architect's distillation pass searches `docs/decisions/INDEX.md` first per the `distillation` skill; the call between "extend ADR-0011" vs "new ADR-0012" gets made at distillation time against the final diff.
 
 ## In Dev — <agents>
 
