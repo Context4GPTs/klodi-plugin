@@ -4,8 +4,8 @@ title: Tool→service search parity verification
 slug: tool-service-search-parity-verification
 work_type: feature        # feature | bug | refactor | chore | docs
 tiers: [unit, integration, e2e]  # union of the tiers used in the Discovery acceptance criteria
-status: stand-by          # backlog | discovery | stand-by | in-dev | review | distilling | pr-ready | done | abandoned
-agents: []                # current active agent set; updated by each handoff
+status: in-dev            # backlog | discovery | stand-by | in-dev | review | distilling | pr-ready | done | abandoned
+agents: [qa-developer, expert-developer]                # current active agent set; updated by each handoff
 priority: 2               # 1 = drop-everything, 2 = normal, 3 = nice-to-have
 created: 2026-05-26
 updated: 2026-05-29
@@ -233,9 +233,118 @@ Format: `[tier] Given <state>, when <action>, then <outcome>`. Tier tags assigne
 - Inline WHY comment at the deletion site in `adapters/openclaw/src/tools/discovery.ts` referencing the parity rule.
 - Possible new ADR-0012 (sole-entry-point + raw payload pass-through invariant) **or** an extension to ADR-0011 (envelope parity → input parity). The architect's distillation pass searches `docs/decisions/INDEX.md` first per the `distillation` skill; the call between "extend ADR-0011" vs "new ADR-0012" gets made at distillation time against the final diff.
 
-## In Dev — <agents>
+## In Dev — qa-developer, expert-developer
 
-<!-- implementation + test notes -->
+### RED phase — qa-developer
+
+**Sentinel.** `/tmp/.claude-qa-active-a61888a7` (60-minute TTL).
+
+**Files added (tier 1 integration parity — SC-parity.{1,2} + SC-contract.{2,3} + SC-additive.{1,3} + SC-entry.1).**
+
+- `packages/tool-catalog/tests/fixtures/search-payload-golden.json` — the shared input matrix. 12 `klodi_search` cases + 6 `klodi_searches_create` cases covering empty-string / null / omitted / present, every `delivery` variant, cursor, limit, minimal, fully-populated. Mirrors the envelope-golden conventions (`_doc` + `_when` per entry).
+- `packages/tool-catalog/tests/golden/search-schemas.json` — frozen JSON-Schema snapshot of `klodi_search` + `klodi_searches_create` `params` + `result`, generated from the TypeBox catalog. The contract record; the in-suite test below is the gate.
+- `packages/tool-catalog/tests/search-payload-golden.test.ts` — fixture-shape validator + single-entry-point invariant (SC-entry.1). 70 cases, all GREEN today (the fixture is correctly built; the test fails when a fixture edit drifts off-spec).
+- `packages/tool-catalog/tests/search-schema-snapshot.test.ts` — SC-contract.2 + SC-additive.{1,3} stable-contract gate. 14 cases, all GREEN today (no catalog drift yet); will trip on any breaking edit.
+- `adapters/openclaw/src/__tests__/tools/search-payload-parity.test.ts` — openclaw vitest parity test. **22 tests, 10 FAIL today (RED).** Three failing modes:
+  - 3 × `klodi_search` divergence cases (empty-string query, null category, empty+null mix) — `compactPayload` at `discovery.ts:60` drops `null`/`""`/`undefined` values, so `{query: "", category: null}` becomes `{}` on the wire while every other stack forwards verbatim. Architect's named smoking-gun input.
+  - 6 × `klodi_searches_create` cases + 1 × schema-equivalence — `klodi_searches_create` is not registered as a standalone tool in openclaw today; only the `klodi_watch` composite reaches `searches.create`.
+- `adapters/hermes/tests/test_search_payload_parity.py` — hermes pytest. **20 tests, all PASS today.** Hermes's `build_request_handler` calls `client.request(subject, args)` with raw args — already conformant. The gate locks against future regression.
+- `adapters/nanobot/tests/test_search_payload_parity.py` — nanobot pytest. **20 tests, all PASS today.** Same posture as hermes — `call_tool` forwards args verbatim. Regression lock.
+- `packages/klodi-rust-host/tests/search_payload_parity.rs` — Rust cargo integration test (`--features mcp`). **FAILS TO COMPILE today (6 E0603 / E0432 errors)** because `mcp::tools` is private and the helper functions don't exist yet. That IS the RED state — the dev introduces the helpers during Green (see Green-phase guidance below).
+
+**Existing tests still passing.** Re-ran openclaw `discovery.test.ts` (12/12 PASS). The spy-reset change in `beforeEach` only affects the parity test file; the existing `discovery.test.ts` retains its own assertion patterns.
+
+**RED-phase test infra note (worktree).** The worktree was missing `node_modules` for openclaw + tool-catalog (symlinked from main checkout after `pnpm install`), and the hermes/nanobot venvs needed a fresh `uv sync` (the prior venvs had absolute-path shebangs to a no-longer-existent sibling repo). Codegen run: `pnpm --filter @klodi/tool-catalog codegen` produced `dist/rust-types.rs` so the klodi-rust-host build resolves. Python tests run with `PYTHONPATH="$PWD/../../packages/nats-client-py/src[:$PWD/src]"` to surface `klodi_nats_client` (vendored at build time, not installed via uv).
+
+### → Handoff to expert-developer (Green phase)
+
+**Headline RED state to fix.** The architectural drift is in **openclaw** (TypeScript) and the missing **Rust helpers**. Hermes + nanobot are already pass-through-correct; their tests are regression locks, not Green-phase work.
+
+**Failing tests + expected behavior.**
+
+1. **openclaw — `compactPayload` divergence (3 failing `klodi_search` cases)**.
+   - File: `adapters/openclaw/src/__tests__/tools/search-payload-parity.test.ts`.
+   - Failures: `search_empty_query_string`, `search_null_category`, `search_empty_string_and_null_mix`.
+   - Expected: `{query: ""}`, `{query: "laptop", category: null}`, `{query: "", category: null}` reach `client.request("p2p.v1.listings.search", payload)` byte-equal to the fixture's `expected_wire_payload`.
+   - Got today: `{}` for every case (compactPayload drops the empty-string and null-valued keys).
+   - **Fix (architect's hypothesis, restated):** strip `compactPayload(params)` from the `klodi_search` arm in `adapters/openclaw/src/tools/discovery.ts:60` (one line — replace `const payload = compactPayload(params);` with `const payload = params;`, then verify the type). The marketplace's `listings.search` handler is the contract; the tool layer has no business deciding what "empty" means on the service's behalf. KEEP `compactPayload` inside `runOneShotSearch` (line ~117 of `discovery.ts`, the `klodi_watch` composite) because the strip-fields `persist` / `action_on_match` / `target_price` ARE adapter-internal flags that should NOT reach the marketplace — but they are NOT catalog params, so the fixture doesn't exercise them through the direct `klodi_search` path. Add an inline `// See ADR-0011 SC-parity.1` comment at the removal site (distillation will pick this up later).
+
+2. **openclaw — missing `klodi_searches_create` registration (6 failing parity + 1 schema-equivalence test)**.
+   - File: same as above.
+   - Failures: every `searches_create_*` case + `klodi_searches_create registered metadata mirrors klodiTools.klodi_searches_create`.
+   - Got today: `Error: Tool "klodi_searches_create" not registered. Registered tools: klodi_search, klodi_watch, klodi_unwatch, klodi_searches_list, klodi_comment`.
+   - **Fix:** add a `registerSearchesCreate(api)` function alongside `registerSearch(api)` in `discovery.ts`, registered via `registerDiscoveryTools(api)`. Mirror the existing `registerSearchesList` pattern (it's the smallest analogue — pure pass-through, no compactPayload). The handler body:
+     ```typescript
+     function registerSearchesCreate(api: PluginAPI): void {
+       const tool = klodiTools.klodi_searches_create;
+       api.registerTool({
+         name: "klodi_searches_create",
+         label: "Register Standing Search",
+         description: tool.description,
+         parameters: tool.params,
+         async execute(_id, params) {
+           const guard = runPreCallGuardsResult(
+             params,
+             [{ field: "slug", kind: "non_empty_string" }],
+             { registerCli: OPENCLAW_REGISTER_CLI },
+           );
+           if (guard) return guard;
+           try {
+             const result = await rawRequest(tool.subject, params);
+             return jsonResult(result);
+           } catch (e) {
+             return envelopeToolResult(e);
+           }
+         },
+       });
+     }
+     ```
+     Then `registerDiscoveryTools(api)` calls `registerSearchesCreate(api)` after `registerSearch(api)`. Note: the architect's discovery handoff names only the `compactPayload` removal as the Green-phase change; this `searches_create` registration is the second drift this QA pass surfaced. It is the SAME architectural class (cross-stack pass-through invariant) and the SAME tiny patch shape. Confirming the call: hermes (`register_request_tools` iterates the catalog excluding only `_is_local_tool` set; `klodi_searches_create` is NOT in that set) and nanobot (`TOOL_DEFINITIONS` excludes `_LOCAL_TOOLS`; `klodi_searches_create` is NOT in that set) both already register it directly. Rust (`build_tool_list` iterates the catalog and includes every entry where `ToolName::from_name(name).is_some()`) does too. openclaw is the outlier.
+
+3. **Rust — missing `pub` helpers (whole `search_payload_parity.rs` fails to compile)**.
+   - File: `packages/klodi-rust-host/tests/search_payload_parity.rs`.
+   - Compile errors: `module tools is private`. The test references `klodi_rust_host::mcp::tools::payload_for_passthrough` and `klodi_rust_host::mcp::tools::tool_input_schema_for`.
+   - **Fix (two small helpers + visibility tweak).** In `packages/klodi-rust-host/src/mcp/mod.rs`, change `mod tools;` to `pub mod tools;` (matching `pub mod envelope;` and `pub mod guards;`). In `packages/klodi-rust-host/src/mcp/tools.rs`, add two pure helpers:
+     ```rust
+     /// Lift the payload-construction line from `dispatch_passthrough`
+     /// into a pure function. The Rust pass-through is a one-line
+     /// identity transform (no compaction, no defaults) — this helper
+     /// captures that contract so the parity test can exercise it
+     /// without dialing NATS. See ADR-0011 SC-parity.1/.2.
+     pub fn payload_for_passthrough(args: JsonObject) -> Value {
+         Value::Object(args)
+     }
+
+     /// Look up a tool's input schema by name from the catalog the Rust
+     /// dispatcher consumes. Returns `None` for unknown tools. The
+     /// parity test uses this to assert per-adapter schema equivalence
+     /// against the canonical TS catalog (SC-contract.3).
+     pub fn tool_input_schema_for(name: &str) -> Option<&'static Value> {
+         schemas::catalog().tools.get(name).map(|entry| &entry.params)
+     }
+     ```
+     `schemas::catalog()` already exists and `dispatch_passthrough` already uses it at line 60-71. Lifetimes work because the catalog is a process-wide static.
+   - Then refactor `dispatch_passthrough` to use the helper (`let payload = payload_for_passthrough(args);` replacing the inline `Value::Object(args)` at line 271) — one-line readability fix that pins the test contract at the production site.
+
+**Constraints (Green-phase).**
+
+- **NO weakening of any parity test.** The fixture IS the contract; the implementation matches the fixture. If you discover a case where the spec is genuinely wrong (not just inconvenient), raise it explicitly — never edit the test to pass.
+- **NO breaking change** to catalog `params` / `result` shapes. The schema-snapshot test trips on any rename/removal.
+- **Inline distillation note:** add `// See ADR-0011 SC-parity.{1,2}` comments at both edit sites (openclaw `discovery.ts` compactPayload deletion + the new `registerSearchesCreate` site, plus the Rust `payload_for_passthrough` helper site). solutions-architect's later distillation pass picks these up.
+- **No new runtime dependency.** Existing JSON-fixture loading + the catalog re-export are the precedents.
+- **Function caps:** new helpers stay under 100 lines / complexity 8 / 5 positional params / 100-char lines per CLAUDE.md.
+
+**Verification after Green.**
+
+- `cd packages/tool-catalog && pnpm vitest run tests/search-payload-golden.test.ts tests/search-schema-snapshot.test.ts` → 84/84 still passes.
+- `cd adapters/openclaw && pnpm vitest run src/__tests__/tools/search-payload-parity.test.ts` → 22/22 passes (was 12/22).
+- `cd adapters/hermes && PYTHONPATH="$PWD/../../packages/nats-client-py/src:$PWD/src" .venv/bin/python -m pytest tests/test_search_payload_parity.py` → 20/20 still passes.
+- `cd adapters/nanobot && PYTHONPATH="$PWD/../../packages/nats-client-py/src" .venv/bin/python -m pytest tests/test_search_payload_parity.py` → 20/20 still passes.
+- `cd packages/klodi-rust-host && cargo test --features mcp --test search_payload_parity` → 6 tests pass (was 0 — compile error).
+
+**Pre-existing failures in the openclaw suite (NOT the parity gate).** `pnpm vitest run` against openclaw also shows ~19 unrelated failures in `policy-seeding.test.ts`, `setup-state.test.ts`, `setup.test.ts`, `register-poller.test.ts` — these are missing-skill-bundle / missing-policy-template issues from the worktree env (`adapters/openclaw/skill/` directory doesn't exist in the worktree, only in the main checkout). They pass against the main checkout. Not part of this card's scope; ignore them for Green verification. If they stay broken after PR open, file a follow-up infra card.
+
+**Open question for expert (no answer needed before Green starts — flag for discussion if it lands).** SC7.4 expects the `klodi_searches_create.criteria` reply to mirror the agent-submittable shape on `klodi_search`. The catalog's `criteria` object today is `{query, category, delivery, min_price, max_price}` — but `klodi_search.params` ALSO accepts `condition`, `limit`, `cursor`. Is `criteria` deliberately a strict subset (one-shot-only params excluded from standing-search registration), or is this a catalog drift the dev should reconcile? Re-check during Green; if drift, raise it before fixing — the answer affects whether SC7.4 is a test addition or a catalog edit.
 
 ### → Handoff to Review (next agent: code-quality-guardian)
 

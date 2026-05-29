@@ -1,0 +1,203 @@
+{
+  "_doc": "Cross-language search-payload parity oracle. Every adapter (openclaw, hermes, nanobot, moltis, ironclaw, zeroclaw via klodi-rust-host) MUST emit the same on-wire NATS request payload for klodi_search (subject p2p.v1.listings.search) and klodi_searches_create (subject p2p.v1.searches.create) given the same catalog-shaped input. Each entry pairs an `input` (the params the catalog accepts) with `expected_wire_payload` (the JSON body that should arrive at the subject). The pre-merge architectural call (Risks → cross-stack payload-transform drift): expected_wire_payload is the RAW catalog-shaped input — the tool layer's job is to forward unchanged. openclaw's `compactPayload` (adapters/openclaw/src/tools/discovery.ts:60) drops `null` / `undefined` / empty-string values today; that is the divergence this fixture exists to flag (every Search input case here that exercises that divergence guarantees RED on openclaw). The strip-fields `persist` / `action_on_match` / `target_price` remain inside `klodi_watch` (the composite tool) because they are adapter-internal flags, not catalog params; this fixture exercises `klodi_search` / `klodi_searches_create` directly, so those flags never appear in any input. Adding/removing an entry MUST happen via ADR amendment — every adapter's test suite reads this file and asserts coverage. See ADR-0011 for the precedent (envelope-golden.json) and the discovery handoff for the SC-parity.{1,2} acceptance criteria.",
+
+  "search": {
+    "_doc": "klodi_search inputs. The full param surface is `query` / `category` / `min_price` / `max_price` / `delivery` / `condition` / `limit` / `cursor` — all optional per the catalog at packages/tool-catalog/src/index.ts:360-369. The matrix covers each shape the agent's payload can take: empty-string params, null params, omitted params, and present-with-typical-values per param. The first three cases are the openclaw divergence cases — they reach the wire as `{}` after `compactPayload` today and as `{query: ''}` / `{category: null}` / `{}` (omitted absent) on every other stack.",
+
+    "search_empty_query_string": {
+      "_when": "agent supplies an empty-string query — a deliberate 'show me everything' on a typed surface where the catalog allows the string type",
+      "input": { "query": "" },
+      "expected_wire_payload": { "query": "" }
+    },
+
+    "search_null_category": {
+      "_when": "agent supplies category=null — semantically 'no category filter'. openclaw's compactPayload drops it; every other stack forwards the null, which the marketplace's matcher reads as 'unfiltered'",
+      "input": { "query": "laptop", "category": null },
+      "expected_wire_payload": { "query": "laptop", "category": null }
+    },
+
+    "search_undefined_via_omission": {
+      "_when": "agent omits a param entirely — should be IDENTICAL to passing undefined. The wire payload simply does not carry the key",
+      "input": { "query": "vintage camera" },
+      "expected_wire_payload": { "query": "vintage camera" }
+    },
+
+    "search_empty_string_and_null_mix": {
+      "_when": "every divergence case in one payload — empty-string query + null category + omitted everything else. openclaw forwards `{}`; every other stack forwards `{query: '', category: null}`. This is the smoking-gun input the architect's discovery names as the central failure case",
+      "input": { "query": "", "category": null },
+      "expected_wire_payload": { "query": "", "category": null }
+    },
+
+    "search_pickup_with_radius": {
+      "_when": "delivery filter — pickup variant with explicit radiusKm. Discriminated-union variant; the catalog rejects fields foreign to the variant via additionalProperties:false",
+      "input": {
+        "query": "bike",
+        "delivery": { "method": "pickup", "radiusKm": 25 }
+      },
+      "expected_wire_payload": {
+        "query": "bike",
+        "delivery": { "method": "pickup", "radiusKm": 25 }
+      }
+    },
+
+    "search_ship_with_to": {
+      "_when": "delivery filter — ship variant with destination subdivision (US-NY)",
+      "input": {
+        "query": "rare vinyl",
+        "delivery": { "method": "ship", "to": "US-NY" }
+      },
+      "expected_wire_payload": {
+        "query": "rare vinyl",
+        "delivery": { "method": "ship", "to": "US-NY" }
+      }
+    },
+
+    "search_digital_variant": {
+      "_when": "delivery filter — digital variant carries no extra fields (per catalog discriminated union)",
+      "input": {
+        "category": "electronics",
+        "delivery": { "method": "digital" }
+      },
+      "expected_wire_payload": {
+        "category": "electronics",
+        "delivery": { "method": "digital" }
+      }
+    },
+
+    "search_any_variant": {
+      "_when": "delivery filter — explicit any variant (buyer opts in to flexibility, not nullable)",
+      "input": {
+        "query": "anything",
+        "delivery": { "method": "any" }
+      },
+      "expected_wire_payload": {
+        "query": "anything",
+        "delivery": { "method": "any" }
+      }
+    },
+
+    "search_with_cursor": {
+      "_when": "agent supplies a pagination cursor for the next page of results",
+      "input": {
+        "query": "keychron",
+        "cursor": "eyJjIjogIjEyMyJ9"
+      },
+      "expected_wire_payload": {
+        "query": "keychron",
+        "cursor": "eyJjIjogIjEyMyJ9"
+      }
+    },
+
+    "search_with_limit": {
+      "_when": "agent sets an explicit result cap",
+      "input": {
+        "query": "mechanical keyboard",
+        "limit": 50
+      },
+      "expected_wire_payload": {
+        "query": "mechanical keyboard",
+        "limit": 50
+      }
+    },
+
+    "search_minimal_empty_object": {
+      "_when": "agent supplies no params at all — the catalog allows it (all params optional). Empty-object input → empty-object payload. All stacks agree here; this is the trivial baseline",
+      "input": {},
+      "expected_wire_payload": {}
+    },
+
+    "search_fully_populated": {
+      "_when": "every catalog param present with typical agent values. The wire payload mirrors the input one-for-one (the tool is a thin pass-through)",
+      "input": {
+        "query": "ergonomic chair",
+        "category": "furniture",
+        "min_price": 10000,
+        "max_price": 50000,
+        "delivery": { "method": "pickup", "radiusKm": 50 },
+        "condition": "good",
+        "limit": 20,
+        "cursor": "eyJwYWdlIjogMn0="
+      },
+      "expected_wire_payload": {
+        "query": "ergonomic chair",
+        "category": "furniture",
+        "min_price": 10000,
+        "max_price": 50000,
+        "delivery": { "method": "pickup", "radiusKm": 50 },
+        "condition": "good",
+        "limit": 20,
+        "cursor": "eyJwYWdlIjogMn0="
+      }
+    }
+  },
+
+  "searches_create": {
+    "_doc": "klodi_searches_create inputs. The catalog requires `slug`; `query` / `category` / `min_price` / `max_price` / `delivery` are optional (packages/tool-catalog/src/index.ts:386-395). The standing-search criteria payload mirrors `klodi_search`'s param shape so the marketplace's matcher can evaluate it with the same code path on every new listing. PO SC7.4 closure: tier (1) here proves the REGISTRATION payload reaches the service intact; tier (2) covers end-to-end matcher equivalence. The `klodi_watch` composite in openclaw / Rust does construct the searches.create payload differently from a direct `klodi_searches_create` invocation (it generates the slug, defaults delivery to {method:'any'}); this fixture exercises the catalog tool DIRECTLY, not the composite — agents calling `klodi_searches_create` always supply `slug` themselves.",
+
+    "searches_create_minimal_slug_only": {
+      "_when": "agent registers a placeholder standing search with no filtering criteria — the marketplace records it but never matches a listing",
+      "input": { "slug": "watch-everything-abc123" },
+      "expected_wire_payload": { "slug": "watch-everything-abc123" }
+    },
+
+    "searches_create_with_empty_query": {
+      "_when": "agent supplies an empty-string query alongside the slug — semantically a 'no-keyword' filter. openclaw drops `query: ''` today; every other stack records it. The marketplace's matcher reads empty-string as 'no keyword constraint' (per skill/SKILL.md §6) — but a stack that drops it sends a fundamentally different criteria payload from a stack that forwards it",
+      "input": { "slug": "any-pickup-abc456", "query": "" },
+      "expected_wire_payload": { "slug": "any-pickup-abc456", "query": "" }
+    },
+
+    "searches_create_with_null_category": {
+      "_when": "agent supplies category=null with the slug. Mirrors the `klodi_search` divergence on the registration path",
+      "input": { "slug": "broad-search-abc789", "query": "kindle", "category": null },
+      "expected_wire_payload": { "slug": "broad-search-abc789", "query": "kindle", "category": null }
+    },
+
+    "searches_create_with_full_criteria": {
+      "_when": "agent registers a standing search with the full filter set. The marketplace's `criteria` reply object pins the values back to the agent — tier (2) e2e asserts the round-tripped criteria match what was sent. This entry is the canonical 'fully-populated' criteria recording case (architect handoff: `klodi_searches_create criteria recording`)",
+      "input": {
+        "slug": "gaming-laptop-abc012",
+        "query": "gaming laptop",
+        "category": "electronics",
+        "min_price": 50000,
+        "max_price": 250000,
+        "delivery": { "method": "ship", "to": "US" }
+      },
+      "expected_wire_payload": {
+        "slug": "gaming-laptop-abc012",
+        "query": "gaming laptop",
+        "category": "electronics",
+        "min_price": 50000,
+        "max_price": 250000,
+        "delivery": { "method": "ship", "to": "US" }
+      }
+    },
+
+    "searches_create_pickup_delivery": {
+      "_when": "agent registers a standing search filtered by pickup delivery with a radius. Discriminated-union variant",
+      "input": {
+        "slug": "local-furniture-abc345",
+        "query": "desk",
+        "delivery": { "method": "pickup", "radiusKm": 15 }
+      },
+      "expected_wire_payload": {
+        "slug": "local-furniture-abc345",
+        "query": "desk",
+        "delivery": { "method": "pickup", "radiusKm": 15 }
+      }
+    },
+
+    "searches_create_any_delivery_explicit": {
+      "_when": "agent explicitly sets delivery={method:'any'}. Per the catalog this is opt-in flexibility (not nullable). Every stack should forward verbatim",
+      "input": {
+        "slug": "vintage-cameras-abc678",
+        "query": "pentax k1000",
+        "delivery": { "method": "any" }
+      },
+      "expected_wire_payload": {
+        "slug": "vintage-cameras-abc678",
+        "query": "pentax k1000",
+        "delivery": { "method": "any" }
+      }
+    }
+  }
+}

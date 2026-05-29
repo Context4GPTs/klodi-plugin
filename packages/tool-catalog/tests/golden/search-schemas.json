@@ -1,0 +1,121 @@
+{
+  "_doc": "Frozen JSON-Schema snapshot of klodi_search + klodi_searches_create params + result, generated from the TypeBox catalog at packages/tool-catalog/src/index.ts. Carries the stable-contract gate (PO SC-contract.2): diffing the current catalog's serialised schemas against this snapshot detects removals / renames / retypes / Optional→required-promotions. Additive changes (new Type.Optional fields) are permitted and require a coordinated snapshot bump in the same PR — never a silent regeneration. The TypeBox→JSON-Schema serialisation is the `.params` / `.result` object itself; TypeBox emits JSON-Schema-shaped objects natively. See ADR-0011 envelope-golden for the precedent (snapshot-tested cross-language contract).",
+
+  "klodi_search": {
+    "_doc": "klodi_search params + result, frozen as of card tool-service-search-parity-verification RED phase. The catalog is packages/tool-catalog/src/index.ts:353-377. params are ALL optional (query / category / min_price / max_price / delivery / condition / limit / cursor); result is the {results: ListingSearchSummary[], total: int} pair the marketplace returns.",
+    "params": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "category": {
+          "description": "Item category",
+          "anyOf": [
+            { "const": "electronics", "type": "string" },
+            { "const": "furniture", "type": "string" },
+            { "const": "vehicles", "type": "string" },
+            { "const": "clothing", "type": "string" },
+            { "const": "home_garden", "type": "string" },
+            { "const": "sports", "type": "string" },
+            { "const": "collectibles", "type": "string" },
+            { "const": "books", "type": "string" },
+            { "const": "music", "type": "string" },
+            { "const": "tools", "type": "string" },
+            { "const": "garden", "type": "string" },
+            { "const": "art", "type": "string" },
+            { "const": "tickets", "type": "string" },
+            { "const": "services", "type": "string" },
+            { "const": "other", "type": "string" }
+          ]
+        },
+        "min_price": {
+          "description": "Price in integer cents (e.g. 12345 = $123.45)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_price": {
+          "description": "Price in integer cents (e.g. 12345 = $123.45)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "delivery": {
+          "description": "Buyer's delivery preference. Pick the variant matching the buyer's intent — fields from one variant cannot appear on another (the type system rejects it).",
+          "anyOf": [
+            { "type": "object", "properties": { "method": { "const": "pickup", "type": "string" }, "radiusKm": { "description": "Km radius around buyer's profile location. Omit for any-distance pickup match.", "maximum": 1000, "minimum": 1, "type": "integer" } }, "required": ["method"], "additionalProperties": false },
+            { "type": "object", "properties": { "method": { "const": "ship", "type": "string" }, "to": { "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$", "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)", "type": "string" } }, "required": ["method"], "additionalProperties": false },
+            { "type": "object", "properties": { "method": { "const": "digital", "type": "string" } }, "required": ["method"], "additionalProperties": false },
+            { "type": "object", "properties": { "method": { "const": "any", "type": "string" } }, "required": ["method"], "additionalProperties": false }
+          ]
+        },
+        "condition": {
+          "description": "Listing condition",
+          "anyOf": [
+            { "const": "new", "type": "string" },
+            { "const": "like_new", "type": "string" },
+            { "const": "good", "type": "string" },
+            { "const": "fair", "type": "string" },
+            { "const": "for_parts", "type": "string" }
+          ]
+        },
+        "limit": {
+          "description": "Max results (default 20)",
+          "type": "integer"
+        },
+        "cursor": { "type": "string" }
+      }
+    }
+  },
+
+  "klodi_searches_create": {
+    "_doc": "klodi_searches_create params + result, frozen as of card tool-service-search-parity-verification RED phase. The catalog is packages/tool-catalog/src/index.ts:379-411. `slug` is REQUIRED; criteria fields (query / category / min_price / max_price / delivery) are optional. Result includes the canonical `criteria` object the marketplace records — proves the registration payload reached the service intact.",
+    "params": {
+      "type": "object",
+      "properties": {
+        "slug": {
+          "description": "Stable client-chosen slug. Last-write-wins per (user, slug).",
+          "type": "string"
+        },
+        "query": { "type": "string" },
+        "category": {
+          "description": "Item category",
+          "anyOf": [
+            { "const": "electronics", "type": "string" },
+            { "const": "furniture", "type": "string" },
+            { "const": "vehicles", "type": "string" },
+            { "const": "clothing", "type": "string" },
+            { "const": "home_garden", "type": "string" },
+            { "const": "sports", "type": "string" },
+            { "const": "collectibles", "type": "string" },
+            { "const": "books", "type": "string" },
+            { "const": "music", "type": "string" },
+            { "const": "tools", "type": "string" },
+            { "const": "garden", "type": "string" },
+            { "const": "art", "type": "string" },
+            { "const": "tickets", "type": "string" },
+            { "const": "services", "type": "string" },
+            { "const": "other", "type": "string" }
+          ]
+        },
+        "min_price": {
+          "description": "Price in integer cents (e.g. 12345 = $123.45)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_price": {
+          "description": "Price in integer cents (e.g. 12345 = $123.45)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "delivery": {
+          "description": "Buyer's delivery preference. Pick the variant matching the buyer's intent — fields from one variant cannot appear on another (the type system rejects it).",
+          "anyOf": [
+            { "type": "object", "properties": { "method": { "const": "pickup", "type": "string" }, "radiusKm": { "description": "Km radius around buyer's profile location. Omit for any-distance pickup match.", "maximum": 1000, "minimum": 1, "type": "integer" } }, "required": ["method"], "additionalProperties": false },
+            { "type": "object", "properties": { "method": { "const": "ship", "type": "string" }, "to": { "pattern": "^[A-Z]{2}(-[A-Z0-9]{1,5})?$", "description": "ISO 3166 country or country-subdivision (e.g. US, US-NY)", "type": "string" } }, "required": ["method"], "additionalProperties": false },
+            { "type": "object", "properties": { "method": { "const": "digital", "type": "string" } }, "required": ["method"], "additionalProperties": false },
+            { "type": "object", "properties": { "method": { "const": "any", "type": "string" } }, "required": ["method"], "additionalProperties": false }
+          ]
+        }
+      },
+      "required": ["slug"]
+    }
+  }
+}
