@@ -5409,6 +5409,73 @@
       "host_shapes": [
         "in_agent"
       ]
+    },
+    "klodi_match_feedback": {
+      "name": "klodi_match_feedback",
+      "description": "Report the agent's pursue/dismiss verdict on a standing-search match. Direct JetStream publish to p2p.v1.searches.match_feedback; the marketplace records it as a training example (SC8 flywheel). The wire carries the ACTION (outcome), never a ± label — the label is derived server-side. Call exactly once per (search, listing) verdict, after evaluating the match against the buy file.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "search_slug": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,119}$",
+            "description": "The standing-search slug the match belongs to.",
+            "type": "string"
+          },
+          "listing_id": {
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "The matched listing the verdict is about.",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "The agent's verdict: pursued or dismissed.",
+            "anyOf": [
+              {
+                "const": "pursued",
+                "type": "string"
+              },
+              {
+                "const": "dismissed",
+                "type": "string"
+              }
+            ]
+          },
+          "action_on_match": {
+            "minLength": 1,
+            "maxLength": 40,
+            "description": "The buy file's action_on_match mode in effect (e.g. notify, negotiate) — provenance for curation-side filtering.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "search_slug",
+          "listing_id",
+          "outcome"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "description": "UUID v4 identifier",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id",
+          "sequence"
+        ]
+      },
+      "kind": "publish",
+      "host_shapes": [
+        "in_agent"
+      ]
     }
   },
   "local_tools_by_host_shape": {
@@ -5422,7 +5489,8 @@
       "klodi_setup_repair",
       "klodi_setup_reseed_policies",
       "klodi_setup_reseed_skill",
-      "klodi_channel_message"
+      "klodi_channel_message",
+      "klodi_match_feedback"
     ],
     "daemon": [],
     "cli_only": [
