@@ -8,7 +8,8 @@ Rows are sorted **newest `updated_at` first**.
 
 | Doc | Title | Tags | Updated |
 |---|---|---|---|
-| [[0011-adapter-exception-envelope]] | Adapter exception envelope and pre-call guard contract | envelope, guards, error-handling, adapters, parity | 2026-05-23 |
+| [[0012-tool-request-payload-parity]] | Tool→service request-payload parity (raw catalog pass-through) | parity, payload, adapters, catalog, search, request-path | 2026-05-29 |
+| [[0011-adapter-exception-envelope]] | Adapter exception envelope and pre-call guard contract | envelope, guards, error-handling, adapters, parity | 2026-05-29 |
 | [[0006-direct-to-storage-photo-uploads]] | Direct-to-storage photo uploads via signed URLs | uploads, r2, marketplace | 2026-05-23 |
 | [[0010-zeroclaw-browser-pairing-shim]] | Browser-pairing helper for klodi-zeroclaw (auto-mint + loopback HTTP shim) | zeroclaw, pairing, auth | 2026-05-10 |
 | [[0004-preserve-state-on-uninstall]] | Preserve `$klodi_home` on uninstall | uninstall, state, openclaw | 2026-05-04 |

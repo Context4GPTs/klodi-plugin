@@ -58,7 +58,7 @@ function registerSearch(api: PluginAPI): void {
     async execute(_id, params) {
       const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
-      // See ADR-0011 SC-parity.1 — the catalog defines the wire shape;
+      // See ADR-0012 SC-parity.1 — the catalog defines the wire shape;
       // openclaw forwards catalog-shaped params raw. The previous
       // `compactPayload(params)` step dropped `null` / `""` / `undefined`
       // and stripped adapter-internal flags, which silently diverged from
@@ -79,7 +79,7 @@ function registerSearch(api: PluginAPI): void {
 }
 
 function registerSearchesCreate(api: PluginAPI): void {
-  // See ADR-0011 SC-parity.2 — `klodi_searches_create` is a canonical
+  // See ADR-0012 SC-parity.2 — `klodi_searches_create` is a canonical
   // catalog tool; agents must be able to register a standing search
   // directly (with their own slug) without going through the
   // `klodi_watch` composite. hermes / nanobot / klodi-rust-host all
