@@ -268,7 +268,7 @@ async fn dispatch_passthrough(
     } else {
         args
     };
-    // See ADR-0011 SC-parity.1 — the wire payload for every catalog
+    // See ADR-0012 SC-parity.1 — the wire payload for every catalog
     // passthrough is the raw `JsonObject` lifted into a `Value::Object`.
     // The helper pins that contract so the cross-language parity test
     // can exercise the transform without a live NATS dial.
@@ -286,7 +286,7 @@ async fn dispatch_passthrough(
 /// forwards unchanged. This helper exposes that contract so the
 /// cross-language parity test
 /// (`tests/search_payload_parity.rs`) can exercise it without dialing
-/// NATS or instantiating a `KlodiClient`. See ADR-0011 SC-parity.{1,2}.
+/// NATS or instantiating a `KlodiClient`. See ADR-0012 SC-parity.{1,2}.
 pub fn payload_for_passthrough(args: JsonObject) -> Value {
     Value::Object(args)
 }
@@ -298,7 +298,7 @@ pub fn payload_for_passthrough(args: JsonObject) -> Value {
 /// Used by the cross-language parity test to assert that the Rust
 /// adapter's exposed schema for each search tool stays byte-equivalent
 /// to the canonical catalog after codegen normalisation
-/// (SC-contract.3). See ADR-0011.
+/// (SC-contract.3). See ADR-0012.
 pub fn tool_input_schema_for(name: &str) -> Option<&'static Value> {
     catalog().tools.get(name).map(|entry| &entry.params)
 }
