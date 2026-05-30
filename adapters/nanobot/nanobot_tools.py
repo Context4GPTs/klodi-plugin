@@ -35,6 +35,7 @@ from typing import Any
 
 from klodi_nats_client import (
     CHANNEL_MESSAGE_PARAMS,
+    MATCH_FEEDBACK_PARAMS,
     KlodiRequestError,
     TOOL_SCHEMAS,
     ToolSchema,
@@ -78,6 +79,8 @@ _PUBLISH_TOOLS: frozenset[str] = frozenset({
     # Per **D § D4** (P3-3): canonical name is `klodi_channel_message`;
     # the legacy `klodi_channel_send` was removed in 0012.
     "klodi_channel_message",
+    # SC8 flywheel emit — reports a standing-search match verdict.
+    "klodi_match_feedback",
 })
 
 # Tools whose `photos` parameter is run through the adapter-internal
@@ -134,6 +137,34 @@ async def publish_channel_message(
     return await client.publish_channel_message(channel_id, {"content": content})
 
 
+async def publish_match_feedback(
+    search_slug: str,
+    listing_id: str,
+    outcome: str,
+    action_on_match: str | None = None,
+) -> dict[str, Any]:
+    """Report a standing-search match verdict (SC8 flywheel emit).
+
+    Direct JetStream publish to ``p2p.v1.searches.match_feedback``. Returns
+    ``{sequence, event_id}``. The slug / listing / outcome shape is validated
+    inside the client helper (``listing_id`` is a non-empty bounded string,
+    NOT a UUID — it rides in the body, not a subject path).
+    """
+    if not isinstance(search_slug, str) or not search_slug:
+        raise ValueError("search_slug must be a non-empty string")
+    if not isinstance(listing_id, str) or not listing_id:
+        raise ValueError("listing_id must be a non-empty string")
+    if not isinstance(outcome, str) or not outcome:
+        raise ValueError("outcome must be a non-empty string")
+    client = get_client()
+    return await client.publish_match_feedback(
+        search_slug=search_slug,
+        listing_id=listing_id,
+        outcome=outcome,
+        action_on_match=action_on_match,
+    )
+
+
 def _tool_definition(name: str, schema: ToolSchema) -> dict[str, Any]:
     """Render a ``TOOL_DEFINITIONS`` entry.
 
@@ -176,6 +207,16 @@ def _build_definitions() -> list[dict[str, Any]]:
             " Returns the JetStream sequence as durability proof."
         ),
         "parameters": CHANNEL_MESSAGE_PARAMS,
+    })
+    out.append({
+        "name": "klodi_match_feedback",
+        "description": (
+            "Report your pursue/dismiss verdict on a standing-search match."
+            " Published to the marketplace as a training example (SC8"
+            " flywheel). Send the action you took (outcome); the label is"
+            " derived server-side. Call once per (search, listing) verdict."
+        ),
+        "parameters": MATCH_FEEDBACK_PARAMS,
     })
     return out
 
@@ -227,6 +268,30 @@ async def handle(name: str, args: dict[str, Any]) -> str:
         except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
             # Adapter-internal failure — R2 says `internal_error`, not
             # `connection_not_ready` (P1.3 fix).
+            return json.dumps(envelope_from_unknown(err))
+        return json.dumps(result)
+
+    if name == "klodi_match_feedback":
+        # SC8 flywheel emit — direct JetStream publish. R4 — creds guard
+        # fails BEFORE any I/O.
+        creds_env = guard_creds(default_klodi_home(), NANOBOT_REGISTER_CLI)
+        if creds_env is not None:
+            return json.dumps(creds_env)
+        for field in ("search_slug", "listing_id", "outcome"):
+            if field not in args:
+                return json.dumps(_invalid_request(field, "missing"))
+        try:
+            result = await publish_match_feedback(
+                args["search_slug"],
+                args["listing_id"],
+                args["outcome"],
+                args.get("action_on_match"),
+            )
+        except ValueError as err:
+            return json.dumps(envelope_from_unknown(err))
+        except _CONNECTION_ERROR_TYPES:
+            return json.dumps(envelope_from_not_connected())
+        except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
             return json.dumps(envelope_from_unknown(err))
         return json.dumps(result)
 
@@ -325,4 +390,5 @@ __all__ = [
     "call_tool",
     "handle",
     "publish_channel_message",
+    "publish_match_feedback",
 ]

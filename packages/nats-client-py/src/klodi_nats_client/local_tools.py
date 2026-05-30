@@ -63,4 +63,48 @@ CHANNEL_MESSAGE_PARAMS: dict[str, Any] = {
 }
 
 
-__all__ = ["CHANNEL_MESSAGE_PARAMS"]
+#: Input parameters schema for the ``klodi_match_feedback`` local-publish tool
+#: (SC8 flywheel emit). Mirrors the catalog ``LOCAL_TOOLS.klodi_match_feedback``
+#: params and the sibling marketplace ``MatchFeedback`` contract field-for-field.
+#:
+#: Consumed by Hermes (``adapters/hermes/.../tools.py``) and nanobot
+#: (``adapters/nanobot/nanobot_tools.py``). Note: ``listing_id`` is a bounded
+#: string (1..64), NOT a UUID — it rides in the body, not a subject path, and
+#: the marketplace re-reads the Listing row as the real gate. ``outcome`` is a
+#: closed set; ``action_on_match`` is optional provenance (capped at 40,
+#: omitted when absent). No ``label`` field — the ± label is server-derived.
+MATCH_FEEDBACK_PARAMS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "search_slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,119}$",
+            "description": "The standing-search slug the match belongs to.",
+        },
+        "listing_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "The matched listing the verdict is about.",
+        },
+        "outcome": {
+            "type": "string",
+            "enum": ["pursued", "dismissed"],
+            "description": "The agent's verdict: pursued or dismissed.",
+        },
+        "action_on_match": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "description": (
+                "The buy file's action_on_match mode in effect (e.g. notify,"
+                " negotiate) — provenance for curation-side filtering."
+            ),
+        },
+    },
+    "required": ["search_slug", "listing_id", "outcome"],
+    "additionalProperties": False,
+}
+
+
+__all__ = ["CHANNEL_MESSAGE_PARAMS", "MATCH_FEEDBACK_PARAMS"]

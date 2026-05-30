@@ -118,3 +118,96 @@ export async function publishChannelMessage(
     created_at: createdAt,
   };
 }
+
+// ─── Match-feedback publish (SC8 flywheel emit) ───────────────────────
+//
+// Reports an agent's pursue/dismiss verdict on a standing-search match to
+// `p2p.v1.searches.match_feedback`, where the marketplace records it as a
+// training example. Mirrors `publishChannelMessage`'s spine (mint event_id,
+// encode body once, pass it as the `Nats-Msg-Id` dedup header) but diverges
+// deliberately in validation: `search_slug` / `listing_id` ride in the BODY,
+// not the subject, so the strict UUID-v4 guard is NOT reused — a non-UUID
+// listing id the marketplace accepts must be accepted here too. See ADR-0013.
+
+/** The closed outcome set. Matches the marketplace's `labelForOutcome`. */
+const MATCH_FEEDBACK_OUTCOMES = ["pursued", "dismissed"] as const;
+export type MatchFeedbackOutcome = (typeof MATCH_FEEDBACK_OUTCOMES)[number];
+
+/** Subject the marketplace's SC8a capture-consumer drains. */
+const MATCH_FEEDBACK_SUBJECT = "p2p.v1.searches.match_feedback";
+
+/**
+ * Marketplace slug pattern (`^[a-z0-9][a-z0-9._-]{0,119}$`). The slug never
+ * enters a subject path here, but validating it before the wire write keeps
+ * the plugin half byte-aligned with the marketplace schema (and rejects an
+ * empty / whitespace / uppercase / over-long slug at the boundary).
+ */
+const MATCH_FEEDBACK_SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,119}$/;
+
+const MAX_LISTING_ID_LENGTH = 64;
+
+export interface PublishMatchFeedbackArgs {
+  js: JetStreamClient;
+  searchSlug: string;
+  listingId: string;
+  outcome: MatchFeedbackOutcome;
+  /** The buy file's action_on_match mode in effect; omitted from the wire when absent. */
+  actionOnMatch?: string;
+}
+
+export interface PublishMatchFeedbackResult {
+  sequence: number;
+  event_id: string;
+}
+
+/**
+ * Publish a match-feedback verdict. Stateless: each call mints a fresh
+ * `event_id` (the `Nats-Msg-Id` dedup header), so a redelivered wake or a
+ * flipped verdict re-emits safely — the marketplace upsert is idempotent
+ * per (user, search, listing), last-verdict-wins. The body is EXACTLY
+ * `{ search_slug, listing_id, outcome, action_on_match? }` — no ± label
+ * (server-derived), no `listing_summary` (server re-read).
+ */
+export async function publishMatchFeedback(
+  args: PublishMatchFeedbackArgs,
+): Promise<PublishMatchFeedbackResult> {
+  if (!MATCH_FEEDBACK_SLUG_RE.test(args.searchSlug)) {
+    throw new Error(
+      `publishMatchFeedback: search_slug must match ${MATCH_FEEDBACK_SLUG_RE.source}`
+      + ` (got ${JSON.stringify(args.searchSlug)})`,
+    );
+  }
+  if (args.listingId.length === 0 || args.listingId.length > MAX_LISTING_ID_LENGTH) {
+    throw new Error(
+      `publishMatchFeedback: listing_id must be 1..${MAX_LISTING_ID_LENGTH} chars`
+      + ` (got length ${args.listingId.length})`,
+    );
+  }
+  if (!(MATCH_FEEDBACK_OUTCOMES as readonly string[]).includes(args.outcome)) {
+    throw new Error(
+      `publishMatchFeedback: outcome must be one of ${MATCH_FEEDBACK_OUTCOMES.join(", ")}`
+      + ` (got ${JSON.stringify(args.outcome)})`,
+    );
+  }
+
+  const eventId = randomUUID();
+
+  // Build the body with field order matching the Py/Rust halves. The optional
+  // provenance is OMITTED entirely when absent — never serialized as null.
+  const body: Record<string, string> = {
+    search_slug: args.searchSlug,
+    listing_id: args.listingId,
+    outcome: args.outcome,
+  };
+  if (args.actionOnMatch !== undefined) {
+    body["action_on_match"] = args.actionOnMatch;
+  }
+
+  const ack = await args.js.publish(
+    MATCH_FEEDBACK_SUBJECT,
+    encoder.encode(JSON.stringify(body)),
+    { msgID: eventId },
+  );
+
+  return { sequence: ack.seq, event_id: eventId };
+}
