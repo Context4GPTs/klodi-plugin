@@ -122,8 +122,105 @@ async def publish_channel_message(
     )
 
 
+# ── Match-feedback publish (SC8 flywheel emit) ────────────────────────
+#
+# Reports an agent's pursue/dismiss verdict on a standing-search match to
+# ``p2p.v1.searches.match_feedback``. Byte-for-byte wire parity with the TS
+# ``publishMatchFeedback`` and the Rust ``MatchFeedbackPayload``: same field
+# order, ``Nats-Msg-Id`` dedup header = the minted ``event_id``,
+# ``action_on_match`` omitted (not null) when absent. The body carries the
+# ACTION (``outcome``), never a ± label — that is server-derived. Validation
+# diverges deliberately from ``publish_channel_message``: ``search_slug`` /
+# ``listing_id`` ride in the body, not a subject path, so the strict UUID-v4
+# guard is NOT reused — a non-UUID listing id must be accepted. See the card
+# emit-standing-search-accept-dismiss-feedback.
+
+#: The closed outcome set — matches the marketplace's ``labelForOutcome``.
+_MATCH_FEEDBACK_OUTCOMES: frozenset[str] = frozenset({"pursued", "dismissed"})
+
+#: Subject the marketplace's SC8a capture-consumer drains.
+_MATCH_FEEDBACK_SUBJECT = "p2p.v1.searches.match_feedback"
+
+#: Marketplace slug pattern (``^[a-z0-9][a-z0-9._-]{0,119}$``).
+_MATCH_FEEDBACK_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,119}$")
+
+_MAX_LISTING_ID_LENGTH = 64
+
+
+@dataclass(frozen=True)
+class PublishMatchFeedbackResult:
+    """Returned by :func:`publish_match_feedback`."""
+
+    sequence: int
+    event_id: str
+
+
+async def publish_match_feedback(
+    *,
+    js: JetStreamContext,
+    search_slug: str,
+    listing_id: str,
+    outcome: str,
+    action_on_match: str | None = None,
+) -> PublishMatchFeedbackResult:
+    """Publish a match-feedback verdict to the searches domain.
+
+    Stateless: each call mints a fresh ``event_id`` (the ``Nats-Msg-Id``
+    dedup header), so a redelivered wake or a flipped verdict re-emits
+    safely — the marketplace upsert is idempotent per (user, search,
+    listing). The body is EXACTLY ``{search_slug, listing_id, outcome,
+    action_on_match?}`` — no ± label, no ``listing_summary``.
+
+    Raises ``ValueError`` (before any wire write) on a bad slug, an
+    empty/over-long ``listing_id``, or an out-of-set ``outcome``.
+    """
+    if not isinstance(search_slug, str) or not _MATCH_FEEDBACK_SLUG_RE.fullmatch(
+        search_slug
+    ):
+        raise ValueError(
+            f"publish_match_feedback: search_slug must match"
+            f" {_MATCH_FEEDBACK_SLUG_RE.pattern} (got {search_slug!r})"
+        )
+    if (
+        not isinstance(listing_id, str)
+        or not listing_id
+        or len(listing_id) > _MAX_LISTING_ID_LENGTH
+    ):
+        raise ValueError(
+            f"publish_match_feedback: listing_id must be 1..{_MAX_LISTING_ID_LENGTH}"
+            f" chars (got {listing_id!r})"
+        )
+    if outcome not in _MATCH_FEEDBACK_OUTCOMES:
+        raise ValueError(
+            f"publish_match_feedback: outcome must be one of"
+            f" {sorted(_MATCH_FEEDBACK_OUTCOMES)} (got {outcome!r})"
+        )
+
+    event_id = str(uuid.uuid4())
+
+    # Field order matches the TS/Rust halves. Optional provenance is OMITTED
+    # entirely when absent — never serialized as null.
+    body: dict[str, str] = {
+        "search_slug": search_slug,
+        "listing_id": listing_id,
+        "outcome": outcome,
+    }
+    if action_on_match is not None:
+        body["action_on_match"] = action_on_match
+
+    ack = await js.publish(
+        _MATCH_FEEDBACK_SUBJECT,
+        json.dumps(body).encode("utf-8"),
+        headers={"Nats-Msg-Id": event_id},
+    )
+
+    return PublishMatchFeedbackResult(sequence=ack.seq, event_id=event_id)
+
+
 __all__ = [
     "MAX_CONTENT_LENGTH",
     "PublishChannelResult",
+    "PublishMatchFeedbackResult",
     "publish_channel_message",
+    "publish_match_feedback",
 ]

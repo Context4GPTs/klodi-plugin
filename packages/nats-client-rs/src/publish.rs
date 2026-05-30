@@ -158,6 +158,144 @@ pub async fn publish_channel_message(
     })
 }
 
+// ── Match-feedback publish (SC8 flywheel emit) ────────────────────────
+//
+// Reports an agent's pursue/dismiss verdict on a standing-search match to
+// `p2p.v1.searches.match_feedback`. Byte-for-byte wire parity with the TS
+// `publishMatchFeedback` and the Python `publish_match_feedback`: same field
+// order, `action_on_match` omitted (not null) when absent. The body carries
+// the ACTION (`outcome`), never a ± label — that is server-derived.
+//
+// Moltis / IronClaw / ZeroClaw are daemon hosts with an empty in-agent tool
+// surface, so they do NOT register this tool — but the crate carries the
+// payload + validator for cross-crate wire parity (same as the channel
+// message helper). Unlike `ChannelMessagePayload` (private, in-module-tested),
+// these are `pub` so the parity test in `tests/` can reach them cross-crate.
+//
+// The validator diverges deliberately from `is_uuid_v4`: `search_slug` /
+// `listing_id` ride in the BODY, not a subject path, so a non-UUID listing id
+// the marketplace accepts must be accepted here too. See the card
+// emit-standing-search-accept-dismiss-feedback.
+
+/// The match-feedback wire body. Exactly four fields — no `kind`, no
+/// `event_id` (that is a dedup header), no `label`, no `listing_summary`.
+/// `action_on_match` is omitted when `None` so the marketplace defaults it.
+#[derive(Serialize)]
+pub struct MatchFeedbackPayload<'a> {
+    pub search_slug: &'a str,
+    pub listing_id: &'a str,
+    pub outcome: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_on_match: Option<&'a str>,
+}
+
+const MAX_LISTING_ID_LEN: usize = 64;
+const MAX_SEARCH_SLUG_LEN: usize = 120;
+
+/// Whether `slug` matches the marketplace pattern
+/// `^[a-z0-9][a-z0-9._-]{0,119}$` (1..=120 chars, lowercase-alnum first char,
+/// then lowercase-alnum / `.` / `_` / `-`). Byte-walk to avoid a regex dep,
+/// mirroring `is_uuid_v4`.
+fn is_valid_search_slug(slug: &str) -> bool {
+    let bytes = slug.as_bytes();
+    if bytes.is_empty() || bytes.len() > MAX_SEARCH_SLUG_LEN {
+        return false;
+    }
+    for (i, &b) in bytes.iter().enumerate() {
+        let ok = match b {
+            b'a'..=b'z' | b'0'..=b'9' => true,
+            b'.' | b'_' | b'-' => i != 0,
+            _ => false,
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
+/// Validate a match-feedback verdict's body ids + outcome BEFORE any wire
+/// write. `search_slug` must match the marketplace slug pattern; `listing_id`
+/// must be a 1..=64-char non-empty string (NOT a UUID — the marketplace
+/// re-reads the Listing row as the real gate); `outcome` must be the closed
+/// `{pursued, dismissed}` set.
+pub fn validate_match_feedback(
+    search_slug: &str,
+    listing_id: &str,
+    outcome: &str,
+) -> Result<(), KlodiError> {
+    if !is_valid_search_slug(search_slug) {
+        return Err(KlodiError::InvalidContent(
+            "search_slug must match ^[a-z0-9][a-z0-9._-]{0,119}$",
+        ));
+    }
+    if listing_id.is_empty() || listing_id.len() > MAX_LISTING_ID_LEN {
+        return Err(KlodiError::InvalidContent(
+            "listing_id must be 1..=64 chars",
+        ));
+    }
+    if !matches!(outcome, "pursued" | "dismissed") {
+        return Err(KlodiError::InvalidContent(
+            "outcome must be 'pursued' or 'dismissed'",
+        ));
+    }
+    Ok(())
+}
+
+/// Publish a match-feedback verdict to `p2p.v1.searches.match_feedback`.
+/// Stateless: each call mints a fresh `event_id` (the `Nats-Msg-Id` dedup
+/// header), so a redelivered wake or a flipped verdict re-emits safely.
+///
+/// The daemon Rust hosts don't expose this tool today (empty in-agent
+/// allowlist), but the helper is here for wire parity and any future
+/// daemon-side caller.
+pub async fn publish_match_feedback(
+    ctx: &JetStreamContext,
+    search_slug: &str,
+    listing_id: &str,
+    outcome: &str,
+    action_on_match: Option<&str>,
+) -> Result<PublishAck, KlodiError> {
+    validate_match_feedback(search_slug, listing_id, outcome)?;
+
+    let event_id = Uuid::new_v4().to_string();
+    let created_at = format_iso8601_now();
+    let subject = "p2p.v1.searches.match_feedback";
+
+    let payload = MatchFeedbackPayload {
+        search_slug,
+        listing_id,
+        outcome,
+        action_on_match,
+    };
+    let body = serde_json::to_vec(&payload)?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_str(NATS_MSG_ID_HEADER).map_err(|err| {
+            KlodiError::NatsPublish(format!("invalid msg-id header name: {err}"))
+        })?,
+        event_id.as_str(),
+    );
+
+    let ack_future = ctx
+        .publish_with_headers(subject.to_string(), headers, body.into())
+        .await
+        .map_err(|err| KlodiError::NatsPublish(err.to_string()))?;
+
+    let ack = ack_future
+        .await
+        .map_err(|err| KlodiError::NatsPublish(format!("publish ack failed: {err}")))?;
+
+    Ok(PublishAck {
+        sequence: ack.sequence,
+        event_id,
+        // match-feedback has no message_id; the body carries no second id.
+        message_id: String::new(),
+        created_at,
+    })
+}
+
 /// RFC 3339 / ISO 8601 with millisecond precision and 'Z' suffix to match
 /// the TS publisher byte-for-byte. Avoids pulling chrono / time as a dep —
 /// SystemTime gives us seconds + nanos directly.

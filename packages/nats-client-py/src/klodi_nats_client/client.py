@@ -52,7 +52,10 @@ from klodi_nats_client.events import (
     NotificationEvent,
 )
 from klodi_nats_client.metrics import ClientMetrics, MutableMetrics
-from klodi_nats_client.publish import publish_channel_message
+from klodi_nats_client.publish import (
+    publish_channel_message,
+    publish_match_feedback,
+)
 
 log = logging.getLogger("klodi_nats_client")
 
@@ -369,6 +372,32 @@ class KlodiClient:
             content=content,
         )
         return {"sequence": result.sequence}
+
+    async def publish_match_feedback(
+        self,
+        *,
+        search_slug: str,
+        listing_id: str,
+        outcome: str,
+        action_on_match: str | None = None,
+    ) -> dict[str, Any]:
+        """Publish a standing-search match-feedback verdict (SC8 flywheel).
+
+        Stateless direct JetStream publish to
+        ``p2p.v1.searches.match_feedback`` — authorship is the
+        authenticated connection identity, so no searcher id rides on the
+        wire. Returns ``{"sequence": int, "event_id": str}``.
+        """
+        await self._require_connection()
+        js = self._require_js()
+        result = await publish_match_feedback(
+            js=js,
+            search_slug=search_slug,
+            listing_id=listing_id,
+            outcome=outcome,
+            action_on_match=action_on_match,
+        )
+        return {"sequence": result.sequence, "event_id": result.event_id}
 
     # ── Internals ─────────────────────────────────────────────────────
 

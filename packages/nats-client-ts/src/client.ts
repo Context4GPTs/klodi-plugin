@@ -47,7 +47,11 @@ import {
   type ActiveSubscription,
 } from "./consumers.js";
 import { KlodiMetrics, type ClientMetrics } from "./metrics.js";
-import { publishChannelMessage } from "./publish.js";
+import {
+  publishChannelMessage,
+  publishMatchFeedback,
+  type MatchFeedbackOutcome,
+} from "./publish.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -345,6 +349,23 @@ export class KlodiClient {
       content: body.content,
     });
     return { sequence: result.sequence };
+  }
+
+  /**
+   * Publish a standing-search match-feedback verdict (SC8 flywheel emit).
+   * Stateless direct JetStream publish to `p2p.v1.searches.match_feedback` —
+   * authorship is the authenticated connection identity, so no searcher id
+   * rides on the wire. Returns the minted `event_id` + stream sequence.
+   */
+  async publishMatchFeedback(args: {
+    searchSlug: string;
+    listingId: string;
+    outcome: MatchFeedbackOutcome;
+    actionOnMatch?: string;
+  }): Promise<{ sequence: number; event_id: string }> {
+    await this.requireConnection();
+    const js = await this.requireJetStream();
+    return publishMatchFeedback({ js, ...args });
   }
 
   /**
