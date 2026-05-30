@@ -30,6 +30,7 @@ from typing import Any
 
 from klodi_nats_client import (
     CHANNEL_MESSAGE_PARAMS,
+    MATCH_FEEDBACK_PARAMS,
     KlodiRequestError,
     TOOL_SCHEMAS,
     ToolSchema,
@@ -86,6 +87,7 @@ _TOOL_EMOJIS: dict[str, str] = {
     "klodi_searches_create": "👁️",
     "klodi_searches_delete": "✖️",
     "klodi_searches_list": "📔",
+    "klodi_match_feedback": "👍",
 }
 
 
@@ -279,6 +281,70 @@ def handle_channel_message(args: dict[str, Any], **_kwargs: Any) -> str:
     return json.dumps(result)
 
 
+# ── klodi_match_feedback — direct JetStream publish (SC8 flywheel) ─────
+
+
+def handle_match_feedback(args: dict[str, Any], **_kwargs: Any) -> str:
+    """Report the agent's pursue/dismiss verdict on a standing-search match.
+
+    Direct JetStream publish to ``p2p.v1.searches.match_feedback`` via
+    ``KlodiClient.publish_match_feedback``. Returns ``{sequence, event_id}``.
+    The wire carries the ACTION (``outcome``), never a ± label.
+
+    NOTE: ``listing_id`` is validated as a non-empty string, NOT a UUID — it
+    rides in the body, not a subject path (the deliberate divergence from
+    ``klodi_channel_message``). Slug / listing / outcome shape checks happen
+    in the publish helper; this arm rejects only the missing-required case
+    locally for an actionable ``invalid_request`` envelope.
+    """
+    # R4 — creds guard fails BEFORE any I/O.
+    creds_env = guard_creds(default_klodi_home(), HERMES_REGISTER_CLI)
+    if creds_env is not None:
+        return json.dumps(creds_env)
+
+    search_slug = args.get("search_slug")
+    listing_id = args.get("listing_id")
+    outcome = args.get("outcome")
+    for field, value in (
+        ("search_slug", search_slug),
+        ("listing_id", listing_id),
+        ("outcome", outcome),
+    ):
+        if not isinstance(value, str) or not value:
+            return json.dumps(_invalid_request(
+                field, "missing" if value is None else (
+                    "empty" if value == "" else "wrong_type"
+                ),
+            ))
+
+    try:
+        client = get_client()
+        result = run_async(client.publish_match_feedback(
+            search_slug=search_slug,
+            listing_id=listing_id,
+            outcome=outcome,
+            action_on_match=args.get("action_on_match"),
+        ))
+    except ValueError as err:
+        # The publish helper rejected the slug / listing / outcome shape.
+        return json.dumps(envelope_from_unknown(err))
+    except _CONNECTION_ERROR_TYPES as err:
+        log.warning(
+            "klodi_match_feedback_connection_failed search_slug=%s error=%s",
+            search_slug,
+            err,
+        )
+        return json.dumps(envelope_from_not_connected())
+    except Exception as err:  # noqa: BLE001 — boundary; KeyboardInterrupt/SystemExit propagate
+        log.warning(
+            "klodi_match_feedback_failed search_slug=%s error=%s",
+            search_slug,
+            err,
+        )
+        return json.dumps(envelope_from_unknown(err))
+    return json.dumps(result)
+
+
 def _invalid_request(field: str, problem: str) -> dict[str, Any]:
     """Local envelope for adapter-side schema rejections (R2 invalid_request)."""
     return make_envelope(
@@ -318,6 +384,7 @@ def _is_local_tool(name: str) -> bool:
         "klodi_unwatch",
         # this module
         "klodi_channel_message",
+        "klodi_match_feedback",
     }
 
 
@@ -377,6 +444,29 @@ def register_request_tools(ctx: Any) -> int:
         emoji=tool_emoji("klodi_channel_message"),
     )
     registered += 1
+
+    # klodi_match_feedback — direct JetStream publish (SC8 flywheel emit),
+    # not a NATS request, so it can't come from the request-bridge loop.
+    ctx.register_tool(
+        name="klodi_match_feedback",
+        toolset="klodi",
+        schema={
+            "name": "klodi_match_feedback",
+            "description": (
+                "Report your pursue/dismiss verdict on a standing-search"
+                " match. Published to the marketplace as a training example."
+                " Send the action you took (outcome); the label is derived"
+                " server-side. Call once per (search, listing) verdict."
+            ),
+            "parameters": MATCH_FEEDBACK_PARAMS,
+        },
+        handler=handle_match_feedback,
+        requires_env=[],
+        is_async=False,
+        description="Report a standing-search match verdict.",
+        emoji=tool_emoji("klodi_match_feedback"),
+    )
+    registered += 1
     return registered
 
 
@@ -398,6 +488,7 @@ def _function_schema(name: str, schema: ToolSchema) -> dict[str, Any]:
 __all__ = [
     "build_request_handler",
     "handle_channel_message",
+    "handle_match_feedback",
     "register_request_tools",
     "tool_emoji",
 ]
