@@ -174,8 +174,7 @@ pub async fn publish_channel_message(
 //
 // The validator diverges deliberately from `is_uuid_v4`: `search_slug` /
 // `listing_id` ride in the BODY, not a subject path, so a non-UUID listing id
-// the marketplace accepts must be accepted here too. See the card
-// emit-standing-search-accept-dismiss-feedback.
+// the marketplace accepts must be accepted here too. See ADR-0013.
 
 /// The match-feedback wire body. Exactly four fields — no `kind`, no
 /// `event_id` (that is a dedup header), no `label`, no `listing_summary`.

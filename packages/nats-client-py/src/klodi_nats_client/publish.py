@@ -132,8 +132,7 @@ async def publish_channel_message(
 # ACTION (``outcome``), never a ± label — that is server-derived. Validation
 # diverges deliberately from ``publish_channel_message``: ``search_slug`` /
 # ``listing_id`` ride in the body, not a subject path, so the strict UUID-v4
-# guard is NOT reused — a non-UUID listing id must be accepted. See the card
-# emit-standing-search-accept-dismiss-feedback.
+# guard is NOT reused — a non-UUID listing id must be accepted. See ADR-0013.
 
 #: The closed outcome set — matches the marketplace's ``labelForOutcome``.
 _MATCH_FEEDBACK_OUTCOMES: frozenset[str] = frozenset({"pursued", "dismissed"})

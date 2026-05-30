@@ -127,8 +127,7 @@ export async function publishChannelMessage(
 // encode body once, pass it as the `Nats-Msg-Id` dedup header) but diverges
 // deliberately in validation: `search_slug` / `listing_id` ride in the BODY,
 // not the subject, so the strict UUID-v4 guard is NOT reused — a non-UUID
-// listing id the marketplace accepts must be accepted here too. See the card
-// emit-standing-search-accept-dismiss-feedback.
+// listing id the marketplace accepts must be accepted here too. See ADR-0013.
 
 /** The closed outcome set. Matches the marketplace's `labelForOutcome`. */
 const MATCH_FEEDBACK_OUTCOMES = ["pursued", "dismissed"] as const;
