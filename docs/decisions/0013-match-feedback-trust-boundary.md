@@ -3,7 +3,7 @@ id: 0013-match-feedback-trust-boundary
 title: Match-feedback emit — action-not-label trust boundary, body-id validation
 tags: [trust-boundary, feedback, flywheel, publish, adapters, catalog, nats]
 card: emit-standing-search-accept-dismiss-feedback
-commit: PLACEHOLDER_COMMIT
+commit: 68f3f83
 updated_at: 2026-05-30
 updated_by_card: emit-standing-search-accept-dismiss-feedback
 ---
