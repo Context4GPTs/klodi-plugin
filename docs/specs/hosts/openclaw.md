@@ -80,6 +80,7 @@ ${klodi_home}/                       # mode 0700
   ```
 - **Required runtime version:** `pluginApi >= 2026.4.1`, `minGatewayVersion >= 2026.4.15` (per `package.json#openclaw.compat` and `openclaw.install.minHostVersion`; the 2026.4.15 floor pins the host's `npm install --ignore-scripts` enforcement that ADR-0008 depends on).
 - **Required env / pre-existing files:** none. All paths default; `KLODI_HOME` and `KLODI_API_URL` env vars are optional.
+- **Required config keys for plugin load:** none beyond the plugin's own `plugins.entries.klodi` block. In particular, `agents.defaults.model` / `models` is **not** required — the host (`alpine/openclaw:2026.4.15`, the `minGatewayVersion` floor) parses and accepts a config with no model block and installs+loads the plugin against it. Settled empirically by the plugin-load smoke gate (`scripts/smoke-plugin-load.sh`), which deliberately stages a model-less config so the gate proves *load*, not model selection. The plugin reads only `cfg.agents.list` (`src/service/wake.ts`), never the model keys, so a model in the config is inert to klodi regardless.
 
 ## 10. Open questions
 
