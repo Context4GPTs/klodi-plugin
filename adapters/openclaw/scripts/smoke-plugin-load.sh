@@ -157,6 +157,15 @@ log "Structural asserts: vendored sources present, no node_modules/, clean packa
 # Stage the openclaw config alongside the tarball; everything rides
 # into the container under /stage:ro so nothing on the host needs to
 # be writable by the container's node uid.
+#
+# `agents.defaults` carries NO `model`/`models` block on purpose: this
+# gate proves the plugin LOADS, not which model is configured. The klodi
+# plugin reads only `cfg.agents.list` (src/service/wake.ts) — never the
+# model keys — and the host (alpine/openclaw:2026.4.15, the $TAG floor)
+# parses and accepts a model-less config and installs+loads against it.
+# Both facts were settled empirically by running this gate; the host
+# contract is recorded in docs/specs/hosts/openclaw.md §9. Do not re-pin
+# a model here — a concrete id only goes stale and gets account-rejected.
 cat >"$STAGE_DIR/openclaw.json" <<'EOF'
 {
   "gateway": {
