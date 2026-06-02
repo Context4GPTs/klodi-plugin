@@ -168,8 +168,6 @@ cat >"$STAGE_DIR/openclaw.json" <<'EOF'
   "agents": {
     "defaults": {
       "workspace": "/home/node/.openclaw/workspace",
-      "model": { "primary": "openai-codex/gpt-5.3-codex" },
-      "models": { "openai-codex/gpt-5.3-codex": {} },
       "heartbeat": { "target": "last" }
     }
   },
@@ -300,5 +298,13 @@ if ! grep -q 'wake_pump_skip_non_gateway' "$INSTALL_LOG"; then
   cat "$INSTALL_LOG" >&2
   exit 1
 fi
+
+# Surface the contract markers the script just asserted, so a caller
+# capturing this script's output can observe the proof of load — not
+# just the exit code. (The default test loop never runs this; the
+# integration smoke does, and it checks for `klodi_plugin_loaded` in
+# our output.) Echo the matched lines verbatim from the install log
+# rather than a literal string, so the evidence is the host's own.
+grep -E 'klodi_plugin_loaded|wake_pump_skip_non_gateway' "$INSTALL_LOG" >&2
 
 log "Plugin loaded against $IMAGE:$TAG (install exited cleanly, skip fired)."
