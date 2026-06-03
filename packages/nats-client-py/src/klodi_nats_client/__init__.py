@@ -52,7 +52,10 @@ from klodi_nats_client.consumers import (
     KlodiSetupError,
     NotificationHandler,
 )
-from klodi_nats_client.local_tools import CHANNEL_MESSAGE_PARAMS
+from klodi_nats_client.local_tools import (
+    CHANNEL_MESSAGE_PARAMS,
+    MATCH_FEEDBACK_PARAMS,
+)
 from klodi_nats_client.metrics import ClientMetrics
 from klodi_nats_client.paths import (
     default_api_url,
@@ -74,7 +77,11 @@ from klodi_nats_client.events import (
     SearchMatchEvent,
     TransactionStateEvent,
 )
-from klodi_nats_client.publish import PublishChannelResult
+from klodi_nats_client.publish import (
+    PublishChannelResult,
+    PublishMatchFeedbackResult,
+    publish_match_feedback,
+)
 from klodi_nats_client.wake_pump import (
     OnChannelEvent,
     OnNotification,
@@ -113,6 +120,7 @@ __all__ = [
     "ListingStateEvent",
     "ListingStatusChangedEvent",
     "ListingSummary",
+    "MATCH_FEEDBACK_PARAMS",
     "MAX_CHANNEL_MESSAGE_CHARS",
     "NotificationEvent",
     "NotificationHandler",
@@ -121,6 +129,7 @@ __all__ = [
     "OfferProposedEvent",
     "OfferRespondedEvent",
     "PublishChannelResult",
+    "PublishMatchFeedbackResult",
     "SearchMatchEvent",
     "TOOL_NAMES",
     "TOOL_SCHEMAS",
@@ -142,4 +151,5 @@ __all__ = [
     "is_localhost",
     "load_config",
     "load_creds",
+    "publish_match_feedback",
 ]

@@ -15,6 +15,7 @@ import {
   Cents,
   Category,
   DeliveryFilter,
+  LOCAL_TOOLS,
   Uuid,
   klodiTools,
   type DeliveryFilter as DeliveryFilterShape,
@@ -24,6 +25,7 @@ import {
   jsonResult,
   rawRequest,
 } from "../lib/tool-result.js";
+import { getClient } from "../lib/client.js";
 import { runPreCallGuardsResult } from "../lib/guards.js";
 import { getBuyFilePath } from "../lib/paths.js";
 import { slugify, type ActionOnMatch } from "../lib/sell-buy-files.js";
@@ -41,10 +43,12 @@ const BUY_FILE_HINT =
 
 export function registerDiscoveryTools(api: PluginAPI): void {
   registerSearch(api);
+  registerSearchesCreate(api);
   registerWatch(api);
   registerUnwatch(api);
   registerSearchesList(api);
   registerComment(api);
+  registerMatchFeedback(api);
 }
 
 function registerSearch(api: PluginAPI): void {
@@ -57,9 +61,49 @@ function registerSearch(api: PluginAPI): void {
     async execute(_id, params) {
       const guard = runPreCallGuardsResult(params, [], { registerCli: OPENCLAW_REGISTER_CLI });
       if (guard) return guard;
-      const payload = compactPayload(params);
+      // See ADR-0012 SC-parity.1 — the catalog defines the wire shape;
+      // openclaw forwards catalog-shaped params raw. The previous
+      // `compactPayload(params)` step dropped `null` / `""` / `undefined`
+      // and stripped adapter-internal flags, which silently diverged from
+      // every other stack (hermes, nanobot, klodi-rust-host) and from
+      // the marketplace's matcher contract (empty-string ≠ omitted).
+      // `compactPayload` lives on inside `runOneShotSearch` (the
+      // `klodi_watch` composite) where the strip-fields `persist` /
+      // `action_on_match` / `target_price` ARE legitimately adapter-
+      // internal — those are composite params, not catalog params.
       try {
-        const result = await rawRequest(tool.subject, payload);
+        const result = await rawRequest(tool.subject, params);
+        return jsonResult(result);
+      } catch (e) {
+        return envelopeToolResult(e);
+      }
+    },
+  });
+}
+
+function registerSearchesCreate(api: PluginAPI): void {
+  // See ADR-0012 SC-parity.2 — `klodi_searches_create` is a canonical
+  // catalog tool; agents must be able to register a standing search
+  // directly (with their own slug) without going through the
+  // `klodi_watch` composite. hermes / nanobot / klodi-rust-host all
+  // expose it via their catalog passthrough; openclaw was the outlier.
+  // Pure pass-through (mirrors `registerSearchesList`) — the marketplace
+  // handler is the contract, the tool layer forwards unchanged.
+  const tool = klodiTools.klodi_searches_create;
+  api.registerTool({
+    name: "klodi_searches_create",
+    label: "Register Standing Search",
+    description: tool.description,
+    parameters: tool.params,
+    async execute(_id, params) {
+      const guard = runPreCallGuardsResult(
+        params,
+        [{ field: "slug", kind: "non_empty_string" }],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
+      if (guard) return guard;
+      try {
+        const result = await rawRequest(tool.subject, params);
         return jsonResult(result);
       } catch (e) {
         return envelopeToolResult(e);
@@ -238,6 +282,63 @@ function registerComment(api: PluginAPI): void {
           body: params["body"],
         });
         return jsonResult(result);
+      } catch (e) {
+        return envelopeToolResult(e);
+      }
+    },
+  });
+}
+
+function registerMatchFeedback(api: PluginAPI): void {
+  // Local publish tool (SC8 flywheel emit) — no NATS request/reply. Reports
+  // the agent's pursue/dismiss verdict on a standing-search match via
+  // getClient().publishMatchFeedback. The catalog entry is the single source
+  // of the param schema. NOTE: listing_id / search_slug are guarded as
+  // non_empty_string, NOT uuid — they ride in the body, not a subject path,
+  // and the marketplace accepts a non-UUID listing id (the deliberate
+  // divergence from klodi_channel_message). See the catalog entry.
+  const tool = LOCAL_TOOLS.klodi_match_feedback;
+  api.registerTool({
+    name: "klodi_match_feedback",
+    label: "Report Match Verdict",
+    description: tool.description,
+    parameters: tool.params,
+    async execute(_id, params) {
+      const guard = runPreCallGuardsResult(
+        params,
+        [
+          { field: "search_slug", kind: "non_empty_string" },
+          { field: "listing_id", kind: "non_empty_string" },
+          { field: "outcome", kind: "non_empty_string" },
+        ],
+        { registerCli: OPENCLAW_REGISTER_CLI },
+      );
+      if (guard) return guard;
+      const searchSlug = params["search_slug"] as string;
+      const listingId = params["listing_id"] as string;
+      const outcome = params["outcome"] as "pursued" | "dismissed";
+      const actionOnMatch = params["action_on_match"] as string | undefined;
+      try {
+        const ack = await getClient().publishMatchFeedback({
+          searchSlug,
+          listingId,
+          outcome,
+          actionOnMatch,
+        });
+        api.logger.info("match_feedback_published", {
+          search_slug: searchSlug,
+          listing_id: listingId,
+          outcome,
+          event_id: ack.event_id,
+          sequence: ack.sequence,
+        });
+        return jsonResult({
+          search_slug: searchSlug,
+          listing_id: listingId,
+          outcome,
+          event_id: ack.event_id,
+          sequence: ack.sequence,
+        });
       } catch (e) {
         return envelopeToolResult(e);
       }

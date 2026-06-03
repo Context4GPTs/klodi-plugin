@@ -4,8 +4,8 @@ title: Adapter exception envelope and pre-call guard contract
 tags: [envelope, guards, error-handling, adapters, parity]
 card: adapter-guard-and-exception-parity-with-zeroclaw
 commit: 9c7390f
-updated_at: 2026-05-23
-updated_by_card: adapter-guard-and-exception-parity-with-zeroclaw
+updated_at: 2026-05-29
+updated_by_card: tool-service-search-parity-verification
 ---
 
 # ADR-0011 — Adapter exception envelope and pre-call guard contract
@@ -163,4 +163,4 @@ Rust does NOT yet consume `dist/error-codes.rs` — the drift test covers the ga
 - **Per-host CLI defaults:** `adapters/zeroclaw/src/bin/mcp.rs:57`, `adapters/moltis/src/bin/mcp.rs:49`, `adapters/ironclaw/src/bin/mcp.rs:48`
 - **Agent-facing skill doc:** `skill/references/error_envelopes.md`
 - **NextAction discriminated union:** `packages/klodi-rust-host/src/setup_status.rs:46`
-- **Related:** [[0006-direct-to-storage-photo-uploads]] — the photo-upload stage error codes that fold into this ADR's `upload_failed`. [[0010-zeroclaw-browser-pairing-shim]] — zeroclaw's gateway-bearer flow (deliberately out of the envelope contract — host-specific, not adapter-portable).
+- **Related:** [[0006-direct-to-storage-photo-uploads]] — the photo-upload stage error codes that fold into this ADR's `upload_failed`. [[0010-zeroclaw-browser-pairing-shim]] — zeroclaw's gateway-bearer flow (deliberately out of the envelope contract — host-specific, not adapter-portable). [[0012-tool-request-payload-parity]] — sibling parity ADR for the request/input path (same pattern, opposite direction of the call).

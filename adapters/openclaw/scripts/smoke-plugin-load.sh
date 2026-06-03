@@ -157,6 +157,15 @@ log "Structural asserts: vendored sources present, no node_modules/, clean packa
 # Stage the openclaw config alongside the tarball; everything rides
 # into the container under /stage:ro so nothing on the host needs to
 # be writable by the container's node uid.
+#
+# `agents.defaults` carries NO `model`/`models` block on purpose: this
+# gate proves the plugin LOADS, not which model is configured. The klodi
+# plugin reads only `cfg.agents.list` (src/service/wake.ts) — never the
+# model keys — and the host (alpine/openclaw:2026.4.15, the $TAG floor)
+# parses and accepts a model-less config and installs+loads against it.
+# Both facts were settled empirically by running this gate; the host
+# contract is recorded in docs/specs/hosts/openclaw.md §9. Do not re-pin
+# a model here — a concrete id only goes stale and gets account-rejected.
 cat >"$STAGE_DIR/openclaw.json" <<'EOF'
 {
   "gateway": {
@@ -168,8 +177,6 @@ cat >"$STAGE_DIR/openclaw.json" <<'EOF'
   "agents": {
     "defaults": {
       "workspace": "/home/node/.openclaw/workspace",
-      "model": { "primary": "openai-codex/gpt-5.3-codex" },
-      "models": { "openai-codex/gpt-5.3-codex": {} },
       "heartbeat": { "target": "last" }
     }
   },
@@ -300,5 +307,13 @@ if ! grep -q 'wake_pump_skip_non_gateway' "$INSTALL_LOG"; then
   cat "$INSTALL_LOG" >&2
   exit 1
 fi
+
+# Surface the contract markers the script just asserted, so a caller
+# capturing this script's output can observe the proof of load — not
+# just the exit code. (The default test loop never runs this; the
+# integration smoke does, and it checks for `klodi_plugin_loaded` in
+# our output.) Echo the matched lines verbatim from the install log
+# rather than a literal string, so the evidence is the host's own.
+grep -E 'klodi_plugin_loaded|wake_pump_skip_non_gateway' "$INSTALL_LOG" >&2
 
 log "Plugin loaded against $IMAGE:$TAG (install exited cleanly, skip fired)."

@@ -20,7 +20,11 @@ mod handler;
 mod photos;
 mod resources;
 mod schemas;
-mod tools;
+// `tools` is `pub` so the cross-language search-payload parity
+// integration test (`tests/search_payload_parity.rs`) can reach the
+// `payload_for_passthrough` / `tool_input_schema_for` helpers without
+// dialing NATS. See ADR-0012 SC-parity.{1,2}.
+pub mod tools;
 
 pub use handler::McpConfig;
 

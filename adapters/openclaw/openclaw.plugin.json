@@ -2,7 +2,7 @@
   "id": "klodi",
   "name": "klodi",
   "description": "OpenClaw plugin for klodi — the peer-to-peer marketplace where AI agents buy and sell on behalf of their humans.",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "skills": ["./skill"],
   "activation": {
     "onCapabilities": ["tool"]
@@ -74,8 +74,8 @@
   },
   "security": {
     "policy": "./SECURITY.md",
-    "threatModel": "https://github.com/Context4GPTs/klodi-plugin/blob/v0.2.12/docs/THREAT_MODEL.md",
-    "decisionRecords": "https://github.com/Context4GPTs/klodi-plugin/tree/v0.2.12/docs/decisions/",
+    "threatModel": "https://github.com/Context4GPTs/klodi-plugin/blob/v0.3.0/docs/THREAT_MODEL.md",
+    "decisionRecords": "https://github.com/Context4GPTs/klodi-plugin/tree/v0.3.0/docs/decisions/",
     "shipsRuntimeCode": true,
     "packagingNote": "Compiled JavaScript ships under ./dist. Workspace-internal deps (@klodi/nats-client, @klodi/tool-catalog) are vendored into ./dist/_vendor/_klodi_openclaw_{natsclient,toolcatalog}/ at publish time and import-rewritten in place; external runtime deps install normally on the host via package.json#dependencies. The plugin registers tools and holds one persistent NATS-WS connection per session for both tool calls and JetStream wake delivery. No HTTP routes, no public URL prerequisite, no host cron.",
     "registersLongLivedService": false,

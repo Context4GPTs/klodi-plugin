@@ -4,7 +4,7 @@ All notable changes to klodi-plugin (every adapter — `@4gpts/klodi` for OpenCl
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). All adapters move together — they share a single version line. Pre-1.0 the public surface is not yet stable — check this file on every upgrade before bumping the pinned version.
 
-## [Unreleased] — fold uploads into listing tools
+## [0.3.0] — 2026-06-03 — cross-adapter request/response parity + standing-search feedback flywheel
 
 **All adapters.** The standalone `klodi_assets_upload_url` tool is removed. `klodi_list_create` and `klodi_list_update` now accept image URLs *or* absolute local file paths in `photos` — local paths are content-sniffed, uploaded to R2 by the adapter, and substituted with the durable `asset_url` before the listing is dispatched. One tool call replaces the previous mint-PUT-attach dance. Allowlist (`image/jpeg`, `image/png`, `image/webp`), per-file 10 MB ceiling, and per-listing 10-photo cap are unchanged (ADR-0006); enforcement moves into the listing tool. All-or-nothing: any rejected path fails the entire call with a structured error naming the offending path.
 
@@ -45,6 +45,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 **Out-of-tree consumers of `klodi_nats_client` (Python).** `envelope.py` and `guards.py` are new modules. Existing `KlodiRequestError` callers continue to work; the envelope helpers are additive. The `error_codes.json` vendored alongside is the catalog's authoritative code list.
 
 **Out-of-tree consumers of `klodi_rust_host`.** Internal crate (`publish = false`); the surface change lands in moltis / ironclaw / zeroclaw via vendoring. Public re-exports add `ToolEnvelope`, `envelope_from_klodi_err`, `envelope_from_klodi_err_with_cli`, `envelope_to_call_tool_result`, `invalid_request_envelope`, `internal_error_envelope`, `not_registered_envelope_json`, `McpConfig.register_cli` (mandatory field).
+
+### Standing-search match feedback — `klodi_match_feedback` (SC8 flywheel)
+
+**In-agent adapters (openclaw, hermes, nanobot).** New publish tool `klodi_match_feedback`: when an agent pursues or dismisses a listing a standing search surfaced, it emits `{ search_slug, listing_id, outcome: "pursued" | "dismissed", action_on_match? }` on `p2p.v1.searches.match_feedback` — the emit half of the marketplace's self-improving search flywheel (SC8). The body carries the *action* (`outcome`), never a ± training label; the marketplace derives the label server-side. `search_slug` / `listing_id` ride in the body as bounded strings, matching the marketplace `MatchFeedback` contract field-for-field — deliberately **not** the strict UUID guard, since a non-UUID `listing_id` the service accepts must be accepted here. Daemon-shaped adapters (moltis, ironclaw, zeroclaw) ship the wire helper for parity but do not register the tool — it is `in_agent`-only.
+
+### Added
+
+- `klodi_match_feedback` catalog entry (`kind: publish`, `host_shapes: [in_agent]`) with a frozen schema (`outcome ∈ {pursued, dismissed}`, `additionalProperties: false`).
+- Wire helpers across every nats-client stack — `publishMatchFeedback` (TS), `publish_match_feedback` (Python), `validate_match_feedback` + `MatchFeedbackPayload` (Rust) — serializing byte-identically (same field order, `action_on_match` omitted not null when absent, a fresh `event_id` per emit as the `Nats-Msg-Id` dedup header).
+- Registrations in openclaw (`discovery.ts`), hermes (`tools.py`), nanobot (`nanobot_tools.py`).
+
+### Migration
+
+None — additive. Restart long-running agent sessions so the host re-fetches the catalog and exposes `klodi_match_feedback`.
+
+### Search request-payload parity (ADR-0012)
+
+**All adapters.** `klodi_search` and `klodi_searches_create` now forward the raw catalog-shaped payload to the marketplace unchanged. Previously openclaw ran `compactPayload`, dropping `undefined` / `null` / `""` fields — so `klodi_search({ query: "", category: null })` reached the service as `{}` on openclaw but as `{ query: "", category: null }` on every other stack, diverging on exactly the edge the upgraded semantic / multilingual ranker is most sensitive to. `compactPayload` now lives **only** inside the `klodi_watch` composite, where the stripped fields (`persist`, `action_on_match`, `target_price`) are genuinely adapter-internal. openclaw also exposes `klodi_searches_create` as a first-class catalog tool (previously reachable only through `klodi_watch`), matching every other stack. A golden wire-payload fixture (`search-payload-golden.json`) + per-stack parity tests gate the invariant. See [ADR-0012](./docs/decisions/0012-tool-request-payload-parity.md).
+
+### Changed
+
+- **openclaw:** `klodi_search` / `klodi_searches_create` no longer compact the payload — empty-string, `null`, and omitted are three distinct inputs forwarded as the agent issued them; the marketplace is the sole interpreter.
+- **openclaw:** `klodi_searches_create` is now a standalone catalog tool (one entry point per NATS subject).
+
+### Migration
+
+None for agents issuing well-formed search params. openclaw agents that relied on empty / `null` search fields being silently dropped will now have those fields forwarded to the marketplace. Restart long-running agent sessions to refresh the catalog.
+
+### Internal / tooling
+
+- openclaw's plugin-load smoke fixture is now model-agnostic (no hardcoded model id); a cross-adapter sweep asserts no `adapters/*/scripts/smoke*.sh` pins a model literal.
+- `cards/` is no longer tracked (gitignored single-device kanban); ADR-0012 landed under `docs/decisions/`.
 
 ## [0.2.16] — 2026-05-14 — klodi-zeroclaw Telegram bridge (supersedes wake-agent-spawn)
 

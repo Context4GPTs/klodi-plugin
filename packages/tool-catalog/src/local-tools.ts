@@ -62,6 +62,44 @@ const RegisterPollOutcome = Type.Object({
   message: Type.Optional(Type.String()),
 });
 
+/**
+ * The standing-search slug a match-feedback verdict belongs to. Mirrors the
+ * sibling marketplace's `MatchFeedback.search_slug` pattern
+ * (`4gpts-p2p-marketplace/packages/schemas/src/match-feedback.ts`) — NOT a
+ * UUID. The id rides in the publish *body*, not a subject path, so it carries
+ * the slug pattern rather than the strict `Uuid` descriptor (which the
+ * channel-message subject-injection guard needs). See the card
+ * emit-standing-search-accept-dismiss-feedback.
+ */
+const MatchFeedbackSlug = Type.String({
+  pattern: "^[a-z0-9][a-z0-9._-]{0,119}$",
+  description: "The standing-search slug the match belongs to.",
+});
+
+/**
+ * The matched listing id. The marketplace re-reads the Listing row as the
+ * real existence/ownership gate, so the wire only pins a bounded non-empty
+ * string (1..64) — deliberately NOT a UUID format. A non-UUID listing id the
+ * marketplace accepts must pass this schema too.
+ */
+const MatchFeedbackListingId = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  description: "The matched listing the verdict is about.",
+});
+
+/**
+ * The agent's terminal verdict on a surfaced match — the closed set the
+ * marketplace's `labelForOutcome` accepts. `pursued` → positive training
+ * example; `dismissed` → hard-negative. The ± label is derived SERVER-side;
+ * the plugin sends only the action it took. A value outside this set is
+ * rejected at the tool boundary, never published.
+ */
+const MatchFeedbackOutcome = Type.Union(
+  [Type.Literal("pursued"), Type.Literal("dismissed")],
+  { description: "The agent's verdict: pursued or dismissed." },
+);
+
 const SetupStatusResult = Type.Object({
   phase: Type.Union([
     Type.Literal("unconfigured"),
@@ -239,6 +277,44 @@ export const LOCAL_TOOLS = {
       event_id: Uuid,
       message_id: Uuid,
       created_at: Iso8601,
+    }),
+    kind: "publish",
+    host_shapes: ["in_agent"],
+  },
+
+  klodi_match_feedback: {
+    name: "klodi_match_feedback",
+    description:
+      "Report the agent's pursue/dismiss verdict on a standing-search"
+      + " match. Direct JetStream publish to p2p.v1.searches.match_feedback;"
+      + " the marketplace records it as a training example (SC8 flywheel)."
+      + " The wire carries the ACTION (outcome), never a ± label — the label"
+      + " is derived server-side. Call exactly once per (search, listing)"
+      + " verdict, after evaluating the match against the buy file.",
+    params: Type.Object(
+      {
+        search_slug: MatchFeedbackSlug,
+        listing_id: MatchFeedbackListingId,
+        outcome: MatchFeedbackOutcome,
+        // Provenance: the buy file's action_on_match mode in effect (notify
+        // default, or negotiate). Reported honestly so downstream curation can
+        // drop a mechanically auto-negotiated pursue. Capped at 40 to mirror
+        // the marketplace schema. Omitted from the wire when absent — never null.
+        action_on_match: Type.Optional(
+          Type.String({
+            minLength: 1,
+            maxLength: 40,
+            description:
+              "The buy file's action_on_match mode in effect (e.g. notify,"
+              + " negotiate) — provenance for curation-side filtering.",
+          }),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    result: Type.Object({
+      event_id: Uuid,
+      sequence: Type.Integer({ minimum: 1 }),
     }),
     kind: "publish",
     host_shapes: ["in_agent"],
