@@ -27,6 +27,7 @@ import {
   mockNatsResponse,
   mockNatsError,
   clearNatsResponses,
+  getClient,
   KlodiRequestError,
 } from "../helpers/mock-nats.js";
 
@@ -133,8 +134,15 @@ describe("klodi_list_mine", () => {
 });
 
 describe("klodi_list_update", () => {
-  it("forwards full payload and does NOT touch the sell file", async () => {
-    // Seed a sell file we can later assert untouched.
+  it("forwards full payload (incl. category) and does NOT touch the sell file", async () => {
+    // Card: make-category-editable-in-plugin-surface-and-docs, acceptance #7.
+    // registerUpdate is a pure raw pass-through (ADR-0012): it binds
+    // tool.params → parameters and forwards the whole params object via
+    // rawRequest. The NEW `category` param must therefore reach the
+    // marketplace unaltered, with the adapter neither stripping it nor
+    // mutating the local sell file as a side effect. `category` is a valid
+    // Category union member here (the schema-level enum guard lives in the
+    // tool-catalog tests; this test pins the wire pass-through).
     writeSellFile("vintage-lamp-aaaa11", {
       listing_id: LISTING_ID,
       min_acceptable_price: 150_00,
@@ -145,12 +153,36 @@ describe("klodi_list_update", () => {
     mockNatsResponse("p2p.v1.listings.update", { listing_id: LISTING_ID });
     const tool = getTool(api, "klodi_list_update");
     const result = await tool.execute("call-1", {
-      listing_id: LISTING_ID, asking_price: 250_00,
+      listing_id: LISTING_ID, asking_price: 250_00, category: "furniture",
     });
     expect(result.isError).toBeFalsy();
+
+    // The forwarded NATS payload (2nd arg to client.request) must carry
+    // category verbatim — no strip, no rename, no coercion.
+    const requestMock = getClient().request;
+    const call = requestMock.mock.calls.find(
+      (c) => c[0] === "p2p.v1.listings.update",
+    );
+    expect(
+      call,
+      "registerUpdate should have dispatched to p2p.v1.listings.update",
+    ).toBeDefined();
+    const forwardedPayload = call![1] as Record<string, unknown>;
+    expect(
+      forwardedPayload.category,
+      "category must reach the forwarded marketplace payload unaltered",
+    ).toBe("furniture");
+    // The rest of the payload still rides along (proves it's a whole-object
+    // pass-through, not a cherry-picked allowlist that happened to add category).
+    expect(forwardedPayload.listing_id).toBe(LISTING_ID);
+    expect(forwardedPayload.asking_price).toBe(250_00);
+
     const sf = findSellFileByListingId(LISTING_ID);
-    // Floor preserved; asking_price never derives the floor.
+    // Floor preserved; asking_price never derives the floor. A category edit
+    // is a server-side concern — there is nothing category-shaped on disk to
+    // mutate, and the floor/body must be left exactly as the user wrote them.
     expect(sf?.min_acceptable_price).toBe(150_00);
+    expect(sf?.body).toBe("private");
   });
 });
 
