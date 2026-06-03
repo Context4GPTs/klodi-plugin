@@ -65,6 +65,15 @@ const PY_TARGETS = [
   ["logger-py", "klodi_logger"],
 ];
 
+// WHY these mirrors are the git-tracked cross-language param contract —
+// NOT dist/schemas.json. In this repo checkout `dist/*` is gitignored
+// (.gitignore:109 `dist`; the `!…/dist/schemas.json` re-includes below it
+// are anchored to a parent-folder path and do not match from this root —
+// `git check-ignore dist/schemas.json` confirms it's ignored). So after a
+// schema change you must `git add` BOTH mirrors below; staging only dist/
+// leaves the only tracked copy stale and adapters read an old contract.
+// The check:codegen-fresh gate compares dist/ only and CANNOT catch this;
+// the cross-language presence test (list-update-*-cross-language) does.
 for (const [pkgDir, pyModule] of PY_TARGETS) {
   const target = join(PACKAGES_ROOT, pkgDir, "src", pyModule, "schemas.json");
   copyFileSync(join(DIST_DIR, "schemas.json"), target);
