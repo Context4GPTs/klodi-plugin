@@ -110,6 +110,6 @@ Use these sections as relevant; omit when empty. The agent's session-start scan 
 ## Editing rules
 
 - **Never publish a `## Private Facts` entry to listing.description without explicit user approval.** Hard rule from `policies/security.md` — overrides any permissive `## Authorization` setting.
-- **`category` is immutable post-create.** If Q&A reveals it was wrong, escalate and suggest `klodi_list_withdraw` + `klodi_list_relist`.
+- **`category` is editable in place via `klodi_list_update`.** If Q&A reveals it was set wrong, correct it with a single `klodi_list_update { listing_id, category }` — not `klodi_list_withdraw` + `klodi_list_relist` (that destructive path cancels transactions, drops offers, and closes channels).
 - **If `listing.description` exceeds ~8 bullets, restructure** (reorganize, consolidate, rewrite) before any further append. Unbounded growth is a leak vector.
 - **Agreed offer `terms` (on the server) are the canonical record.** `## Active Negotiations` is a summary; the offer's `terms` snapshot is the audit trail in disputes.

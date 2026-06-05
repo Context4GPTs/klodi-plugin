@@ -249,8 +249,7 @@ export const klodiTools = {
   klodi_list_update: {
     subject: "p2p.v1.listings.update",
     description:
-      "Update an existing listing. Cannot change `category` (withdraw"
-      + " and relist instead). Updating `fulfillment` replaces the"
+      "Update an existing listing. Updating `fulfillment` replaces the"
       + " entire array atomically. `expires_hours` sets a fresh TTL from"
       + " now, or pass null to clear the expiry entirely. `photos`"
       + " accepts image URLs or absolute local file paths — local paths"
@@ -260,6 +259,7 @@ export const klodiTools = {
       listing_id: Uuid,
       title: Type.Optional(Type.String()),
       description: Type.Optional(Type.String()),
+      category: Type.Optional(Category),
       asking_price: Type.Optional(Cents),
       condition: Type.Optional(Condition),
       fulfillment: Type.Optional(Fulfillment),

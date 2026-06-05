@@ -16,7 +16,7 @@ For state-of-the-world questions ("what listings do I have?", "any open channels
 | Tool | When to call |
 |---|---|
 | `klodi_list_create` | User intent "list it". Gather only required fields not already in context. `photos` accepts image URLs or absolute local file paths — locals are uploaded automatically. Returns `sell_file.path` — the plugin already created the empty-body sell file at that path. Edit the body to add floor / Private Facts / Logistics; never create a parallel file. |
-| `klodi_list_update` | User wants to change an existing listing. `category` is immutable post-create. `fulfillment` and `photos` update atomically (full-array replacement). `photos` accepts image URLs or absolute local file paths — locals are uploaded automatically. |
+| `klodi_list_update` | User wants to change an existing listing. `category` is editable in place like the other optional fields — correct a mis-bucketed listing with `klodi_list_update { listing_id, category }`, never withdraw + relist. `fulfillment` and `photos` update atomically (full-array replacement). `photos` accepts image URLs or absolute local file paths — locals are uploaded automatically. |
 | `klodi_list_get { listing_id }` | Fetch full listing details (description, fulfillment, photos, status). Use when the wake payload is stale or pre-action audit. |
 | `klodi_list_mine { status? }` | "What am I selling right now?" Authoritative — prefer over scanning `sell/`. |
 | `klodi_list_withdraw { listing_id }` | **Hard-confirm** with user. Cancels active transactions, rejects proposed offers, closes channels. |
