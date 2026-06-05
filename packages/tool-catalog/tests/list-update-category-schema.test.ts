@@ -44,24 +44,18 @@ import { describe, expect, it } from "vitest";
 import { Value } from "@sinclair/typebox/value";
 
 import { klodiTools } from "../src/index.js";
+import { CATEGORY_VALUES } from "../src/schemas.js";
 
 const UPDATE = klodiTools.klodi_list_update;
 const VALID_ID = "550e8400-e29b-41d4-a716-446655440000";
 
-/** Every closed `Category` union member (schemas.ts:36-51). */
-const VALID_CATEGORIES = [
-  "electronics",
-  "furniture",
-  "vehicles",
-  "clothing",
-  "home_garden",
-  "sports",
-  "collectibles",
-  "digital_goods",
-  "services",
-  "free",
-  "other",
-] as const;
+/**
+ * The closed `Category` union members — imported from the canonical source
+ * (`schemas.ts`) so the test stays in sync when a category is added/removed.
+ * Before this refactor, the 11 literals were hardcoded here (founder feedback
+ * on PR #9: centralize the vocabulary).
+ */
+const VALID_CATEGORIES = CATEGORY_VALUES;
 
 const NOT_A_CATEGORY = [
   "not_a_real_category",

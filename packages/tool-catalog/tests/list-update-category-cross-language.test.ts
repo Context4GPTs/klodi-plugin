@@ -58,6 +58,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CATEGORY_VALUES } from "../src/schemas.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = resolve(HERE, "..");
@@ -102,20 +103,13 @@ const SCHEMA_ARTIFACTS: ReadonlyArray<{ label: string; path: string }> = [
   },
 ];
 
-/** The 11 closed `Category` union members (schemas.ts:36-51). */
-const CATEGORY_MEMBERS: ReadonlySet<string> = new Set([
-  "electronics",
-  "furniture",
-  "vehicles",
-  "clothing",
-  "home_garden",
-  "sports",
-  "collectibles",
-  "digital_goods",
-  "services",
-  "free",
-  "other",
-]);
+/**
+ * The closed `Category` union members — imported from the canonical source
+ * (`schemas.ts`) so the test stays in sync when a category is added/removed.
+ * Before this refactor, the 11 literals were hardcoded here (founder feedback
+ * on PR #9: centralize the vocabulary).
+ */
+const CATEGORY_MEMBERS: ReadonlySet<string> = new Set(CATEGORY_VALUES);
 
 interface JsonSchemaObject {
   type?: string;

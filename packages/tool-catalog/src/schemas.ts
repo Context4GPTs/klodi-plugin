@@ -6,7 +6,7 @@
  * All prices are integer cents. All IDs are UUIDs.
  */
 
-import { Type } from "@sinclair/typebox";
+import { type TLiteral, Type } from "@sinclair/typebox";
 
 export const Uuid = Type.String({
   description: "UUID v4 identifier",
@@ -33,20 +33,25 @@ export const Currency = Type.String({
   default: "USD",
 });
 
+export const CATEGORY_VALUES = [
+  "electronics",
+  "furniture",
+  "vehicles",
+  "clothing",
+  "home_garden",
+  "sports",
+  "collectibles",
+  "digital_goods",
+  "services",
+  "free",
+  "other",
+] as const;
+
+// Cast: `.map()` returns `TLiteral<string>[]` which TS can't narrow to
+// the variadic tuple `[...Types]` that TypeBox's `Union()` expects.
+// Runtime values are identical to the prior inline-literal form.
 export const Category = Type.Union(
-  [
-    Type.Literal("electronics"),
-    Type.Literal("furniture"),
-    Type.Literal("vehicles"),
-    Type.Literal("clothing"),
-    Type.Literal("home_garden"),
-    Type.Literal("sports"),
-    Type.Literal("collectibles"),
-    Type.Literal("digital_goods"),
-    Type.Literal("services"),
-    Type.Literal("free"),
-    Type.Literal("other"),
-  ],
+  CATEGORY_VALUES.map((v) => Type.Literal(v)) as TLiteral<string>[],
   { description: "Item category" },
 );
 
