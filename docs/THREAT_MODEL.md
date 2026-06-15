@@ -111,7 +111,7 @@ Last reviewed: 2026-04-30.
 
 - **Mitigation (hard rule):** `skill/policies/security.md` blocks private→public promotion without explicit user approval, regardless of `negotiation_style.md` permissiveness.
 - **Mitigation (description clamp):** SKILL.md §8 caps listing description at ~8 bullets; beyond that the agent must restructure, which forces the user to see the change.
-- **Mitigation (immutable fields):** `delivery_method` and `category` are immutable post-create; attempts to change them require withdraw + relist, which the user sees.
+- **Successor control (edit audit trail):** listing fields including `category` are now editable in place via `klodi_list_update` — the old "withdraw + relist makes the change visible" reasoning no longer applies. After-the-fact visibility of an edit is owned by the server-side edit audit trail in the sibling marketplace card `listing-edit-audit-trail-and-re-confirm` (forward-looking; not shipped here).
 
 ### T11 — Denial-of-wake via heartbeat misconfiguration *(retired in 0.2.0)*
 

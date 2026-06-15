@@ -823,7 +823,7 @@
     },
     "klodi_list_update": {
       "subject": "p2p.v1.listings.update",
-      "description": "Update an existing listing. Cannot change `category` (withdraw and relist instead). Updating `fulfillment` replaces the entire array atomically. `expires_hours` sets a fresh TTL from now, or pass null to clear the expiry entirely. `photos` accepts image URLs or absolute local file paths — local paths are uploaded automatically (jpeg/png/webp, ≤10 MB, ≤10 entries, full-array replacement is all-or-nothing).",
+      "description": "Update an existing listing. Updating `fulfillment` replaces the entire array atomically. `expires_hours` sets a fresh TTL from now, or pass null to clear the expiry entirely. `photos` accepts image URLs or absolute local file paths — local paths are uploaded automatically (jpeg/png/webp, ≤10 MB, ≤10 entries, full-array replacement is all-or-nothing).",
       "params": {
         "type": "object",
         "properties": {
@@ -837,6 +837,55 @@
           },
           "description": {
             "type": "string"
+          },
+          "category": {
+            "description": "Item category",
+            "anyOf": [
+              {
+                "const": "electronics",
+                "type": "string"
+              },
+              {
+                "const": "furniture",
+                "type": "string"
+              },
+              {
+                "const": "vehicles",
+                "type": "string"
+              },
+              {
+                "const": "clothing",
+                "type": "string"
+              },
+              {
+                "const": "home_garden",
+                "type": "string"
+              },
+              {
+                "const": "sports",
+                "type": "string"
+              },
+              {
+                "const": "collectibles",
+                "type": "string"
+              },
+              {
+                "const": "digital_goods",
+                "type": "string"
+              },
+              {
+                "const": "services",
+                "type": "string"
+              },
+              {
+                "const": "free",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
           },
           "asking_price": {
             "description": "Price in integer cents (e.g. 15000 = $150.00)",

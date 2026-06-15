@@ -3,9 +3,15 @@
  * Codegen freshness gate (Decision 7).
  *
  * Runs `pnpm codegen` and fails if `dist/schemas.json` or
- * `dist/rust-types.rs` differ from what's committed. Catches the case
+ * `dist/rust-types.rs` drift from the regenerated output. Catches the case
  * where someone edits TypeBox schemas but forgets to regenerate the
  * downstream artifacts that Python and Rust adapters consume.
+ *
+ * NOTE: dist/* is gitignored in this checkout, so this gate guards the
+ * working tree, NOT git. The git-tracked param contract is the two Python
+ * mirror schemas.json files (see codegen.mjs) — those are what you `git add`
+ * after a schema change. The "committed artifact" wording below is dev-tree
+ * freshness, not a claim that dist/ is in git.
  *
  * Strategy: snapshot the two files before regen, run codegen, compare.
  * Restore the originals on failure so the working tree is left in the
