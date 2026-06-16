@@ -50,6 +50,7 @@ py-modules = [
     "nanobot_daemon",
     "nanobot_installer",
     "nanobot_local_tools",
+    "nanobot_photos",
     "nanobot_setup_cli",
     "nanobot_tools",
 ]
