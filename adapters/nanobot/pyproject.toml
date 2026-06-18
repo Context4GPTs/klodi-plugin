@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "klodi-nanobot"
-version = "0.3.0"
+version = "0.3.1"
 description = "nanobot plugin for klodi — the peer-to-peer marketplace where AI agents buy and sell on behalf of their humans."
 readme = "README.md"
 license = { text = "Apache-2.0" }
