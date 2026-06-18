@@ -513,10 +513,6 @@
             "description": "ISO 4217 currency code (e.g. USD)",
             "default": "USD",
             "type": "string"
-          },
-          "expires_hours": {
-            "description": "Hours until expiry. Omit (or pass null) for no expiry — the default. Set a positive integer to give the listing a TTL.",
-            "type": "integer"
           }
         },
         "required": [
@@ -787,17 +783,6 @@
           "updated_at": {
             "description": "ISO 8601 timestamp",
             "type": "string"
-          },
-          "expires_at": {
-            "anyOf": [
-              {
-                "description": "ISO 8601 timestamp",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -816,14 +801,13 @@
           "tags",
           "status",
           "created_at",
-          "updated_at",
-          "expires_at"
+          "updated_at"
         ]
       }
     },
     "klodi_list_update": {
       "subject": "p2p.v1.listings.update",
-      "description": "Update an existing listing. Updating `fulfillment` replaces the entire array atomically. `expires_hours` sets a fresh TTL from now, or pass null to clear the expiry entirely. `photos` accepts image URLs or absolute local file paths — local paths are uploaded automatically (jpeg/png/webp, ≤10 MB, ≤10 entries, full-array replacement is all-or-nothing).",
+      "description": "Update an existing listing. Updating `fulfillment` replaces the entire array atomically. `photos` accepts image URLs or absolute local file paths — local paths are uploaded automatically (jpeg/png/webp, ≤10 MB, ≤10 entries, full-array replacement is all-or-nothing).",
       "params": {
         "type": "object",
         "properties": {
@@ -1056,17 +1040,6 @@
               {
                 "const": "withdrawn",
                 "type": "string"
-              }
-            ]
-          },
-          "expires_hours": {
-            "anyOf": [
-              {
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
               }
             ]
           }
@@ -1335,17 +1308,6 @@
           "updated_at": {
             "description": "ISO 8601 timestamp",
             "type": "string"
-          },
-          "expires_at": {
-            "anyOf": [
-              {
-                "description": "ISO 8601 timestamp",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -1364,8 +1326,7 @@
           "tags",
           "status",
           "created_at",
-          "updated_at",
-          "expires_at"
+          "updated_at"
         ]
       }
     },
@@ -1645,17 +1606,6 @@
           "updated_at": {
             "description": "ISO 8601 timestamp",
             "type": "string"
-          },
-          "expires_at": {
-            "anyOf": [
-              {
-                "description": "ISO 8601 timestamp",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -1674,8 +1624,7 @@
           "tags",
           "status",
           "created_at",
-          "updated_at",
-          "expires_at"
+          "updated_at"
         ]
       }
     },
@@ -1973,17 +1922,6 @@
                 "updated_at": {
                   "description": "ISO 8601 timestamp",
                   "type": "string"
-                },
-                "expires_at": {
-                  "anyOf": [
-                    {
-                      "description": "ISO 8601 timestamp",
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
                 }
               },
               "required": [
@@ -2002,8 +1940,7 @@
                 "tags",
                 "status",
                 "created_at",
-                "updated_at",
-                "expires_at"
+                "updated_at"
               ]
             }
           }
@@ -2289,17 +2226,6 @@
           "updated_at": {
             "description": "ISO 8601 timestamp",
             "type": "string"
-          },
-          "expires_at": {
-            "anyOf": [
-              {
-                "description": "ISO 8601 timestamp",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -2318,8 +2244,7 @@
           "tags",
           "status",
           "created_at",
-          "updated_at",
-          "expires_at"
+          "updated_at"
         ]
       }
     },
@@ -2604,17 +2529,6 @@
           "updated_at": {
             "description": "ISO 8601 timestamp",
             "type": "string"
-          },
-          "expires_at": {
-            "anyOf": [
-              {
-                "description": "ISO 8601 timestamp",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -2633,8 +2547,7 @@
           "tags",
           "status",
           "created_at",
-          "updated_at",
-          "expires_at"
+          "updated_at"
         ]
       }
     },
