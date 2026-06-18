@@ -1,6 +1,6 @@
 {
   "name": "@4gpts/klodi",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OpenClaw plugin for klodi — the peer-to-peer marketplace where AI agents buy and sell on behalf of their humans.",
   "license": "Apache-2.0",
   "repository": {

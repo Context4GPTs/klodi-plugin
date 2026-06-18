@@ -4,6 +4,26 @@ All notable changes to klodi-plugin (every adapter — `@4gpts/klodi` for OpenCl
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). All adapters move together — they share a single version line. Pre-1.0 the public surface is not yet stable — check this file on every upgrade before bumping the pinned version.
 
+## [0.4.0] — 2026-06-18 — remove listing expiry from the wire contract
+
+**All adapters.** Listing expiry leaves the wire. The marketplace no longer accepts or emits a listing TTL (epic `remove-listing-expiry-2026-06`, keystone `4gpts-p2p-marketplace`), so the plugin's listing tools drop it in lockstep: the `expires_hours` request parameter is gone from `klodi_list_create` and `klodi_list_update`, and the `expires_at` reply field is gone from `ListingResult` — the shape shared by all six listing replies (`klodi_list_create`, `_update`, `_get`, `_mine`, `_withdraw`, `_relist`). This is a breaking wire change for any agent that sent `expires_hours` or read `expires_at` on a listing.
+
+Channel TTLs are untouched: `klodi_channel_create` and `klodi_channel_mine` still carry their own `expires_at` (a channel field, unrelated to listing expiry).
+
+### Removed
+
+- `expires_hours` request parameter on `klodi_list_create` and `klodi_list_update`. Passing it is now an unknown field — never forwarded to the marketplace.
+- `expires_at` reply field on every listing reply (`ListingResult`). The key is **removed, not nulled** — a listing reply no longer has an `expires_at` property at all (not `expires_at: null`). Agents that previously null-checked `listing.expires_at` now read `undefined`.
+- The `expires_hours` / TTL sentence from the `klodi_list_update` agent-facing tool description.
+
+### Migration
+
+**Agents.** Stop sending `expires_hours` on `klodi_list_create` / `klodi_list_update`; stop reading `expires_at` off any listing reply (it is absent, not null). Restart any long-running agent session after upgrade so the host re-fetches the tool catalog and stops offering `expires_hours`.
+
+**Lockstep with the marketplace.** This is a coordinated breaking wire change — it must ship together with the marketplace's removal of listing expiry (epic `remove-listing-expiry-2026-06`, keystone `4gpts-p2p-marketplace`). The plugin side is internally safe with the field simply absent, but shipping the plugin ahead of the marketplace means agents stop sending a TTL the marketplace may still default-impose; shipping it behind means the plugin reads an `expires_at` the marketplace no longer emits. The `0.4.0` minor bump (breaking, pre-1.0) signals the break across all six adapters.
+
+**Out-of-tree consumers of `klodi_nats_client` (Python) / the vendored `schemas.json` (Rust).** The regenerated `schemas.json` no longer declares listing `expires_at` / `expires_hours` in any `klodi_list_*` block. Re-vendor to pick up the new schema.
+
 ## [0.3.0] — 2026-06-03 — cross-adapter request/response parity + standing-search feedback flywheel
 
 **All adapters.** The standalone `klodi_assets_upload_url` tool is removed. `klodi_list_create` and `klodi_list_update` now accept image URLs *or* absolute local file paths in `photos` — local paths are content-sniffed, uploaded to R2 by the adapter, and substituted with the durable `asset_url` before the listing is dispatched. One tool call replaces the previous mint-PUT-attach dance. Allowlist (`image/jpeg`, `image/png`, `image/webp`), per-file 10 MB ceiling, and per-listing 10-photo cap are unchanged (ADR-0006); enforcement moves into the listing tool. All-or-nothing: any rejected path fails the entire call with a structured error naming the offending path.
