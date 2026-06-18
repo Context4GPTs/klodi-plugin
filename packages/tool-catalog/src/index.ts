@@ -65,7 +65,6 @@ const ListingResult = Type.Object({
   status: ListingStatus,
   created_at: Iso8601,
   updated_at: Iso8601,
-  expires_at: Type.Union([Iso8601, Type.Null()]),
 });
 
 /**
@@ -237,11 +236,6 @@ export const klodiTools = {
         description: "Search tags",
       })),
       currency: Type.Optional(Currency),
-      expires_hours: Type.Optional(Type.Integer({
-        description:
-          "Hours until expiry. Omit (or pass null) for no expiry — the"
-          + " default. Set a positive integer to give the listing a TTL.",
-      })),
     }),
     result: ListingResult,
   },
@@ -250,11 +244,10 @@ export const klodiTools = {
     subject: "p2p.v1.listings.update",
     description:
       "Update an existing listing. Updating `fulfillment` replaces the"
-      + " entire array atomically. `expires_hours` sets a fresh TTL from"
-      + " now, or pass null to clear the expiry entirely. `photos`"
-      + " accepts image URLs or absolute local file paths — local paths"
-      + " are uploaded automatically (jpeg/png/webp, ≤10 MB, ≤10 entries,"
-      + " full-array replacement is all-or-nothing).",
+      + " entire array atomically. `photos` accepts image URLs or absolute"
+      + " local file paths — local paths are uploaded automatically"
+      + " (jpeg/png/webp, ≤10 MB, ≤10 entries, full-array replacement is"
+      + " all-or-nothing).",
     params: Type.Object({
       listing_id: Uuid,
       title: Type.Optional(Type.String()),
@@ -272,9 +265,6 @@ export const klodiTools = {
       tags: Type.Optional(Type.Array(Type.String())),
       currency: Type.Optional(Currency),
       status: Type.Optional(ListingStatus),
-      expires_hours: Type.Optional(
-        Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
-      ),
     }),
     result: ListingResult,
   },
