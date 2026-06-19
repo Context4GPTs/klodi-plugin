@@ -21,15 +21,18 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { errorCodes } from "../src/error-codes.js";
+import { LOCAL_TOOL_NAMES, TOOL_NAMES } from "../src/index.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..", "..");
 const SKILL_DOC = resolve(REPO_ROOT, "skill", "references", "error_envelopes.md");
+const SKILL_ROOT = resolve(REPO_ROOT, "skill");
+const SKILL_REFS = resolve(SKILL_ROOT, "references");
 
 describe("skill/references/error_envelopes.md", () => {
   it("exists at the canonical path", () => {
@@ -163,5 +166,49 @@ describe("skill/references/error_envelopes.md", () => {
         `skill mentions code-shaped token "${orph}" not exported by errorCodes`,
       ).toContain(orph);
     }
+  });
+});
+
+describe("skill bundle ↔ catalog tool symmetry (local mirror of klodi-stage)", () => {
+  // Local mirror of klodi-stage's `every_klodi_token_in_bundle_exists_in_catalog`
+  // (integration/skill/skill-catalog-symmetry.test.ts) — moved into klodi-plugin
+  // so the same drift fails in-repo at source level, not only downstream against
+  // the packed tarball. Identical regex + identical union; if these diverge the
+  // local guard gives false confidence (see card risk note).
+  const TOKEN_RE = /\bklodi_[a-z][a-z0-9_]*\b/g;
+
+  // Frozen ADR-0011 §R2 error-code literals, not tools. An agent receives these
+  // verbatim in an envelope `error` field; it never calls them. Two entries only —
+  // kept local rather than promoted to a shared export (card Q1).
+  const KNOWN_NON_TOOLS = new Set(["klodi_home", "klodi_home_missing"]);
+
+  function bundleText(): string {
+    const files = [resolve(SKILL_ROOT, "SKILL.md")];
+    for (const entry of readdirSync(SKILL_REFS)) {
+      if (entry.endsWith(".md")) files.push(join(SKILL_REFS, entry));
+    }
+    return files.map((f) => readFileSync(f, "utf-8")).join("\n");
+  }
+
+  it("names only catalog tools (or known non-tool error-tokens) in the skill bundle", () => {
+    const bundle = bundleText();
+    const catalog = new Set<string>([...TOOL_NAMES, ...LOCAL_TOOL_NAMES]);
+
+    const offenders = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = TOKEN_RE.exec(bundle)) !== null) {
+      const token = m[0];
+      if (catalog.has(token)) continue;
+      if (KNOWN_NON_TOOLS.has(token)) continue;
+      offenders.add(token);
+    }
+
+    const sorted = Array.from(offenders).sort();
+    expect(
+      sorted,
+      `skill bundle references klodi_-prefixed token(s) that are neither catalog tools ` +
+        `(TOOL_NAMES ∪ LOCAL_TOOL_NAMES) nor known non-tool error-codes (KNOWN_NON_TOOLS): ` +
+        `${sorted.join(", ")}`,
+    ).toEqual([]);
   });
 });
