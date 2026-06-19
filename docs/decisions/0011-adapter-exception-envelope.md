@@ -3,7 +3,7 @@ id: 0011-adapter-exception-envelope
 title: Adapter exception envelope and pre-call guard contract
 tags: [envelope, guards, error-handling, adapters, parity]
 card: adapter-guard-and-exception-parity-with-zeroclaw
-commit: 9c7390f
+commit: 73dddd3
 updated_at: 2026-06-19
 updated_by_card: fix-skill-error-envelopes-catalog-drift-ghost-tool
 ---
