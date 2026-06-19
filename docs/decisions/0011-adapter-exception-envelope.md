@@ -4,8 +4,8 @@ title: Adapter exception envelope and pre-call guard contract
 tags: [envelope, guards, error-handling, adapters, parity]
 card: adapter-guard-and-exception-parity-with-zeroclaw
 commit: 9c7390f
-updated_at: 2026-05-29
-updated_by_card: tool-service-search-parity-verification
+updated_at: 2026-06-19
+updated_by_card: fix-skill-error-envelopes-catalog-drift-ghost-tool
 ---
 
 # ADR-0011 — Adapter exception envelope and pre-call guard contract
@@ -136,7 +136,7 @@ Rust does NOT yet consume `dist/error-codes.rs` — the drift test covers the ga
 
 - The founder's success signal is met: an agent calling any guarded tool against any adapter receives the same `error` code and `recovery_hint` template zeroclaw returns for the same failure (modulo per-host CLI string).
 - 661 tests (Rust 90 lib + 8 envelope_parity + 4 e2e_envelope + 2 zeroclaw mcp_envelope_e2e + openclaw 273 + tool-catalog 90 + hermes 92 + nanobot 60 + nats-client-py 42) gate parity at the wire and the catalog at the source.
-- The skill bundle (`skill/references/error_envelopes.md`) is the agent's documentation; the cross-link audit at `tests/skill-coverage.test.ts` catches drift in either direction (catalog code without doc, doc reference without code).
+- The skill bundle (`skill/references/error_envelopes.md`) is the agent's documentation; the cross-link audit at `tests/skill-coverage.test.ts` catches **error-code** drift in either direction (catalog code without doc, doc reference without code). A second, distinct direction — a `klodi_`-prefixed token in the bundle that names a **tool** the catalog doesn't ship (a "ghost tool") — was originally caught *only downstream* in klodi-stage's `every_klodi_token_in_bundle_exists_in_catalog`, which runs against the **packed tarball**, so a ghost token went green in klodi-plugin CI and only reddened in the sibling. The `skill bundle ↔ catalog tool symmetry` block in the same `skill-coverage.test.ts` now mirrors that check at source level (identical regex `/\bklodi_[a-z][a-z0-9_]*\b/g`, intersected with `TOOL_NAMES ∪ LOCAL_TOOL_NAMES`), so tool-token drift fails in-repo. Tool-shaped error-code literals that are received-not-called (e.g. the R2 code `klodi_home_missing`) are deliberately allowlisted in a local `KNOWN_NON_TOOLS` rather than promoted to a shared catalog export — two entries do not justify the coupling; promote on the third (card `fix-skill-error-envelopes-catalog-drift-ghost-tool`, Q1).
 
 **Negative / deferred.**
 
