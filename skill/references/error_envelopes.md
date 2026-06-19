@@ -85,8 +85,8 @@ klodi_tx_confirm { transaction_id: "..." }
     → call klodi_setup_status → read next_action → follow.
 
 klodi_offer_respond { offer_id: "..." }
-  → {error: "conflict", details: {current_state: "accepted"}, recovery_hint: {kind: "tool", tool: "klodi_offer_status"}}
-    → call klodi_offer_status to read fresh state; do not retry the same transition.
+  → {error: "conflict", details: {current_state: "accepted"}, recovery_hint: {kind: "tool", tool: "klodi_tx_status"}}
+    → call klodi_tx_status to read fresh state; do not retry the same transition.
 
 klodi_list_create { ... }
   → {error: "invalid_request", details: {field: "asking_price", problem: "missing"}, recovery_hint: null}
