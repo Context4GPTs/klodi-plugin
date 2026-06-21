@@ -198,6 +198,13 @@ describe("openclaw manifest↔registered symmetry gate", () => {
 
     // No OTHER tool name may appear as an offender — guards against the gate
     // over-reporting (e.g. a stale dedup bug or a wider-than-intended diff).
+    // Match on a whole-token word boundary, NOT a substring: `klodi_search` is
+    // a proper substring of the genuine offender `klodi_searches_create`, so a
+    // naive `.not.toContain("klodi_search")` would fire a false positive the
+    // instant the gate correctly names `klodi_searches_create`. `\b…\b` only
+    // matches `klodi_search` as a standalone token (the `es` after it blocks the
+    // trailing boundary inside `klodi_searches_create`) while still catching a
+    // genuine standalone over-report of the tool.
     const otherDeclared = PRE_FIX_DECLARED_32.filter(
       (t) => !(MISSING_THREE as ReadonlyArray<string>).includes(t),
     );
@@ -206,7 +213,7 @@ describe("openclaw manifest↔registered symmetry gate", () => {
         out,
         `gate must NOT name correctly-declared tool ${tool} as an offender —`
           + ` it is in both sets. Gate over-reported. Gate output:\n${out}`,
-      ).not.toContain(tool);
+      ).not.toMatch(new RegExp(`\\b${tool}\\b`));
     }
   });
 
