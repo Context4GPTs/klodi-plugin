@@ -60,7 +60,8 @@
 
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+readonly ROOT
 readonly IMAGE="${OPENCLAW_IMAGE:-alpine/openclaw}"
 readonly TAG="${OPENCLAW_TAG:-2026.4.15}"
 readonly CONTAINER="klodi-plugin-smoke-$$"
@@ -74,85 +75,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- Prerequisites ----------------------------------------------------------
+# Shared pack path (prereqs + build + vendor + npm pack + structural asserts +
+# world-readable staging). Factored into scripts/smoke-pack-lib.sh so this
+# install-context gate and the gateway-startup gate (smoke-gateway-load.sh)
+# pack the SAME tarball through the SAME ADR-0009 vendoring path — a packaging
+# regression is then caught once, in one place. `log` and `ROOT` are defined
+# above, as the lib's source-contract requires.
+# shellcheck source=scripts/smoke-pack-lib.sh
+. "$ROOT/scripts/smoke-pack-lib.sh"
 
-command -v docker >/dev/null || { log "docker not found on PATH"; exit 2; }
-command -v pnpm   >/dev/null || { log "pnpm not found on PATH";   exit 2; }
+# --- Prerequisites + build + pack -------------------------------------------
 
-# --- Build + pack the plugin ------------------------------------------------
-# A fresh dist/ is required; a stale one masks source regressions.
-# vendor.mjs stages a publish-ready tree at .publish-stage/ with the
-# workspace @klodi/* deps copied into dist/_vendor/ and import
-# specifiers rewritten to relative paths. We then run `npm pack` from
-# the staged dir to produce the same tarball ClawHub would upload
-# (modulo ClawHub's own ignore rules; both treat .publish-stage/ as
-# the package root).
-
-log "Building @4gpts/klodi and its file: deps in topological order..."
-# Each TS package is independent (file: refs, not a pnpm workspace).
-# Build deps first so @klodi/tool-catalog and @klodi/nats-client have
-# dist/ ready by the time openclaw's tsc runs, vendor.mjs's preflight
-# checks pass, and openclaw's pnpm install resolves the file: links.
-readonly REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
-for pkg in packages/tool-catalog packages/nats-client-ts; do
-  ( cd "$REPO_ROOT/$pkg" && pnpm install >/dev/null && pnpm build >/dev/null )
-done
-( cd "$ROOT" && pnpm install >/dev/null && pnpm build >/dev/null )
-
-log "Staging .publish-stage/ via scripts/vendor.mjs ..."
-( cd "$ROOT" && node scripts/vendor.mjs >/dev/null )
-
-STAGE_DIR="$(mktemp -d)"
-log "Packing plugin tarball into $STAGE_DIR ..."
-( cd "$ROOT/.publish-stage" && npm pack --pack-destination "$STAGE_DIR" >/dev/null )
-
-readonly TARBALL="$(ls "$STAGE_DIR"/*.tgz | head -1)"
-[[ -f "$TARBALL" ]] || { log "npm pack produced no tarball"; exit 2; }
-log "Tarball: $(basename "$TARBALL") ($(wc -c <"$TARBALL") bytes)"
-
-# --- Structural asserts on the tarball --------------------------------------
-
-readonly EXTRACT_DIR="$STAGE_DIR/inspect"
-mkdir -p "$EXTRACT_DIR"
-tar -xzf "$TARBALL" -C "$EXTRACT_DIR"
-
-for vendored_entry in \
-  dist/_vendor/_klodi_openclaw_natsclient/index.js \
-  dist/_vendor/_klodi_openclaw_toolcatalog/index.js
-do
-  if [[ ! -f "$EXTRACT_DIR/package/$vendored_entry" ]]; then
-    log "FAIL: $vendored_entry missing from tarball."
-    log "      Vendor staging didn't reach the published artefact —"
-    log "      check scripts/vendor.mjs and pack:inspect output."
-    exit 1
-  fi
-done
-
-if [[ -d "$EXTRACT_DIR/package/node_modules" ]] \
-  || [[ -d "$EXTRACT_DIR/package/dist/node_modules" ]]; then
-  log "FAIL: node_modules/ shipped in tarball."
-  log "      Vendor model expects no node_modules/ at all — workspace"
-  log "      deps ride under dist/_vendor/ and external deps install"
-  log "      via package.json#dependencies on the host."
-  exit 1
-fi
-
-# Vendoring's publish-time projection: workspace deps are real runtime
-# deps in source, but they ride into the artefact as inlined JS under
-# dist/_vendor/, not as registry-fetchable packages. vendor.mjs strips
-# them from the published dependencies so the host's npm install does
-# not try (and fail) to resolve them against the public registry.
-PUBLISHED_PKG="$EXTRACT_DIR/package/package.json"
-if grep -qE '"@klodi/(nats-client|tool-catalog)"\s*:' "$PUBLISHED_PKG"; then
-  log "FAIL: published package.json still lists @klodi/* in dependencies."
-  log "      vendor.mjs's writePublishPackageJson regressed — workspace"
-  log "      deps must be stripped because they ship inlined under"
-  log "      dist/_vendor/ rather than via the public registry."
-  exit 1
-fi
-
-rm -rf "$EXTRACT_DIR"
-log "Structural asserts: vendored sources present, no node_modules/, clean package.json."
+smoke_require_pack_prereqs
+smoke_build_and_pack # sets TARBALL, STAGE_DIR
 
 # Stage the openclaw config alongside the tarball; everything rides
 # into the container under /stage:ro so nothing on the host needs to
@@ -191,13 +126,9 @@ cat >"$STAGE_DIR/openclaw.json" <<'EOF'
 }
 EOF
 
-# `mktemp -d` defaults to mode 0700, owned by the host runner uid. On
-# Linux CI the container's `node` user (uid 1000) cannot read files
-# inside that mount, even read-only. World-readable on the staging dir
-# (mode 0755) lets the bind mount serve the tarball + config to any
-# uid; the dir is ephemeral and never written to from the container side.
-chmod 0755 "$STAGE_DIR"
-find "$STAGE_DIR" -type f -exec chmod 0644 {} +
+# World-readable staging so the container's `node` uid can read the :ro
+# mount (shared helper — see smoke-pack-lib.sh for the rationale).
+smoke_world_readable_stage "$STAGE_DIR"
 
 # --- Install in container ---------------------------------------------------
 
