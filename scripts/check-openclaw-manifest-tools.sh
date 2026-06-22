@@ -35,7 +35,10 @@
 #
 # This gate is a sibling to scripts/check-adapter-tools.sh; it enforces a
 # DIFFERENT contract (manifest-vs-registered, not adapter-source-vs-catalog) and
-# never reads the tool-catalog schemas.
+# never reads the tool-catalog schemas. The two distinct symmetry axes — and why
+# this gate keys on src/tools/*.ts literals rather than the catalog host_shape
+# slice — are recorded in docs/decisions/0014-tool-symmetry-axes.md.
+# See ADR-0014.
 #
 # Env overrides (default to the real paths when unset):
 #   MANIFEST       — abs path to the openclaw.plugin.json to read
