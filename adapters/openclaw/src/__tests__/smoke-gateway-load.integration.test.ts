@@ -171,6 +171,23 @@ describe("smoke-gateway-load.sh loads klodi at gateway startup on 2026.5.27", ()
           "script must emit it and `klodi` must be present.",
       ).toContain("klodi");
       expect(log).toContain("plugins.loaded");
+
+      // (4) Axis-4 arm assertion (this card — wake-pump-never-arms). Loaded
+      //     is necessary but not sufficient: root cause B is a loaded plugin
+      //     that misclassifies the gateway runtime and stays inert. The
+      //     script asserts the gateway DAEMON phase of the boot log carries
+      //     no `wake_pump_skip_non_gateway` (creds-independent proof the
+      //     gateway-runtime gate flipped) and emits an arm-proof line on
+      //     exit 0. We belt-and-braces on that line so a future change to
+      //     the script's exit-code shape cannot silently drop axis 4. exit 3
+      //     == loaded-but-not-armed (the arm bug); already failed at (2).
+      expect(
+        log,
+        "smoke-gateway-load.sh exited 0 but its output does not report the " +
+          "wake-pump gate armed. The script must confirm " +
+          "`wake_pump_skip_non_gateway` is ABSENT from the gateway-daemon " +
+          "phase (the gateway-runtime gate flipped on) and emit that proof.",
+      ).toContain("wake-pump gate armed");
     },
     SMOKE_TIMEOUT_MS,
   );

@@ -5,22 +5,40 @@
 # Boots a REAL `openclaw gateway` on the CURRENT pinned image (2026.5.27,
 # NOT the 2026.4.15 floor the install-context sibling pins — flooring is
 # exactly how this bug shipped) and asserts the freshly-packed plugin
-# activates at startup, i.e. `klodi` appears in
-# `openclaw gateway health --json` plugins.loaded.
+# (a) activates at startup — `klodi` appears in
+# `openclaw gateway health --json` plugins.loaded — AND (b) the wake pump
+# ARMS in the gateway runtime (the gateway-runtime gate flipped on).
 #
 # Why this gate exists, and why it is distinct from smoke-plugin-load.sh
 # ---------------------------------------------------------------------
-# OpenClaw exposes a plugin on THREE axes; only the third catches this bug:
+# OpenClaw exposes a plugin on FOUR axes; only the last two are RUNTIME and
+# only a live gateway boot catches them:
 #   1. should-be-registered (adapter-source ↔ catalog)   — static
 #   2. is-registered (manifest .contracts.tools ↔ code)  — static (ADR-0014)
-#   3. is-actually-loaded-at-gateway-startup             — RUNTIME (this gate)
+#   3. is-actually-loaded-at-gateway-startup             — RUNTIME (axis 3)
+#   4. wake-pump-armed-in-the-gateway-runtime            — RUNTIME (axis 4)
 # `plugins doctor`, `plugins list`, and the manifest↔registered gate are all
 # axis-1/2 STATIC manifest lints: on 2026.5.27 they reported klodi enabled +
 # linked + 35 tools in sync while the gateway booted WITHOUT klodi, because
 # the manifest's `.activation` block carried no startup trigger and 2026.5.27
-# treats `.activation` as an authoritative load gate. The only signal that
-# observes axis 3 is a live gateway boot read via `gateway health --json`
-# plugins.loaded — which is what this gate does.
+# treats `.activation` as an authoritative load gate. The signal that observes
+# axis 3 is a live gateway boot read via `gateway health --json`
+# plugins.loaded. Axis 4 — the gap THIS card (wake-pump-never-arms) closes —
+# is observed in the gateway's own startup log: a loaded plugin that
+# misclassifies the gateway runtime (root cause B) still logs
+# `wake_pump_skip_non_gateway` and never arms, so klodi is "loaded but inert".
+# We assert the gateway-runtime classification flipped by checking that
+# `wake_pump_skip_non_gateway` is ABSENT from the gateway-daemon phase of the
+# boot log (creds-independent — it proves only that detection classified this
+# process as the gateway, not that creds were present to actually start the
+# pump; the model-less smoke config carries no persona creds on purpose).
+#
+# Phase split: the boot command is `plugins install ... && exec gateway`, so
+# ONE install-verify invocation legitimately logs `wake_pump_skip_non_gateway`
+# (its argv subcommand is `plugins`, not `gateway`) BEFORE the gateway daemon
+# starts. That skip is correct and expected. The gateway daemon's phase begins
+# at `[gateway] loading configuration` — we assert the skip marker is absent
+# only AFTER that boundary.
 #
 # Forbidden load signals (would false-green this exact bug):
 #   - /v1/models — serves Control-UI HTML (text/html) on 2026.5.27
@@ -43,12 +61,18 @@
 #
 # Exit codes:
 #   0  gateway booted on $TAG AND `klodi` ∈ gateway health --json
-#      plugins.loaded — the plugin activates at startup as intended.
-#   1  gateway became healthy but `klodi` ∉ plugins.loaded — THE BUG:
+#      plugins.loaded AND the wake-pump gate flipped on in the gateway
+#      daemon (`wake_pump_skip_non_gateway` absent from the gateway phase) —
+#      the plugin activates AND arms at startup as intended.
+#   1  gateway became healthy but `klodi` ∉ plugins.loaded — THE LOAD BUG:
 #      .activation never fired a startup load. The loaded set (what DID
 #      load — the stock plugins) is dumped so the failure names itself.
 #   2  build / docker / prerequisite failure, OR the gateway never became
 #      healthy within the deadline (infra/boot failure). docker logs dumped.
+#   3  `klodi` IS loaded but the gateway daemon logged
+#      `wake_pump_skip_non_gateway` — THE ARM BUG (root cause B): detection
+#      misclassified the gateway runtime, so the plugin is loaded-but-inert
+#      and no inbound wake ever arms. The gateway-phase boot log is dumped.
 
 set -euo pipefail
 
@@ -208,23 +232,61 @@ fi
 loaded="$(printf '%s' "$health_json" | jq -r '.plugins.loaded | sort | join(", ")')"
 log "gateway health: ok=true; plugins.loaded = [$loaded]"
 
-if printf '%s' "$health_json" | jq -e --arg id "$PLUGIN_ID" '.plugins.loaded | index($id) != null' >/dev/null; then
-  # stdout (not stderr): the proof line the wrapper keys off.
-  printf 'gateway health --json plugins.loaded contains %s: [%s]\n' "$PLUGIN_ID" "$loaded"
-  log "PASS (exit 0): '$PLUGIN_ID' loaded at gateway startup on $IMAGE:$TAG."
-  exit 0
+if ! printf '%s' "$health_json" | jq -e --arg id "$PLUGIN_ID" '.plugins.loaded | index($id) != null' >/dev/null; then
+  # klodi healthy-but-absent → the LOAD bug. Dump what DID load so the failure
+  # names the regression (the stock plugins are present; klodi's .activation
+  # never fired at startup). Also surface plugins.errors in case the host
+  # rejected it with a reason rather than silently skipping.
+  errors="$(printf '%s' "$health_json" | jq -c '.plugins.errors')"
+  log "FAIL (exit 1): '$PLUGIN_ID' is ABSENT from gateway plugins.loaded."
+  log "      The gateway is healthy but klodi did not activate at startup —"
+  log "      its manifest .activation did not fire a load on $IMAGE:$TAG."
+  log "      THIS IS THE LOAD BUG this gate guards. plugins.loaded = [$loaded]"
+  log "      plugins.errors = $errors"
+  log "--- docker logs ($CONTAINER) ---"
+  docker logs "$CONTAINER" 2>&1 | tail -60 >&2 || true
+  exit 1
 fi
 
-# klodi healthy-but-absent → the bug. Dump what DID load so the failure names
-# the regression (the stock plugins are present; klodi's .activation never
-# fired at startup). Also surface plugins.errors in case the host rejected it
-# with a reason rather than silently skipping.
-errors="$(printf '%s' "$health_json" | jq -c '.plugins.errors')"
-log "FAIL (exit 1): '$PLUGIN_ID' is ABSENT from gateway plugins.loaded."
-log "      The gateway is healthy but klodi did not activate at startup —"
-log "      its manifest .activation did not fire a load on $IMAGE:$TAG."
-log "      THIS IS THE BUG this gate guards. plugins.loaded = [$loaded]"
-log "      plugins.errors = $errors"
-log "--- docker logs ($CONTAINER) ---"
-docker logs "$CONTAINER" 2>&1 | tail -60 >&2 || true
-exit 1
+# stdout (not stderr): the load-proof line the wrapper keys off.
+printf 'gateway health --json plugins.loaded contains %s: [%s]\n' "$PLUGIN_ID" "$loaded"
+log "'$PLUGIN_ID' loaded at gateway startup on $IMAGE:$TAG (axis 3 ✓)."
+
+# --- Assert axis 4: the wake pump ARMED in the gateway runtime --------------
+# Loaded ≠ armed. Root cause B: a loaded plugin that misclassifies the gateway
+# runtime still logs `wake_pump_skip_non_gateway` and stays inert — three green
+# lights, zero inbound wakes. The gateway-runtime gate must flip ON: the
+# gateway DAEMON phase of the boot log must NOT carry that skip marker.
+#
+# The boot command is `plugins install ... && exec gateway`, so the
+# install-verify invocation (argv subcommand `plugins`, never `gateway`)
+# legitimately logs ONE `wake_pump_skip_non_gateway` BEFORE the daemon starts —
+# that skip is correct. We isolate the gateway-daemon phase (everything from
+# the daemon's `[gateway] loading configuration` line onward) and assert the
+# skip marker is absent THERE. This is creds-independent: it proves detection
+# classified the daemon as the gateway runtime, not that creds were staged to
+# actually start the pump (the model-less smoke config carries no persona
+# creds; the pump then skips on `wake_pump_skip_no_creds` at debug level — a
+# DIFFERENT, expected skip that this assertion does not key off).
+full_log="$(docker logs "$CONTAINER" 2>&1 || true)"
+# Slice from the first gateway-daemon boot marker onward. If the marker is
+# absent the slice is empty and the grep below cannot false-pass.
+gateway_phase="$(printf '%s\n' "$full_log" | sed -n '/\[gateway\] loading configuration/,$p')"
+
+if printf '%s\n' "$gateway_phase" | grep -q 'wake_pump_skip_non_gateway'; then
+  log "FAIL (exit 3): '$PLUGIN_ID' is loaded but the gateway DAEMON logged"
+  log "      'wake_pump_skip_non_gateway' — the wake-pump gate did NOT flip."
+  log "      Detection misclassified the gateway runtime (root cause B): the"
+  log "      plugin is loaded-but-inert and no inbound wake will ever arm it."
+  log "      Expected: the daemon's argv carries 'gateway' at the subcommand"
+  log "      position, so isGatewayRuntime() returns true and the skip is absent."
+  log "--- gateway-daemon phase of the boot log ---"
+  printf '%s\n' "$gateway_phase" | tail -40 >&2
+  exit 3
+fi
+
+# stdout: the arm-proof line the wrapper keys off — the gateway-runtime gate
+# flipped on (skip marker absent from the daemon phase).
+printf 'gateway daemon: wake_pump_skip_non_gateway ABSENT — wake-pump gate armed (axis 4)\n'
+log "PASS (exit 0): '$PLUGIN_ID' loaded AND wake-pump gate armed on $IMAGE:$TAG."
+exit 0

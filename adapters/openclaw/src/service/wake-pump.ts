@@ -32,32 +32,60 @@ export function getWakePump(): WakePump | null {
 }
 
 /**
- * True when this process is the OpenClaw gateway runtime (the only
- * context where wake delivery is meaningful).
+ * Test seam for `isGatewayRuntime`'s inputs. When non-null, the detector
+ * reads `argv`/`title` from here instead of the live `process`, so the
+ * detection matrix can simulate every launch shape without mutating the
+ * real `process.argv` (vitest owns it) and without docker. `null`
+ * restores the live process values. Set only via
+ * `__setGatewayRuntimeInputsForTests`; never touched in production.
+ */
+let gatewayRuntimeInputsOverride: { argv: string[]; title: string } | null = null;
+
+/**
+ * True when this process is the OpenClaw gateway runtime — the only
+ * context where wake delivery is meaningful.
  *
- * OpenClaw sets `process.title = "openclaw-${subcommand}"` per CLI
- * invocation (see `program-COALA5eN.js` in the bundled SDK). So:
+ * Detection keys off a POSITIVE gateway signal: the `gateway` subcommand
+ * token at the subcommand position of `process.argv`. The daemon launches
+ * as `openclaw gateway [--bind lan]` (scripts/smoke-gateway-load.sh:156),
+ * so Node sees `argv = [execPath, openclawEntry, "gateway", ...]` and the
+ * subcommand is `argv[2]`. Verified empirically on alpine/openclaw
+ * 2026.5.27: the gateway daemon reports
+ * `argv[2] === "gateway"` while `process.title === "openclaw"` (the kernel
+ * rewrites the long-lived daemon's title to a bare "openclaw").
  *
- *   - `openclaw gateway`         → `openclaw-gateway`
- *   - `openclaw plugins install` → `openclaw-plugins`  ← install verify
- *   - `openclaw secrets ...`     → `openclaw-secrets`
- *   - `openclaw login ...`       → `openclaw-login`
+ * Why NOT `process.title`: the previous gate matched
+ * `process.title ∈ {"openclaw-gateway","openclaw-gatewa"}`, but the real
+ * gateway daemon's title is the bare "openclaw" — the per-subcommand
+ * `openclaw-${subcommand}` title scheme is honored for short-lived CLI
+ * invocations but NOT for the long-lived gateway daemon. So the title gate
+ * never matched the gateway and the pump stayed inert (root cause B, card
+ * openclaw-wake-pump-never-arms-in-real-gateway). "openclaw" is also the
+ * title of other invocations, so matching it would fail the gate OPEN.
  *
- * Linux's TASK_COMM_LEN (15 chars) truncates `openclaw-gateway` to
- * `openclaw-gatewa`, so we match both forms. macOS does not truncate.
+ * Why the SUBCOMMAND POSITION, not a substring: matching `gateway`
+ * anywhere in argv would arm during a CLI invocation whose args merely
+ * contain the word (e.g. `plugins install gateway-tools`, or a
+ * `--note "gateway down"` flag value), opening a spurious wake
+ * subscription in a short-lived verify process. The three genuine CLI
+ * contexts — `plugins`, `secrets`, `login` — carry their own token at the
+ * subcommand position, never `gateway`, so they correctly classify as
+ * non-gateway and skip.
  *
  * `OPENCLAW_CLI=1` is set unconditionally on every openclaw invocation
- * (`openclaw-exec-env-*.js::ensureOpenClawExecMarkerOnProcess`), so
- * it's useless as a discriminator. Don't gate on it.
+ * (`openclaw-exec-env-*.js::ensureOpenClawExecMarkerOnProcess`), so it's
+ * useless as a discriminator. Don't gate on it.
  *
- * `KLODI_GATEWAY_OVERRIDE=1` is a test escape hatch — lets unit tests
- * and ad-hoc shell harnesses force the pump on without spoofing
- * `process.title`. Production never sets it.
+ * `KLODI_GATEWAY_OVERRIDE=1` is the first-checked test escape hatch — it
+ * lets unit tests and ad-hoc shell harnesses force the pump on without
+ * spoofing argv. Production never sets it.
  */
-function isGatewayRuntime(): boolean {
+export function isGatewayRuntime(): boolean {
   if (process.env["KLODI_GATEWAY_OVERRIDE"] === "1") return true;
-  const t = process.title;
-  return t === "openclaw-gateway" || t === "openclaw-gatewa";
+  const argv = gatewayRuntimeInputsOverride?.argv ?? process.argv;
+  // argv = [execPath, openclawEntry, subcommand, ...args]; the subcommand
+  // is index 2. Match it exactly — position, not substring.
+  return argv[2] === "gateway";
 }
 
 /**
@@ -77,11 +105,11 @@ export async function startWakePumpIfPossible(
     // openclaw context (install verify, secrets audit, login, etc.).
     api.logger.info("wake_pump_skip_non_gateway", {
       message:
-        "Process is not the openclaw gateway (process.title check) —"
-        + " skipping pump start. Wakes only deliver in the gateway"
-        + " runtime; CLI subcommands like `openclaw plugins install`"
-        + " load the plugin to verify it but never receive wakes.",
-      process_title: process.title,
+        "Process is not the openclaw gateway (no `gateway` subcommand at"
+        + " process.argv[2]) — skipping pump start. Wakes only deliver in"
+        + " the gateway runtime; CLI subcommands like `openclaw plugins"
+        + " install` load the plugin to verify it but never receive wakes.",
+      subcommand: process.argv[2] ?? null,
     });
     return null;
   }
@@ -240,6 +268,17 @@ export function __setWakePumpRetryDelayForTests(
   fn: ((attempt: number) => number) | null,
 ): void {
   retryDelayOverride = fn;
+}
+
+/**
+ * Override the argv/title `isGatewayRuntime` reads, so the detection
+ * matrix can simulate every launch shape in isolation. Pass `null` to
+ * restore the live `process` values. Not exported from the package barrel.
+ */
+export function __setGatewayRuntimeInputsForTests(
+  inputs: { argv: string[]; title: string } | null,
+): void {
+  gatewayRuntimeInputsOverride = inputs;
 }
 
 /**
