@@ -3,7 +3,7 @@ id: 0015-gateway-runtime-load-vs-armed-axis
 title: Gateway runtime-load axis — loaded ≠ armed; detect the gateway by argv subcommand, not process.title
 tags: [openclaw, wake-pump, gateway, runtime, detection, activation, axis, contracts]
 card: openclaw-wake-pump-never-arms-in-real-gateway
-commit: 9c3f570
+commit: 4a5cd12
 updated_at: 2026-06-22
 updated_by_card: openclaw-wake-pump-never-arms-in-real-gateway
 ---
