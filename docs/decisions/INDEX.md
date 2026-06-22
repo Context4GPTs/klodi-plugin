@@ -8,6 +8,7 @@ Rows are sorted **newest `updated_at` first**.
 
 | Doc | Title | Tags | Updated |
 |---|---|---|---|
+| [[0015-gateway-runtime-load-vs-armed-axis]] | Gateway runtime-load axis — loaded ≠ armed; detect the gateway by argv subcommand, not process.title | openclaw, wake-pump, gateway, runtime, detection, activation, axis, contracts | 2026-06-22 |
 | [[0014-tool-symmetry-axes]] | Two tool-symmetry axes — is-registered (manifest) vs should-be-registered (catalog) | symmetry, drift, manifest, catalog, tools, openclaw, gate, contracts | 2026-06-22 |
 | [[0011-adapter-exception-envelope]] | Adapter exception envelope and pre-call guard contract | envelope, guards, error-handling, adapters, parity | 2026-06-19 |
 | [[0013-match-feedback-trust-boundary]] | Match-feedback emit — action-not-label trust boundary, body-id validation | trust-boundary, feedback, flywheel, publish, adapters, catalog, nats | 2026-05-30 |

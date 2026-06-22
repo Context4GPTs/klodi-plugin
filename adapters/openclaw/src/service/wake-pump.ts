@@ -79,6 +79,11 @@ let gatewayRuntimeInputsOverride: { argv: string[]; title: string } | null = nul
  * `KLODI_GATEWAY_OVERRIDE=1` is the first-checked test escape hatch — it
  * lets unit tests and ad-hoc shell harnesses force the pump on without
  * spoofing argv. Production never sets it.
+ *
+ * See ADR-0015 (docs/decisions/0015-gateway-runtime-load-vs-armed-axis.md):
+ * the runtime "loaded ≠ armed" axis, why the skip-path halt-on-null is
+ * correct (a retry would be a trap), and how to re-verify the discriminator
+ * when the OpenClaw image bumps.
  */
 export function isGatewayRuntime(): boolean {
   if (process.env["KLODI_GATEWAY_OVERRIDE"] === "1") return true;
