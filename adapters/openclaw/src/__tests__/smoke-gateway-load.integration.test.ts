@@ -2,7 +2,7 @@
  * Integration proof for: "Load openclaw plugin at gateway startup".
  *
  * Acceptance criteria (card → Discovery findings, [integration] AC-2/3/4/6):
- *   AC-2 — "Given a stock alpine/openclaw:2026.5.27 gateway with the
+ *   AC-2 — "Given a stock latest alpine/openclaw gateway with the
  *           freshly-packed klodi tarball installed, when the gateway
  *           boots, then `openclaw gateway health --json` returns
  *           { ok: true, plugins: { loaded: [...] } } with `klodi` present
@@ -10,14 +10,14 @@
  *   AC-4 — "...the static install/health signals and the runtime load
  *           state are consistent, closing the 'three green lights, zero
  *           function' gap."
- *   AC-6 — "...a manifest-load smoke gate runs it against the
- *           currently-pinned (2026.5.27) image, asserts `klodi` appears
+ *   AC-6 — "...a manifest-load smoke gate runs it against the latest
+ *           openclaw image, asserts `klodi` appears
  *           in `gateway health --json` plugins.loaded (the runtime axis),
  *           failing loud and naming the absence — rather than asserting
  *           only the klodi_plugin_loaded log marker or relying on
  *           `plugins doctor` (the static axes)."
  *
- * This is the run that settles the bug: on 2026.5.27 the host treats
+ * This is the run that settles the bug: the latest openclaw host treats
  * `.activation` as an authoritative load gate, so the current manifest
  * (`onCapabilities: ["tool"]`, no startup trigger) never activates klodi
  * at gateway boot. Only a real gateway boot on the ENFORCING image, read
@@ -29,19 +29,19 @@
  * The assertion is the conjunction that flips on the expert's edit:
  *   1. the gateway-load script exists, AND
  *   2. running it exits 0 — which the script defines (devops spec) as
- *      "the gateway booted on 2026.5.27 AND `klodi` ∈ gateway health
- *      --json plugins.loaded".
+ *      "the gateway booted on the latest openclaw image AND `klodi` ∈
+ *      gateway health --json plugins.loaded".
  *
  * Today BOTH are FALSE — there is no scripts/smoke-gateway-load.sh yet
  * (devops-engineer writes it), AND the current manifest does not load on
- * 2026.5.27 — so this is RED. That conjunction is the point: it goes
- * GREEN only when the `.activation` fix lands AND the script exists, the
- * same shape as the sibling's "model-less fixture AND it loads".
+ * the latest openclaw — so this is RED. That conjunction is the point: it
+ * goes GREEN only when the `.activation` fix lands AND the script exists,
+ * the same shape as the sibling's "model-less fixture AND it loads".
  *
  * HARD CONSTRAINTS (card Intent + product-owner notes — do not relax):
  *   - The sole authoritative load signal is `openclaw gateway health
  *     --json` → plugins.loaded. NOT `/v1/models` (serves Control UI HTML
- *     on 2026.5.27 regardless of load — false green). NOT the
+ *     on the latest openclaw regardless of load — false green). NOT the
  *     `klodi_plugin_loaded` log marker (can fire on a lazy/capability
  *     path while klodi is still absent from the startup plugins.loaded
  *     set — the exact gap this card closes). NOT `plugins doctor` (a
@@ -114,27 +114,28 @@ if (!runnable) {
   );
 }
 
-describe("smoke-gateway-load.sh loads klodi at gateway startup on 2026.5.27", () => {
+describe("smoke-gateway-load.sh loads klodi at gateway startup on the latest openclaw image", () => {
   maybeIt(
     "boots the gateway AND klodi appears in gateway health --json plugins.loaded (exit 0)",
     () => {
       // (1) The gateway-load script must exist. devops-engineer writes
       //     scripts/smoke-gateway-load.sh (boots a real gateway on the
-      //     2026.5.27 image, polls `gateway health --json`, asserts
+      //     latest openclaw image, polls `gateway health --json`, asserts
       //     `klodi` ∈ plugins.loaded). RED until that script lands. We
       //     assert presence explicitly so the failure NAMES the missing
       //     deliverable rather than surfacing as an opaque spawn error.
       expect(
         existsSync(SMOKE_SCRIPT),
         "scripts/smoke-gateway-load.sh does not exist yet. devops-engineer " +
-          "owns it: it must boot a real openclaw gateway on the pinned " +
-          "2026.5.27 image, poll `openclaw gateway health --json`, and " +
+          "owns it: it must boot a real openclaw gateway on the latest " +
+          "openclaw image, poll `openclaw gateway health --json`, and " +
           "assert `klodi` ∈ plugins.loaded (exit 0 pass / 1 plugin-not-loaded " +
           "/ 2 infra). Do NOT stub this assertion away.",
       ).toBe(true);
 
       // (2) Running the script must exit 0. The script's contract
-      //     (devops spec) defines 0 == the gateway booted on 2026.5.27
+      //     (devops spec) defines 0 == the gateway booted on the latest
+      //     openclaw image
       //     AND `klodi` ∈ `gateway health --json` plugins.loaded. exit 1
       //     == klodi absent from plugins.loaded (THE BUG — manifest's
       //     .activation never fired at startup); exit 2 == infra/boot
@@ -160,7 +161,7 @@ describe("smoke-gateway-load.sh loads klodi at gateway startup on 2026.5.27", ()
       //     log marker or a /v1/models response as proof — they are
       //     forbidden by the card (a marker can fire on a lazy path while
       //     klodi is absent from the startup plugins.loaded set; /v1/models
-      //     is Control-UI HTML on 2026.5.27). Belt-and-braces on the
+      //     is Control-UI HTML on the latest openclaw). Belt-and-braces on the
       //     plugin id the criterion names directly, in case the script's
       //     exit-code contract ever changes shape.
       expect(

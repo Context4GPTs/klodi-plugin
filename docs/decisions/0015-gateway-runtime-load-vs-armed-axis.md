@@ -69,8 +69,9 @@ first-checked test escape hatch (production never sets it).
 
 ### Why `argv[2]`, and why not the alternatives
 
-Empirically confirmed on `alpine/openclaw:2026.5.27` (temp `argv`/`title` dump in
-`register()`, both contexts booted, removed before commit):
+Empirically confirmed on the latest openclaw gateway image (`argv`/`title`
+dump from inside both contexts; observed on 2026.6.9, latest at time of
+writing — an illustrative datapoint, not a tag the code keys on):
 
 | Context | `process.argv` | `argv[2]` | `process.title` |
 |---|---|---|---|
@@ -124,6 +125,12 @@ non-vacuousness was proven by reverting detection to the old `process.title` gat
 same image → exit 3. When the discriminator stops working on a bumped image, this
 gate fails loud rather than the product going silently deaf.
 
+The gate boots the floating `latest` openclaw tag by default (not a frozen
+calendar pin) precisely so this defense is self-updating: it always exercises the
+newest published image, so a discriminator that breaks on a fresh release surfaces
+on the next gate run instead of waiting for someone to bump a hard-coded pin. A
+specific tag can still be passed via `OPENCLAW_TAG` for a one-off reproduction.
+
 To re-verify the discriminator on a new image: dump `process.argv` + `process.title`
 (and diff `process.env` keys) from inside `register()` across the gateway and a CLI
 context; if `argv` is rewritten too, fall back to a gateway-only env marker
@@ -145,8 +152,8 @@ context; if `argv` is rewritten too, fall back to a gateway-only env marker
 ## References
 
 - **Detection site (inline WHY):** `adapters/openclaw/src/service/wake-pump.ts`
-  `isGatewayRuntime()` — the argv-vs-title rationale and the empirical 2026.5.27
-  table live at the function's doc-comment.
+  `isGatewayRuntime()` — the argv-vs-title rationale and the empirical
+  observation (latest image) live at the function's doc-comment.
 - **Runtime gate:** `adapters/openclaw/scripts/smoke-gateway-load.sh` (axis 3/4;
   exit 3 = loaded-but-inert) + its vitest wrapper
   `smoke-gateway-load.integration.test.ts`.

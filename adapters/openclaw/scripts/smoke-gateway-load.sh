@@ -2,9 +2,12 @@
 #
 # Gateway-startup load smoke gate for @4gpts/klodi.
 #
-# Boots a REAL `openclaw gateway` on the CURRENT pinned image (2026.5.27,
-# NOT the 2026.4.15 floor the install-context sibling pins — flooring is
-# exactly how this bug shipped) and asserts the freshly-packed plugin
+# Boots a REAL `openclaw gateway` on the LATEST published openclaw image
+# (the floating `latest` tag — NOT the 2026.4.15 floor the install-context
+# sibling pins; flooring is exactly how this bug shipped, and pinning to a
+# frozen calendar tag is the same drift hazard in slow motion — a frozen pin
+# silently stops tracking the image the bug actually reproduces on). We align
+# with the newest published openclaw on every run. The freshly-packed plugin
 # (a) activates at startup — `klodi` appears in
 # `openclaw gateway health --json` plugins.loaded — AND (b) the wake pump
 # ARMS in the gateway runtime (the gateway-runtime gate flipped on).
@@ -18,10 +21,11 @@
 #   3. is-actually-loaded-at-gateway-startup             — RUNTIME (axis 3)
 #   4. wake-pump-armed-in-the-gateway-runtime            — RUNTIME (axis 4)
 # `plugins doctor`, `plugins list`, and the manifest↔registered gate are all
-# axis-1/2 STATIC manifest lints: on 2026.5.27 they reported klodi enabled +
-# linked + 35 tools in sync while the gateway booted WITHOUT klodi, because
-# the manifest's `.activation` block carried no startup trigger and 2026.5.27
-# treats `.activation` as an authoritative load gate. The signal that observes
+# axis-1/2 STATIC manifest lints: on the latest openclaw gateway image they
+# reported klodi enabled + linked + 35 tools in sync while the gateway booted
+# WITHOUT klodi, because the manifest's `.activation` block carried no startup
+# trigger and the host treats `.activation` as an authoritative load gate. The
+# signal that observes
 # axis 3 is a live gateway boot read via `gateway health --json`
 # plugins.loaded. Axis 4 — the gap THIS card (wake-pump-never-arms) closes —
 # is observed in the gateway's own startup log: a loaded plugin that
@@ -41,7 +45,7 @@
 # only AFTER that boundary.
 #
 # Forbidden load signals (would false-green this exact bug):
-#   - /v1/models — serves Control-UI HTML (text/html) on 2026.5.27
+#   - /v1/models — serves Control-UI HTML (text/html) on the latest image
 #     regardless of plugin-load state, even with token auth + Accept: json.
 #   - the `klodi_plugin_loaded` log marker — fires on lazy/capability
 #     activation paths while klodi is still ABSENT from the startup
@@ -56,8 +60,8 @@
 # boot differs. The bug under test is activation, not packaging.
 #
 # Usage:
-#   scripts/smoke-gateway-load.sh                     # pinned tag (2026.5.27)
-#   OPENCLAW_TAG=latest scripts/smoke-gateway-load.sh # nightly drift check
+#   scripts/smoke-gateway-load.sh                       # latest openclaw image
+#   OPENCLAW_TAG=2026.6.9 scripts/smoke-gateway-load.sh # pin a one-off tag
 #
 # Exit codes:
 #   0  gateway booted on $TAG AND `klodi` ∈ gateway health --json
@@ -79,11 +83,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 readonly ROOT
 readonly IMAGE="${OPENCLAW_IMAGE:-alpine/openclaw}"
-# The CURRENT pinned image — the one where the bug reproduces and where the
-# startup-activation contract is enforced. NOT the 2026.4.15 floor: a gate
+# Track the LATEST published openclaw image — the gate always boots the newest
+# image, which is where the bug actually reproduces (it reproduces on the
+# current latest, 2026.6.9). NOT the 2026.4.15 floor: a gate
 # on the floor is green while the current image rejects the plugin (that is
-# precisely how this bug shipped). Env-overridable for a `latest` drift run.
-readonly TAG="${OPENCLAW_TAG:-2026.5.27}"
+# precisely how this bug shipped). NOT a frozen calendar pin either: a pin
+# silently stops tracking the live image the moment a newer one ships. Pass
+# OPENCLAW_TAG to boot a specific tag for a one-off (e.g. reproduce on an older
+# image); the default tracks `latest`.
+readonly TAG="${OPENCLAW_TAG:-latest}"
 readonly CONTAINER="klodi-plugin-gateway-smoke-$$"
 
 # Gateway wiring the gate owns end-to-end: it boots the gateway, so it picks

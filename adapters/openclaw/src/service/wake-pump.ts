@@ -49,10 +49,12 @@ let gatewayRuntimeInputsOverride: { argv: string[]; title: string } | null = nul
  * token at the subcommand position of `process.argv`. The daemon launches
  * as `openclaw gateway [--bind lan]` (scripts/smoke-gateway-load.sh:156),
  * so Node sees `argv = [execPath, openclawEntry, "gateway", ...]` and the
- * subcommand is `argv[2]`. Verified empirically on alpine/openclaw
- * 2026.5.27: the gateway daemon reports
- * `argv[2] === "gateway"` while `process.title === "openclaw"` (the kernel
- * rewrites the long-lived daemon's title to a bare "openclaw").
+ * subcommand is `argv[2]`. Confirmed on the latest openclaw gateway image
+ * (observed on 2026.6.9, latest at time of writing): the gateway daemon
+ * reports `argv[2] === "gateway"` while the CLI `plugins install` context
+ * reports `argv[2] === "plugins"`. The daemon's `process.title` is the bare
+ * "openclaw" (the kernel rewrites the long-lived daemon's title), which is
+ * exactly why title-based detection cannot work — see below.
  *
  * Why NOT `process.title`: the previous gate matched
  * `process.title ∈ {"openclaw-gateway","openclaw-gatewa"}`, but the real
