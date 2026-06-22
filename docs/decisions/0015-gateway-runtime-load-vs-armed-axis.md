@@ -131,6 +131,19 @@ newest published image, so a discriminator that breaks on a fresh release surfac
 on the next gate run instead of waiting for someone to bump a hard-coded pin. A
 specific tag can still be passed via `OPENCLAW_TAG` for a one-off reproduction.
 
+This makes two opposite-intent version policies coexist on purpose, and a future
+openclaw card must not collapse them: the **runtime/arming gate floats to
+`latest`** (always prove the *newest* host still arms), while the **compat/install
+`>=` floors and the oldest-host floor smoke stay pinned** (always prove the
+*oldest-supported* host still loads). The floors are `package.json#openclaw`'s
+`minGatewayVersion` / `pluginApi` / `minHostVersion` (`>=` semantic floors tied to
+the `--ignore-scripts` security guarantee of [[0008-bundled-deps-host-ignore-scripts]],
+verified at 2026.4.15) and `smoke-plugin-load.sh`'s deliberate `OPENCLAW_TAG:-2026.4.15`
+pin, which boots the *oldest* supported host to prove load-on-floor. Floating
+those would defeat their purpose; pinning this gate would defeat its purpose. A
+"drop all version pins for hygiene" sweep is correct for the runtime gate and a
+regression for the floors.
+
 To re-verify the discriminator on a new image: dump `process.argv` + `process.title`
 (and diff `process.env` keys) from inside `register()` across the gateway and a CLI
 context; if `argv` is rewritten too, fall back to a gateway-only env marker
