@@ -3,9 +3,9 @@ id: 0009-vendored-ts-workspace-deps
 title: Workspace TS deps vendored into `dist/_vendor/` at publish time
 tags: [publish, vendoring, typescript]
 card: pre-harness
-commit: 07522fc
-updated_at: 2026-04-30
-updated_by_card: pre-harness
+commit: 2e8d5d8
+updated_at: 2026-06-23
+updated_by_card: pack-or-strip-vendored-toolcatalog-sourcemaps
 ---
 
 # ADR-0009 — Workspace TS deps vendored into `dist/_vendor/` at publish time
@@ -91,6 +91,8 @@ The install-time code-execution guarantee from ADR-0003 is **preserved**, with a
 **Reproducibility.** `vendor.mjs` is deterministic given a clean working tree. It mutates only `.publish-stage/` (a gitignored, recreated-from-scratch directory). The source tree is never modified — `pnpm install`, `pnpm test`, `pnpm build` continue to resolve workspace deps via the existing pnpm symlinks.
 
 **Auditability.** `tar -tzf <tarball> | sort` enumerates every file shipped. The vendor surface is exactly `dist/_vendor/_klodi_openclaw_<pkg>/*.js` (workspace, two namespaces) and `package.json#dependencies` (public registry). No `node_modules/` at any depth, no minification, no bundler-generated code.
+
+"Exactly `*.js`" carries a **self-containment rider**: each vendored `.js` may not ship a reference to an artefact the tarball does not contain. The source deps build with `sourceMap: true`, so tsc appends a trailing `//# sourceMappingURL=<name>.js.map` comment to every `.js`; `vendor.mjs` deliberately copies only `.js` (not `.js.map`), so that comment would otherwise become a dangling reference, and every downstream load logs a non-fatal `ENOENT *.js.map`. `vendor.mjs`'s `rewriteImports()` pass therefore strips the comment from each staged vendored `.js`, aligning the vendored copy with the map-free contract the adapter's own dist already honours (`tsconfig.build.json` `sourceMap: false`). Packing the maps was rejected: their `sources` point at un-vendored `../src/*.ts` with no `sourcesContent`, so packing them relocates the `ENOENT` one level down rather than removing it, while growing the tarball.
 
 ## References
 

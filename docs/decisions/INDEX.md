@@ -8,6 +8,7 @@ Rows are sorted **newest `updated_at` first**.
 
 | Doc | Title | Tags | Updated |
 |---|---|---|---|
+| [[0009-vendored-ts-workspace-deps]] | Workspace TS deps vendored into `dist/_vendor/` at publish time | publish, vendoring, typescript | 2026-06-23 |
 | [[0014-tool-symmetry-axes]] | Three tool-symmetry axes — manifest↔registered, referenced⊆catalog, catalog↔registered-by-name | symmetry, drift, manifest, catalog, tools, openclaw, gate, contracts | 2026-06-23 |
 | [[0016-wake-log-correlator-contract]] | wake_enqueued correlator — echo the producer's event_id, never mint one; contract codegen'd into 3 loggers but emitter-satisfied only in openclaw | logging, correlator, wake, observability, catalog, contracts, adapters, parity, openclaw | 2026-06-23 |
 | [[0015-gateway-runtime-load-vs-armed-axis]] | Gateway runtime-load axis — loaded ≠ armed; detect the gateway by argv subcommand, not process.title | openclaw, wake-pump, gateway, runtime, detection, activation, axis, contracts | 2026-06-22 |
@@ -17,7 +18,6 @@ Rows are sorted **newest `updated_at` first**.
 | [[0006-direct-to-storage-photo-uploads]] | Direct-to-storage photo uploads via signed URLs | uploads, r2, marketplace | 2026-05-23 |
 | [[0010-zeroclaw-browser-pairing-shim]] | Browser-pairing helper for klodi-zeroclaw (auto-mint + loopback HTTP shim) | zeroclaw, pairing, auth | 2026-05-10 |
 | [[0004-preserve-state-on-uninstall]] | Preserve `$klodi_home` on uninstall | uninstall, state, openclaw | 2026-05-04 |
-| [[0009-vendored-ts-workspace-deps]] | Workspace TS deps vendored into `dist/_vendor/` at publish time | publish, vendoring, typescript | 2026-04-30 |
 | [[0008-bundled-deps-host-ignore-scripts]] | Runtime deps via `bundleDependencies` + host-enforced `--ignore-scripts` | publish, supply-chain, superseded | 2026-04-30 |
 | [[0007-timer-cadence-clamp]] | Timer cadences with parse clamps and silent auto-reject | timers, validation, superseded | 2026-04-30 |
 | [[0005-client-side-floor-price-enforcement]] | Floor-price enforcement client-side only | pricing, marketplace | 2026-04-30 |
