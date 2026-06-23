@@ -36,6 +36,7 @@ import { __resetWakePumpRegistryForTests } from "@klodi/nats-client";
 import {
   __resetWakePumpRetryForTests,
   __setWakePumpRetryDelayForTests,
+  __setGatewayRuntimeInputsForTests,
   scheduleWakePumpRetry,
   stopWakePump,
 } from "../../service/wake-pump.js";
@@ -117,6 +118,7 @@ afterEach(async () => {
   await stopWakePump(api);
   __resetWakePumpRetryForTests();
   __resetWakePumpRegistryForTests();
+  __setGatewayRuntimeInputsForTests(null);
   tempHome.cleanup();
   delete process.env["KLODI_GATEWAY_OVERRIDE"];
 });
@@ -235,6 +237,53 @@ describe("scheduleWakePumpRetry", () => {
       .filter((c) => c[0] === "wake_pump_retry_scheduled");
     expect(scheduleEvents).toHaveLength(1);
     // Reset env for the afterEach cleanup path.
+    process.env["KLODI_GATEWAY_OVERRIDE"] = "1";
+  });
+
+  it("halts retries when startWakePumpIfPossible returns null via the GATEWAY-runtime skip (detection classifies non-gateway, creds present)", async () => {
+    // This is the contract the detection fix must NOT loosen. Distinct
+    // from the creds-removed skip above: here credentials ARE present
+    // (the beforeEach wrote nats.creds + config.json), but the detection
+    // logic classifies this process as a genuine CLI context (argv =
+    // `openclaw plugins install ...`, no `gateway` token). So
+    // startWakePumpIfPossible logs wake_pump_skip_non_gateway and returns
+    // null — and runRetryAttempt MUST treat that as TERMINAL, not as a
+    // transient failure to busy-retry. A future "just add a retry on the
+    // skip path" regression would make a real `plugins install` busy-loop
+    // forever; the halt-on-null at wake-pump.ts:207-212 is what prevents
+    // that. This test fails LOUD if that load-bearing halt is removed.
+    //
+    // Force the gateway-skip path through the detection seam rather than
+    // the override env, so the lock survives the detection-mechanism
+    // change (the override would short-circuit to true and never reach
+    // the skip).
+    delete process.env["KLODI_GATEWAY_OVERRIDE"];
+    __setGatewayRuntimeInputsForTests({
+      argv: ["/usr/bin/node", "/usr/lib/openclaw/cli.js", "plugins", "install", "klodi"],
+      title: "openclaw",
+    });
+
+    scheduleWakePumpRetry(api);
+    await vi.advanceTimersByTimeAsync(10);
+    await settle();
+    // Advance well past any further scheduled delay — nothing more fires.
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settle();
+
+    // The skip returned before connectClient — NO wake subscription was
+    // opened (no NATS connection in a permanently-CLI context).
+    expect(connectClientMock).not.toHaveBeenCalled();
+    // The gateway-runtime skip marker fired (not the no-creds skip).
+    expect(api.logger.info).toHaveBeenCalledWith(
+      "wake_pump_skip_non_gateway",
+      expect.objectContaining({}),
+    );
+    // Terminal: only the initial schedule, no busy-retry follow-up.
+    const scheduleEvents = vi.mocked(api.logger.info).mock.calls
+      .filter((c) => c[0] === "wake_pump_retry_scheduled");
+    expect(scheduleEvents).toHaveLength(1);
+
+    // Restore env for the afterEach cleanup path.
     process.env["KLODI_GATEWAY_OVERRIDE"] = "1";
   });
 
