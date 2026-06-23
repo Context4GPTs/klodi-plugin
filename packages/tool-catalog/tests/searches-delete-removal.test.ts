@@ -95,6 +95,16 @@ const SCANNED_EXTENSIONS: ReadonlySet<string> = new Set([
 const TOOL_NAME_ALLOWLIST: ReadonlySet<string> = new Set([
   // This grep gate itself names the literal to assert it is absent elsewhere.
   "packages/tool-catalog/tests/searches-delete-removal.test.ts",
+  // The sibling symmetry-gate test names the dropped tool as its GHOST const —
+  // the literal IS the motivating example the gate fixture exercises. It is a
+  // test, not shipped surface, so naming the ghost is legitimate (mirrors this
+  // test's own self-allow above).
+  "packages/tool-catalog/tests/catalog-registered-symmetry.test.ts",
+  // The openclaw unwatch regression test carries a WHY comment explaining that
+  // registerUnwatch sources the subject from the bare literal AFTER the catalog
+  // key klodiTools.klodi_searches_delete was dropped — a legitimate code
+  // comment that names the dropped key to document the switch it guards.
+  "adapters/openclaw/src/__tests__/tools/discovery.test.ts",
   // ADR-0014 gains the third symmetry axis during Distillation and may cite
   // the ghost by name as the motivating example.
   "docs/decisions/0014-tool-symmetry-axes.md",

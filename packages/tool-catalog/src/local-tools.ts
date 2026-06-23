@@ -194,7 +194,7 @@ export const LOCAL_TOOLS = {
     name: "klodi_unwatch",
     description:
       "Stop a standing search and delete the local buy/<slug>.md file."
-      + " Composite of klodi_searches_delete + filesystem unlink.",
+      + " Composite of the server-side searches.delete + filesystem unlink.",
     params: Type.Object({ slug: Type.String() }),
     result: Type.Object({
       slug: Type.String(),

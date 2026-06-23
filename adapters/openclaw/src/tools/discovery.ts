@@ -205,7 +205,11 @@ async function createPersistentSearch(
 }
 
 function registerUnwatch(api: PluginAPI): void {
-  const tool = klodiTools.klodi_searches_delete;
+  // Bare subject literal — the standalone server-delete catalog tool was
+  // dropped (it was a ghost: declared but never registered under that name on
+  // the gateway). The delete capability stays live here under the
+  // `klodi_unwatch` composite. See ADR-0014 (catalog ↔ registered-by-name axis).
+  const deleteSubject = "p2p.v1.searches.delete";
   api.registerTool({
     name: "klodi_unwatch",
     label: "Stop Standing Search",
@@ -228,7 +232,7 @@ function registerUnwatch(api: PluginAPI): void {
       if (guard) return guard;
       const slug = params["buy_slug"] as string;
       try {
-        await rawRequest(tool.subject, { slug });
+        await rawRequest(deleteSubject, { slug });
       } catch (e) {
         return envelopeToolResult(e);
       }
