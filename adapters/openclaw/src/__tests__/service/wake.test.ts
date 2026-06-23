@@ -18,6 +18,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { wakeAgent } from "../../service/wake.js";
+import {
+  makeChannelHandler,
+  makeNotificationHandler,
+} from "../../service/wake-handlers.js";
+import type {
+  ChannelMessageEvent,
+  NotificationEvent,
+  NotificationKind,
+} from "@klodi/tool-catalog";
 import type { PluginAPI } from "openclaw/plugin-sdk";
 
 interface RecordedCall {
@@ -437,6 +446,318 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
       expect(enqueueOpts.sessionKey).toBe("agent:first:main");
     });
   });
+
+  // ───────────────────────────────────────────────────────────────────
+  // card/add-event-correlator-to-wake-enqueued-log — RED phase.
+  //
+  // The wake_enqueued log must carry a `kind` discriminator and an
+  // `event_id` correlator, additive to the existing reason/sessionKey/
+  // store-diagnostic fields. For wire-event wakes both are echoed
+  // verbatim from the triggering event; for locally-originated
+  // (register-poller) wakes `kind` is the origin string and `event_id`
+  // is an explicit `null` (the key is present, never `undefined`).
+  //
+  // These tests drive the PUBLIC surface — the makeNotificationHandler /
+  // makeChannelHandler factories and wakeAgent itself — and assert only
+  // observable log output. They mock the SDK boundary already faked by
+  // createFakeApi; no logic is stubbed.
+  // ───────────────────────────────────────────────────────────────────
+  describe("wake_enqueued event correlator (kind + event_id)", () => {
+    function findEnqueued(
+      events: Array<{ event: string; ctx: Record<string, unknown> }>,
+    ): Record<string, unknown> {
+      const e = events.find((ev) => ev.event === "wake_enqueued");
+      expect(e, "expected a wake_enqueued event").toBeTruthy();
+      return e!.ctx;
+    }
+
+    function allEnqueued(
+      events: Array<{ event: string; ctx: Record<string, unknown> }>,
+    ): Array<Record<string, unknown>> {
+      return events
+        .filter((ev) => ev.event === "wake_enqueued")
+        .map((ev) => ev.ctx);
+    }
+
+    /**
+     * One complete, type-valid NotificationEvent per NotificationKind.
+     * Keyed by kind so the contract test can iterate all 16 and assert
+     * the line echoes that exact kind + event_id. Each carries a
+     * distinct event_id so cross-kind bleed would surface.
+     */
+    const notificationFixtures: Record<NotificationKind, NotificationEvent> = {
+      "listing.created": {
+        kind: "listing.created",
+        event_id: "evt-listing-created",
+        listing_id: "lst-1",
+        title: "A widget",
+      },
+      "listing.relisted": {
+        kind: "listing.relisted",
+        event_id: "evt-listing-relisted",
+        listing_id: "lst-2",
+      },
+      "listing.withdrawn": {
+        kind: "listing.withdrawn",
+        event_id: "evt-listing-withdrawn",
+        listing_id: "lst-3",
+      },
+      "listing.sold": {
+        kind: "listing.sold",
+        event_id: "evt-listing-sold",
+        listing_id: "lst-4",
+      },
+      "listing.expired": {
+        kind: "listing.expired",
+        event_id: "evt-listing-expired",
+        listing_id: "lst-5",
+      },
+      "listing.status_changed": {
+        kind: "listing.status_changed",
+        event_id: "evt-listing-status",
+        listing_id: "lst-6",
+        old_status: "active",
+        new_status: "paused",
+      },
+      "offer.proposed": {
+        kind: "offer.proposed",
+        event_id: "evt-offer-proposed",
+        offer_id: "off-1",
+        listing_id: "lst-7",
+        buyer_handle: "buyer",
+        amount: 1000,
+        terms: null,
+      },
+      "offer.accepted": {
+        kind: "offer.accepted",
+        event_id: "evt-offer-accepted",
+        offer_id: "off-2",
+        listing_id: "lst-8",
+        seller_handle: "seller",
+        amount: 1000,
+        transaction_id: "txn-1",
+      },
+      "offer.rejected": {
+        kind: "offer.rejected",
+        event_id: "evt-offer-rejected",
+        offer_id: "off-3",
+        listing_id: "lst-9",
+        seller_handle: "seller",
+      },
+      "transaction.buyer_confirmed": {
+        kind: "transaction.buyer_confirmed",
+        event_id: "evt-txn-buyer",
+        transaction_id: "txn-2",
+        listing_id: "lst-10",
+        confirmed_by_handle: "buyer",
+      },
+      "transaction.seller_confirmed": {
+        kind: "transaction.seller_confirmed",
+        event_id: "evt-txn-seller",
+        transaction_id: "txn-3",
+        listing_id: "lst-11",
+        confirmed_by_handle: "seller",
+      },
+      "transaction.completed": {
+        kind: "transaction.completed",
+        event_id: "evt-txn-completed",
+        transaction_id: "txn-4",
+        listing_id: "lst-12",
+      },
+      "transaction.cancelled": {
+        kind: "transaction.cancelled",
+        event_id: "evt-txn-cancelled",
+        transaction_id: "txn-5",
+        listing_id: "lst-13",
+        reason: "buyer backed out",
+      },
+      "comment.created": {
+        kind: "comment.created",
+        event_id: "evt-comment",
+        listing_id: "lst-14",
+        comment_id: "cmt-1",
+        handle: "commenter",
+        body: "nice listing",
+        mentions: [],
+        created_at: "2026-06-23T00:00:00Z",
+      },
+      "search.match": {
+        kind: "search.match",
+        event_id: "evt-search",
+        search_slug: "widgets",
+        listing_id: "lst-15",
+        listing_summary: {
+          title: "Matched widget",
+          asking_price: 500,
+          currency: "USD",
+          fulfillment: [],
+          seller_handle: "seller",
+          photos: [],
+        },
+      },
+      "channel.opened": {
+        kind: "channel.opened",
+        event_id: "evt-channel-opened",
+        channel_id: "chn-1",
+        listing_id: "lst-16",
+        buyer_handle: "buyer",
+      },
+      "channel.closed": {
+        kind: "channel.closed",
+        event_id: "evt-channel-closed",
+        channel_id: "chn-2",
+        listing_id: "lst-17",
+        closed_by: "seller",
+      },
+    };
+
+    function channelEvent(
+      overrides: Partial<ChannelMessageEvent> = {},
+    ): ChannelMessageEvent {
+      return {
+        kind: "channel.message",
+        event_id: "evt-channel-message",
+        channel_id: "chn-9",
+        message_id: "msg-1",
+        sequence: 1,
+        sender_user_id: "usr-1",
+        sender_handle: "sender",
+        content: "hello",
+        created_at: "2026-06-23T00:00:00Z",
+        ...overrides,
+      };
+    }
+
+    // (a) every NotificationKind → line carries kind===K and the event's event_id.
+    describe("wire NotificationEvent correlator", () => {
+      const kinds = Object.keys(notificationFixtures) as NotificationKind[];
+
+      for (const kind of kinds) {
+        it(`echoes kind="${kind}" and event_id onto wake_enqueued`, async () => {
+          const { api, infoEvents } = createFakeApi();
+          const event = notificationFixtures[kind];
+
+          await makeNotificationHandler(api)(event);
+
+          const ctx = findEnqueued(infoEvents);
+          expect(ctx["kind"]).toBe(kind);
+          expect(ctx["event_id"]).toBe(event.event_id);
+        });
+      }
+
+      it("covers every NotificationKind in the catalog union (no kind silently dropped)", () => {
+        // The catalog `NotificationEvent` union enumerates 17 kinds (the
+        // card's "16 fails" is the klodi-stage suite's injected count, a
+        // separate thing). The `Record<NotificationKind, …>` fixture map
+        // is exhaustive by type, so this guard is the count the emitter
+        // must echo a `kind` for — drift in the union breaks it loudly.
+        expect(kinds).toHaveLength(17);
+      });
+    });
+
+    // (b) ChannelMessageEvent → kind==="channel.message" + matching event_id.
+    it("channel handler logs kind=channel.message and the event's event_id", async () => {
+      const { api, infoEvents } = createFakeApi();
+      const event = channelEvent({ event_id: "evt-chan-abc" });
+
+      await makeChannelHandler(api)(event);
+
+      const ctx = findEnqueued(infoEvents);
+      expect(ctx["kind"]).toBe("channel.message");
+      expect(ctx["event_id"]).toBe("evt-chan-abc");
+    });
+
+    // (c) redelivery of the same wire event → same event_id every time.
+    it("redelivered notification yields the SAME event_id across lines (stable, not regenerated)", async () => {
+      const { api, infoEvents } = createFakeApi();
+      const event = notificationFixtures["offer.proposed"];
+      const handler = makeNotificationHandler(api);
+
+      // JetStream redelivery under max_deliver: 5 — same event object, twice.
+      await handler(event);
+      await handler(event);
+
+      const lines = allEnqueued(infoEvents);
+      expect(lines).toHaveLength(2);
+      expect(lines[0]["event_id"]).toBe(event.event_id);
+      expect(lines[1]["event_id"]).toBe(event.event_id);
+      expect(lines[0]["event_id"]).toBe(lines[1]["event_id"]);
+    });
+
+    // (d) two distinct same-kind notifications → distinguishable by event_id.
+    it("two distinct same-kind notifications are distinguishable by event_id", async () => {
+      const { api, infoEvents } = createFakeApi();
+      const handler = makeNotificationHandler(api);
+      const base = notificationFixtures["comment.created"];
+
+      await handler({ ...base, event_id: "evt-comment-A" });
+      await handler({ ...base, event_id: "evt-comment-B" });
+
+      const lines = allEnqueued(infoEvents);
+      expect(lines).toHaveLength(2);
+      // Same kind on both — the gap the docstring names.
+      expect(lines[0]["kind"]).toBe("comment.created");
+      expect(lines[1]["kind"]).toBe("comment.created");
+      // But event_id distinguishes them.
+      expect(lines[0]["event_id"]).toBe("evt-comment-A");
+      expect(lines[1]["event_id"]).toBe("evt-comment-B");
+      expect(lines[0]["event_id"]).not.toBe(lines[1]["event_id"]);
+    });
+
+    // (e) local/synthetic wake (register-poller origin) → kind=origin, event_id present and === null.
+    describe("locally-originated (register-poller) wake correlator", () => {
+      const origins = [
+        "klodi-register-timeout",
+        "klodi-register-complete",
+        "klodi-register-expired",
+        "klodi-register-already-claimed",
+        "klodi-register-invalid-response",
+      ];
+
+      for (const origin of origins) {
+        it(`origin "${origin}" → kind=origin and event_id explicitly null (key present)`, async () => {
+          const { api, infoEvents } = createFakeApi();
+
+          // The register-poller passes { kind: <origin>, event_id: null }.
+          await wakeAgent(api, "synthetic wake", origin, {
+            kind: origin,
+            event_id: null,
+          });
+
+          const ctx = findEnqueued(infoEvents);
+          expect(ctx["kind"]).toBe(origin);
+          // The key MUST exist with an explicit null — never undefined,
+          // which would drop the key and fail the wake_handler contract.
+          expect("event_id" in ctx).toBe(true);
+          expect(ctx["event_id"]).toBeNull();
+          expect(ctx["event_id"]).not.toBeUndefined();
+        });
+      }
+    });
+
+    // (f) non-regression: existing fields still present and unchanged.
+    it("keeps reason, sessionKey, and store_* diagnostic fields unchanged (additive only)", async () => {
+      const { api, infoEvents } = createFakeApi();
+      const event = notificationFixtures["offer.accepted"];
+
+      await makeNotificationHandler(api)(event);
+
+      const ctx = findEnqueued(infoEvents);
+      // Pre-existing fields untouched.
+      expect(ctx["reason"]).toBe("offer.accepted");
+      expect(ctx["sessionKey"]).toBe("agent:main:main");
+      // Session-store diagnostic block still emitted.
+      expect("store_read" in ctx).toBe(true);
+      expect("store_entries" in ctx).toBe(true);
+      expect("entry_exists" in ctx).toBe(true);
+      expect("most_recent_key" in ctx).toBe(true);
+      expect("most_recent_matches_resolved" in ctx).toBe(true);
+      // And the additive correlator rides alongside, not instead.
+      expect(ctx["kind"]).toBe("offer.accepted");
+      expect(ctx["event_id"]).toBe(event.event_id);
+    });
+  });
 });
 
 // qa-developer: 0012-gap-fixes-decision-13
+// qa-developer: card/add-event-correlator-to-wake-enqueued-log — RED kind/event_id correlator

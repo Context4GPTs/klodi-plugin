@@ -177,7 +177,10 @@ export function makeNotificationHandler(api: PluginAPILike) {
   return async (event: NotificationEvent): Promise<void> => {
     applyTerminalCleanup(event);
     const text = formatNotificationWake(event);
-    await wakeAgent(api, text, event.kind);
+    await wakeAgent(api, text, event.kind, {
+      kind: event.kind,
+      event_id: event.event_id,
+    });
   };
 }
 
@@ -185,6 +188,9 @@ export function makeNotificationHandler(api: PluginAPILike) {
 export function makeChannelHandler(api: PluginAPILike) {
   return async (event: ChannelMessageEvent): Promise<void> => {
     const text = formatChannelWake(event);
-    await wakeAgent(api, text, event.kind);
+    await wakeAgent(api, text, event.kind, {
+      kind: event.kind,
+      event_id: event.event_id,
+    });
   };
 }
