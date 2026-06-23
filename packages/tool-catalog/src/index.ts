@@ -400,20 +400,6 @@ export const klodiTools = {
     }),
   },
 
-  klodi_searches_delete: {
-    subject: "p2p.v1.searches.delete",
-    description: "Delete a standing search by slug.",
-    params: Type.Object({ slug: Type.String() }),
-    result: Type.Object({
-      slug: Type.String(),
-      status: Type.Literal("deleted"),
-      deleted: Type.Integer({
-        description: "Number of standing-search rows removed (0 if none matched)",
-        minimum: 0,
-      }),
-    }),
-  },
-
   klodi_searches_list: {
     subject: "p2p.v1.searches.list",
     description:

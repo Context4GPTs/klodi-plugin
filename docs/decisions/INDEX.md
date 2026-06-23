@@ -8,9 +8,9 @@ Rows are sorted **newest `updated_at` first**.
 
 | Doc | Title | Tags | Updated |
 |---|---|---|---|
+| [[0014-tool-symmetry-axes]] | Three tool-symmetry axes — manifest↔registered, referenced⊆catalog, catalog↔registered-by-name | symmetry, drift, manifest, catalog, tools, openclaw, gate, contracts | 2026-06-23 |
 | [[0016-wake-log-correlator-contract]] | wake_enqueued correlator — echo the producer's event_id, never mint one; contract codegen'd into 3 loggers but emitter-satisfied only in openclaw | logging, correlator, wake, observability, catalog, contracts, adapters, parity, openclaw | 2026-06-23 |
 | [[0015-gateway-runtime-load-vs-armed-axis]] | Gateway runtime-load axis — loaded ≠ armed; detect the gateway by argv subcommand, not process.title | openclaw, wake-pump, gateway, runtime, detection, activation, axis, contracts | 2026-06-22 |
-| [[0014-tool-symmetry-axes]] | Two tool-symmetry axes — is-registered (manifest) vs should-be-registered (catalog) | symmetry, drift, manifest, catalog, tools, openclaw, gate, contracts | 2026-06-22 |
 | [[0011-adapter-exception-envelope]] | Adapter exception envelope and pre-call guard contract | envelope, guards, error-handling, adapters, parity | 2026-06-19 |
 | [[0013-match-feedback-trust-boundary]] | Match-feedback emit — action-not-label trust boundary, body-id validation | trust-boundary, feedback, flywheel, publish, adapters, catalog, nats | 2026-05-30 |
 | [[0012-tool-request-payload-parity]] | Tool→service request-payload parity (raw catalog pass-through) | parity, payload, adapters, catalog, search, request-path | 2026-05-29 |

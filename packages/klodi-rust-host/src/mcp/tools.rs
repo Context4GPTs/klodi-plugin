@@ -557,7 +557,12 @@ async fn dispatch_unwatch(
     };
     if let Err(err) = client
         .request::<Value, _>(
-            ToolName::KlodiSearchesDelete.subject(),
+            // Bare subject literal — the standalone server-delete catalog tool
+            // was dropped (a ghost name never registered on the gateway), so the
+            // generated `ToolName` enum no longer carries its variant. The
+            // subject is still live under the `klodi_unwatch` composite. See
+            // ADR-0014.
+            "p2p.v1.searches.delete",
             &json!({ "slug": slug }),
             None,
         )
