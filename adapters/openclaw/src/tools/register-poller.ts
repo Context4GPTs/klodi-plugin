@@ -247,6 +247,7 @@ async function pollOnce(
       "[klodi] No registration completion detected in 10 minutes."
       + " Call klodi_register for a fresh link if you still want to sign up.",
       "klodi-register-timeout",
+      { kind: "klodi-register-timeout", event_id: null },
     );
     return;
   }
@@ -296,6 +297,7 @@ async function handleTerminalResult(
         `[klodi] Registration complete — welcome, @${result.handle}.`
         + " Call klodi_setup_status to continue setup.",
         "klodi-register-complete",
+        { kind: "klodi-register-complete", event_id: null },
       );
       return;
     case "expired":
@@ -305,6 +307,7 @@ async function handleTerminalResult(
         "[klodi] Registration link expired before you completed it."
         + " Call klodi_register to get a fresh link.",
         "klodi-register-expired",
+        { kind: "klodi-register-expired", event_id: null },
       );
       return;
     case "already_claimed":
@@ -315,6 +318,7 @@ async function handleTerminalResult(
         + " another device or process. Call klodi_register to get a"
         + " fresh session.",
         "klodi-register-already-claimed",
+        { kind: "klodi-register-already-claimed", event_id: null },
       );
       return;
     case "invalid_response":
@@ -328,6 +332,7 @@ async function handleTerminalResult(
         + " response — report this to klodi support, then call"
         + " klodi_register for a fresh session.",
         "klodi-register-invalid-response",
+        { kind: "klodi-register-invalid-response", event_id: null },
       );
       return;
   }
