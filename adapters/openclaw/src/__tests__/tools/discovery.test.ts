@@ -21,6 +21,7 @@ import {
   mockNatsResponse,
   mockNatsError,
   clearNatsResponses,
+  getClient,
   KlodiRequestError,
 } from "../helpers/mock-nats.js";
 
@@ -185,12 +186,33 @@ describe("klodi_unwatch", () => {
       slug, status: "deleted", deleted: 1,
     });
     const unwatchTool = getTool(api, "klodi_unwatch");
+    // Reset the shared client mock's call history so the subject assertion
+    // below counts only THIS unwatch's dispatch (the mock is module-level and
+    // accumulates calls across cases; clearNatsResponses() does not reset it).
+    getClient().request.mockClear();
     const result = await unwatchTool.execute("call-1", { buy_slug: slug });
     expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0].text!);
     expect(data.removed).toBe(true);
     expect(data.slug).toBe(slug);
     expect(listBuySlugs()).toHaveLength(0);
+
+    // Card fix-klodi-searches-delete-catalog-drift: registerUnwatch sources the
+    // subject from the bare literal "p2p.v1.searches.delete" after the catalog
+    // key klodiTools.klodi_searches_delete is dropped. The composite must still
+    // dispatch to that exact subject with a { slug } payload — proving the
+    // bare-literal switch keeps "delete a standing search" fully working under
+    // its one canonical name. A wrong/dangling subject would have thrown
+    // "No mock response registered for tool: <subject>" above.
+    const deleteCalls = getClient().request.mock.calls.filter(
+      (c: unknown[]) => c[0] === "p2p.v1.searches.delete",
+    );
+    expect(
+      deleteCalls.length,
+      "klodi_unwatch must reach the surviving subject p2p.v1.searches.delete"
+        + " exactly once for this unwatch.",
+    ).toBe(1);
+    expect(deleteCalls[0]![1]).toMatchObject({ slug });
   });
 
   it("returns the marketplace_error envelope when the server delete fails", async () => {

@@ -50,10 +50,26 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PluginAPILike } from "../lib/plugin-api-types.js";
 
+/**
+ * Correlator that ties a `wake_enqueued` log line back to the wire event
+ * that caused the wake. `kind` is a first-class discriminator (distinct
+ * from the overloaded `reason`); `event_id` is the per-wire-event id
+ * echoed verbatim from the triggering event — `null` for locally-
+ * originated wakes (register-poller) that point at no wire event. The
+ * `wake_handler` call-site contract (`tool-catalog logging.ts:74`)
+ * requires both keys present, hence `event_id` is nullable, never
+ * optional/`undefined` — `null` keeps the key in the emitted line.
+ */
+export interface WakeCorrelator {
+  kind: string;
+  event_id: string | null;
+}
+
 export async function wakeAgent(
   api: PluginAPILike,
   text: string,
   reason: string,
+  correlator?: WakeCorrelator,
 ): Promise<void> {
   const sessionKey = resolveAgentSessionKey(api);
   try {
@@ -70,6 +86,7 @@ export async function wakeAgent(
   api.logger.info("wake_enqueued", {
     reason,
     sessionKey,
+    ...correlator,
     ...inspectSessionStore(api, sessionKey),
   });
   const heartbeatReason = `hook:klodi:${reason}`;

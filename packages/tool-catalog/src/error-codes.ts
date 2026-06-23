@@ -58,7 +58,7 @@ export const errorCodes: Readonly<Record<string, ErrorCodeEntry>> = Object.freez
       "${KLODI_HOME} directory absent or unwritable for tools with " +
       "on-disk side effects (klodi_list_create, klodi_list_update, " +
       "klodi_list_withdraw, klodi_list_relist, klodi_searches_create, " +
-      "klodi_searches_delete, klodi_watch, klodi_unwatch).",
+      "klodi_watch, klodi_unwatch).",
     recovery_kind: "tool",
     recovery_target: "klodi_setup_status",
   },

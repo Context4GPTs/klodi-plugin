@@ -3415,43 +3415,6 @@
         ]
       }
     },
-    "klodi_searches_delete": {
-      "subject": "p2p.v1.searches.delete",
-      "description": "Delete a standing search by slug.",
-      "params": {
-        "type": "object",
-        "properties": {
-          "slug": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "slug"
-        ]
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "slug": {
-            "type": "string"
-          },
-          "status": {
-            "const": "deleted",
-            "type": "string"
-          },
-          "deleted": {
-            "description": "Number of standing-search rows removed (0 if none matched)",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "slug",
-          "status",
-          "deleted"
-        ]
-      }
-    },
     "klodi_searches_list": {
       "subject": "p2p.v1.searches.list",
       "description": "List your active standing searches. Diagnostic — local buy/<slug>.md files are the source of truth for evaluation criteria.",
@@ -5115,7 +5078,7 @@
     },
     "klodi_unwatch": {
       "name": "klodi_unwatch",
-      "description": "Stop a standing search and delete the local buy/<slug>.md file. Composite of klodi_searches_delete + filesystem unlink.",
+      "description": "Stop a standing search and delete the local buy/<slug>.md file. Composite of the server-side searches.delete + filesystem unlink.",
       "params": {
         "type": "object",
         "properties": {

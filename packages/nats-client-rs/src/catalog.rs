@@ -47,7 +47,6 @@ mod tests {
             ToolName::KlodiListComments,
             ToolName::KlodiSearch,
             ToolName::KlodiSearchesCreate,
-            ToolName::KlodiSearchesDelete,
             ToolName::KlodiSearchesList,
             ToolName::KlodiChannelCreate,
             ToolName::KlodiChannelMine,
