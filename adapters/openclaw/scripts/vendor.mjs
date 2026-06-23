@@ -170,11 +170,23 @@ const SPECIFIER_RE = new RegExp(
   "g",
 );
 
+// The vendored deps build with `sourceMap: true`, so tsc appends a trailing
+// `//# sourceMappingURL=<name>.js.map` line comment to every emitted .js. We
+// vendor the .js but deliberately NOT the .js.map (shouldCopyVendorEntry), so
+// the comment becomes a shipped reference to an artefact the tarball does not
+// contain — every downstream load then logs a non-fatal ENOENT *.js.map. Strip
+// it from the vendored copy: the adapter's own dist is already map-free
+// (tsconfig.build.json sourceMap:false), so this aligns the vendored copy with
+// the map-free contract the publish pipeline already honours. See ADR-0009.
+// Anchored to end-of-file (the only place tsc emits it) with the same rigor as
+// SPECIFIER_RE, so an incidental "sourceMappingURL" in runtime code is untouched.
+const SOURCE_MAP_COMMENT_RE = /\n?\/\/#\s*sourceMappingURL=\S+\s*$/;
+
 function rewriteImports() {
   let total = 0;
   for (const file of walkJs(join(STAGE, "dist"))) {
     const text = readFileSync(file, "utf8");
-    const updated = text.replace(SPECIFIER_RE, (match, lead, quote, bare, sub) => {
+    const rewritten = text.replace(SPECIFIER_RE, (match, lead, quote, bare, sub) => {
       const target = VENDOR_TARGETS.find((t) => t.name === bare);
       if (!target) return match;
       const subPath = sub ? `${sub.slice(1)}.js` : "index.js";
@@ -184,12 +196,13 @@ function rewriteImports() {
       if (!rel.startsWith(".")) rel = `./${rel}`;
       return `${lead}${quote}${rel}${quote}`;
     });
+    const updated = rewritten.replace(SOURCE_MAP_COMMENT_RE, "");
     if (updated !== text) {
       writeFileSync(file, updated);
       total += 1;
     }
   }
-  log(`rewrote @klodi/* specifiers in ${total} file(s)`);
+  log(`rewrote @klodi/* specifiers + stripped sourcemap comments in ${total} file(s)`);
 }
 
 function* walkJs(root) {
