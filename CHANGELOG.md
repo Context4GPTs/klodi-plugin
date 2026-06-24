@@ -4,6 +4,18 @@ All notable changes to klodi-plugin (every adapter — `@4gpts/klodi` for OpenCl
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). All adapters move together — they share a single version line. Pre-1.0 the public surface is not yet stable — check this file on every upgrade before bumping the pinned version.
 
+## [0.3.2] — 2026-06-24 — reconcile openclaw package↔manifest version drift
+
+**All adapters.** Packaging-metadata patch bump in lockstep — no functional or wire changes. The OpenClaw plugin registry flagged `klodi` as `package-manifest-version-drift` and disabled the target: the published `0.3.1` declared `package.json` version `0.3.1` but an `openclaw.plugin.json` manifest version of `0.3.0`. The two diverged because `scripts/stamp-version.mjs` rewrote only the manifest's pinned-tag GitHub URLs at publish time, never the manifest's own top-level `version` field — so the `0.3.0 → 0.3.1` bump left the manifest behind.
+
+### Fixed
+
+- **The OpenClaw manifest version now tracks `package.json`.** `stamp-version.mjs` additionally stamps the top-level `version` field in `openclaw.plugin.json` from `package.json#version` (the single source of version truth) at `prepublish`. A new static guard — `manifest-version-symmetry.test.ts` — fails `pnpm -C adapters/openclaw test` if the manifest version ever drifts from `package.json` again, catching it before publish instead of at the registry.
+
+### Changed
+
+- All six adapters (`@4gpts/klodi`, `klodi-hermes`, `klodi-nanobot`, `klodi-moltis`, `klodi-ironclaw`, `klodi-zeroclaw`) move to `0.3.2` together (lockstep version line). npm `@4gpts/klodi@0.3.1` is immutable, so the corrected manifest ships as `0.3.2`; bumping every adapter keeps the shared version line aligned and lets the OpenClaw target be re-enabled.
+
 ## [0.3.1] — 2026-06-18 — remove listing expiry from the wire contract
 
 **All adapters.** Listing expiry leaves the wire. The marketplace no longer accepts or emits a listing TTL (epic `remove-listing-expiry-2026-06`, keystone `4gpts-p2p-marketplace`), so the plugin's listing tools drop it in lockstep: the `expires_hours` request parameter is gone from `klodi_list_create` and `klodi_list_update`, and the `expires_at` reply field is gone from `ListingResult` — the shape shared by all six listing replies (`klodi_list_create`, `_update`, `_get`, `_mine`, `_withdraw`, `_relist`). This is a breaking wire change for any agent that sent `expires_hours` or read `expires_at` on a listing.
