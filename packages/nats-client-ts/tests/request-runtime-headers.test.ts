@@ -28,7 +28,7 @@
  * the class. No production code is touched to make these tests runnable.
  */
 
-import { headers as natsHeaders, type Msg, type MsgHdrs, type NatsConnection } from "@nats-io/nats-core";
+import { type Msg, type MsgHdrs, type NatsConnection } from "@nats-io/nats-core";
 import { describe, it, expect, vi } from "vitest";
 
 import { KlodiClient, type KlodiClientArgs, type KlodiConfig } from "../src/index.js";

@@ -110,6 +110,15 @@ export interface KlodiClientArgs {
   configPath: string;
   /** Optional error sink (logging hook). Defaults to console.error. */
   onError?: (err: unknown, context: Record<string, unknown>) => void;
+  /**
+   * Optional static header map stamped on every outbound tool RPC, *after*
+   * the auth headers. Adapter-owned analytics dimensions (e.g.
+   * `X-Klodi-Runtime` / `X-Klodi-Plugin-Source`) flow in this way. This
+   * shared, adapter-agnostic client stamps whatever keys it is handed and
+   * knows nothing about adapters or install sources — the `openclaw` literal
+   * never lives here. Captured once at construction; never re-probed per call.
+   */
+  runtimeHeaders?: Record<string, string>;
 }
 
 export interface RequestOptions {
@@ -223,7 +232,9 @@ export class KlodiClient {
 
   /**
    * Tool-call request/reply. Adds X-User-Id and X-Nkey-Public headers
-   * the marketplace's auth.ts uses to resolve the caller. Throws
+   * the marketplace's auth.ts uses to resolve the caller, then stamps any
+   * constructor-injected `runtimeHeaders` (adapter-owned analytics
+   * dimensions) after them — additive, never overwriting auth. Throws
    * KlodiRequestError on `{ error, message }` envelopes; throws
    * the underlying error on transport/timeout.
    */
@@ -238,6 +249,11 @@ export class KlodiClient {
     const hdrs = natsHeaders();
     hdrs.set("X-User-Id", config.user_id);
     hdrs.set("X-Nkey-Public", config.nkey_public);
+    // Adapter-owned analytics dimensions, stamped after auth and never
+    // overwriting it. Inert when no `runtimeHeaders` were injected.
+    for (const [key, value] of Object.entries(this.args.runtimeHeaders ?? {})) {
+      hdrs.set(key, value);
+    }
 
     const msg: Msg = await nc.request(
       subject,
