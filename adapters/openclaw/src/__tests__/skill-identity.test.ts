@@ -14,8 +14,9 @@
  * artifact, and MUST stay verbatim. "klodi" the marketplace is not
  * `klodi-skill` the skill bundle.
  *
- * Reads the CANONICAL source (REPO_ROOT/skill/SKILL.md) — that path is
- * unchanged by this card; only the bytes inside change.
+ * Reads the CANONICAL source SKILL.md. FOUNDER SCOPE EXPANSION
+ * (2026-06-25): the canonical dir was renamed `skill/` -> `klodi-skill/`,
+ * so the source now lives at REPO_ROOT/klodi-skill/SKILL.md.
  */
 
 import { describe, it, expect } from "vitest";
@@ -25,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..", "..");
-const SKILL_MD = join(REPO_ROOT, "skill", "SKILL.md");
+const SKILL_MD = join(REPO_ROOT, "klodi-skill", "SKILL.md");
 
 function read(): string {
   return readFileSync(SKILL_MD, "utf8");
@@ -38,7 +39,7 @@ function frontmatter(body: string): string {
   return match[1];
 }
 
-describe("skill/SKILL.md declares the klodi-skill identity", () => {
+describe("klodi-skill/SKILL.md declares the klodi-skill identity", () => {
   it("frontmatter name: is klodi-skill (not the bare klodi slug)", () => {
     const fm = frontmatter(read());
     expect(fm).toMatch(/^name:\s*klodi-skill\s*$/m);
