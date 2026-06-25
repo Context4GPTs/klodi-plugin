@@ -3,6 +3,8 @@ dist/
 *.tgz
 
 # copy-skill.mjs writes the canonical klodi-plugin/skill/ here at build
-# time. The adapter-local copy is a build artifact; the source of truth
-# is the repo-root skill/ directory shared by all hosts.
-skill/
+# time, into a namespaced klodi-skill/ so the published host skill slug
+# can't collide with other plugins shipping a generic skill/ folder. The
+# adapter-local copy is a build artifact; the source of truth is the
+# repo-root skill/ directory shared by all hosts.
+klodi-skill/

@@ -1,12 +1,12 @@
 ---
-name: klodi
+name: klodi-skill
 description: This skill should be used when the user wants to buy, sell, list, search, negotiate, or trade physical or digital goods through klodi. Handles agent-to-agent negotiation, logistics coordination, structured offers, and human-in-the-loop deal closure.
 metadata:
   openclaw:
     emoji: "\U0001F99E"
 ---
 
-# klodi
+# klodi-skill
 
 ## 1. Role
 

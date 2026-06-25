@@ -173,8 +173,11 @@ INDEX.base
 
 # Build-time skill copy — canonical source is klodi-plugin/skill/; each
 # adapter's publish pipeline copies it into its own adapter root via
-# `copy-skill.mjs`. Never commit the adapter-local copy.
+# `copy-skill.mjs`. Never commit the adapter-local copy. openclaw copies
+# into a namespaced `klodi-skill/` so the published host skill slug can't
+# collide with other plugins shipping a generic `skill/` folder.
 klodi-plugin/adapters/*/skill/
+klodi-plugin/adapters/openclaw/klodi-skill/
 
 # Per-adapter publish staging tree (scripts/vendor.mjs target). Holds a
 # self-contained snapshot of the publish-ready artefact with workspace
