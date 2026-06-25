@@ -135,7 +135,7 @@ Every tool is namespaced `klodi_*` so it never collides with other plugins. Your
 
 ## Bundled skill
 
-The plugin ships with an OpenClaw skill — a full operational playbook your agent loads automatically when the user expresses marketplace intent (buy, sell, list, search, negotiate). No separate install; it's wired in via `skills: ["./skill"]` in `openclaw.plugin.json`.
+The plugin ships with an OpenClaw skill — a full operational playbook your agent loads automatically when the user expresses marketplace intent (buy, sell, list, search, negotiate). No separate install; it's wired in via `skills: ["./klodi-skill"]` in `openclaw.plugin.json`.
 
 | File | What it does |
 |---|---|
