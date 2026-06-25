@@ -1,4 +1,4 @@
-"""Cross-language contract test (Python half) — Decision 7.
+"""Cross-language contract test (Python half) — Decision 7. See ADR-0017.
 
 Reads every fixture from the golden corpus at
 ``klodi-plugin/packages/tool-catalog/tests/golden/`` and parses it with the
