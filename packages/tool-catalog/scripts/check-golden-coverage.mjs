@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 /**
- * Drift gate for the golden corpus (Decision 7).
+ * Drift gate for the golden corpus (Decision 7). See ADR-0017.
  *
  * Walks every `kind: "..."` discriminator in `src/events.ts` (the TS
  * source of truth) and confirms that `tests/golden/` contains a
- * fixture file named `<kind>.json` for each. Fails CI if any kind
- * lacks a fixture, so adding a new event variant requires adding a
- * fixture in the same change.
+ * fixture file named `<kind>.json` for each, so adding a new event
+ * variant requires adding a fixture in the same change.
+ *
+ * LIMITATION (ADR-0017): this is PRESENCE-ONLY — it cannot see a
+ * renamed field, a flat→discriminated-union migration, or an
+ * optional-flipped-to-required. It is also wired into no CI workflow,
+ * so field-level fixture↔shape drift is caught only by the three
+ * language contract suites (`nats-client-{ts,py,rs}/tests/contract/
+ * golden.*`), NOT here. Do not trust a green run as drift protection.
  *
  * Usage:
  *   pnpm --filter @klodi/tool-catalog check:golden
