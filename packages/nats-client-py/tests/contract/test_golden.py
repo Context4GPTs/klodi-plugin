@@ -195,10 +195,33 @@ def test_search_match() -> None:
         summary["asking_price"], bool
     )
     assert isinstance(summary["currency"], str)
-    assert isinstance(summary["delivery_method"], str)
-    # location_area is `str | None`.
-    if summary["location_area"] is not None:
-        assert isinstance(summary["location_area"], str)
+    # Post-redesign: the flat (delivery_method, location_area) pair was
+    # replaced by ``fulfillment: DeliveryOffer[]`` (tool-catalog/src/delivery.ts).
+    # Mirror Rust golden.rs:333-352 — at least one offer, each carrying a
+    # method in {pickup, ship, digital}, and a ``pickup`` offer carrying
+    # location.{lat, lng, area}. The flat fields no longer exist on the shape.
+    fulfillment = summary["fulfillment"]
+    assert isinstance(fulfillment, list)
+    assert len(fulfillment) > 0
+    for offer in fulfillment:
+        assert isinstance(offer, dict)
+        assert offer["method"] in ("pickup", "ship", "digital")
+        if offer["method"] == "pickup":
+            location = offer["location"]
+            assert isinstance(location, dict)
+            # Booleans are int subclasses — guard the numeric coords.
+            assert isinstance(location["lat"], (int, float)) and not isinstance(
+                location["lat"], bool
+            )
+            assert isinstance(location["lng"], (int, float)) and not isinstance(
+                location["lng"], bool
+            )
+            assert isinstance(location["area"], str)
+            assert location["area"] != ""
+        elif offer["method"] == "ship":
+            assert isinstance(offer["from"]["country"], str)
+            assert isinstance(offer["shipsTo"], list)
+            assert len(offer["shipsTo"]) > 0
     assert isinstance(summary["seller_handle"], str)
     assert isinstance(summary["photos"], list)
     for p in summary["photos"]:
@@ -235,7 +258,13 @@ def test_channel_message() -> None:
     _assert_event_id(evt)
     assert isinstance(evt["channel_id"], str)
     assert isinstance(evt["message_id"], str)
-    assert isinstance(evt["sequence"], int) and not isinstance(evt["sequence"], bool)
+    # The publisher does NOT embed ``sequence`` in the body — JetStream
+    # assigns it server-side and the consumer injects it post-parse from
+    # ``msg.metadata.sequence``. The fixture mirrors the publisher body, so
+    # ``sequence`` is absent here. Mirror Rust golden.rs:412-418, which
+    # parses a body without sequence. Asserting it as a present integer is
+    # wrong; that assertion belongs in the consumer integration tests.
+    assert "sequence" not in evt
     assert isinstance(evt["sender_user_id"], str)
     assert isinstance(evt["sender_handle"], str)
     assert isinstance(evt["content"], str)

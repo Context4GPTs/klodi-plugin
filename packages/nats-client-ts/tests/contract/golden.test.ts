@@ -226,9 +226,31 @@ describe("search.match", () => {
     expect(s.asking_price).toBeTypeOf("number");
     expect(Number.isInteger(s.asking_price)).toBe(true);
     expect(s.currency).toBeTypeOf("string");
-    expect(s.delivery_method).toBeTypeOf("string");
-    // location_area is `string | null`.
-    if (s.location_area !== null) expect(s.location_area).toBeTypeOf("string");
+    // Post-redesign: the flat (delivery_method, location_area) pair was
+    // replaced by `fulfillment: DeliveryOffer[]` (tool-catalog/src/delivery.ts).
+    // Mirror Rust golden.rs:333-352 — at least one offer, each carrying a
+    // method in {pickup, ship, digital}, and a `pickup` offer carrying
+    // location.{lat,lng,area}. The flat fields no longer exist on the shape.
+    expect(Array.isArray(s.fulfillment)).toBe(true);
+    expect(s.fulfillment.length).toBeGreaterThan(0);
+    for (const raw of s.fulfillment) {
+      const offer = raw as Record<string, unknown>;
+      expect(offer.method).toBeTypeOf("string");
+      expect(["pickup", "ship", "digital"]).toContain(offer.method);
+      if (offer.method === "pickup") {
+        const location = offer.location as Record<string, unknown>;
+        expect(location).toBeTypeOf("object");
+        expect(location.lat).toBeTypeOf("number");
+        expect(location.lng).toBeTypeOf("number");
+        expect(location.area).toBeTypeOf("string");
+        expect(location.area as string).not.toBe("");
+      } else if (offer.method === "ship") {
+        const from = offer.from as Record<string, unknown>;
+        expect(from.country).toBeTypeOf("string");
+        expect(Array.isArray(offer.shipsTo)).toBe(true);
+        expect((offer.shipsTo as unknown[]).length).toBeGreaterThan(0);
+      }
+    }
     expect(s.seller_handle).toBeTypeOf("string");
     expect(Array.isArray(s.photos)).toBe(true);
     for (const p of s.photos) expect(p).toBeTypeOf("string");
@@ -260,15 +282,20 @@ describe("channel.closed", () => {
 });
 
 describe("channel.message", () => {
-  it("parses channel.message.json with sequence + ISO timestamp", () => {
+  it("parses channel.message.json without in-body sequence + ISO timestamp", () => {
     const evt = loadFixture("channel.message.json");
     expect(evt.kind).toBe("channel.message");
     if (evt.kind !== "channel.message") return;
     assertEventIdShape(evt);
     expect(evt.channel_id).toBeTypeOf("string");
     expect(evt.message_id).toBeTypeOf("string");
-    expect(evt.sequence).toBeTypeOf("number");
-    expect(Number.isInteger(evt.sequence)).toBe(true);
+    // The publisher does NOT embed `sequence` in the body — JetStream
+    // assigns it server-side and the consumer injects it post-parse from
+    // msg.info().stream_sequence. The fixture mirrors the publisher body,
+    // so `sequence` is absent here. Mirror Rust golden.rs:412-418, which
+    // parses a body without sequence. Asserting it as a present integer is
+    // wrong; that assertion belongs in the consumer integration tests.
+    expect(evt.sequence).toBeUndefined();
     expect(evt.sender_user_id).toBeTypeOf("string");
     expect(evt.sender_handle).toBeTypeOf("string");
     expect(evt.content).toBeTypeOf("string");
