@@ -140,7 +140,7 @@ catalogs:
   agentskills_io:
     registry: "agentskills.io"
     listing_name: "klodi"
-    skill_path: "klodi-plugin/skill"
+    skill_path: "klodi-plugin/klodi-skill"
     notes: |
       Cross-cutting listing. The bare product name — agentskills.io is a
       skill-only catalog, not a @scope/name-style registry.

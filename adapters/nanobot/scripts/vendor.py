@@ -13,7 +13,7 @@ so local dev (`pytest`, `python -c "from klodi_nats_client import ..."`)
 keeps working against the workspace dep.
 
 Build flow (driven by the Makefile):
-    1.  copy-skill.py       — copies klodi-plugin/skill/ to skills/klodi/
+    1.  copy-skill.py       — copies klodi-plugin/klodi-skill/ to skills/klodi/
     2.  vendor.py (this)    — stages the adapter + vendored client
     3.  python -m build     — runs from build/staged/, emits to ./dist/
 

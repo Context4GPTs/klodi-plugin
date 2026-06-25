@@ -43,7 +43,7 @@ host_shape: in_agent
 
 ## 6. Skill delivery path
 
-- **Build-time bundle:** `klodi-plugin/skill/` is the canonical source. `klodi-plugin/adapters/openclaw/copy-skill.mjs` runs at `pnpm build` and copies the tree into `klodi-plugin/adapters/openclaw/klodi-skill/` (gitignored). The npm `files` array includes `"klodi-skill"`, so the published tarball ships `klodi-skill/` at the package root. The destination is namespaced `klodi-skill/` (not the generic `skill/`) so the host-published skill slug can't collide with other plugins that ship their own `skill/` folder.
+- **Build-time bundle:** `klodi-plugin/klodi-skill/` is the canonical source. `klodi-plugin/adapters/openclaw/copy-skill.mjs` runs at `pnpm build` and copies the tree into `klodi-plugin/adapters/openclaw/klodi-skill/` (gitignored). The npm `files` array includes `"klodi-skill"`, so the published tarball ships `klodi-skill/` at the package root. The destination is namespaced `klodi-skill/` (not the generic `skill/`) so the host-published skill slug can't collide with other plugins that ship their own `skill/` folder.
 - **Install-time disk write:** OpenClaw's plugin loader extracts the published tarball under `~/.openclaw/extensions/<id>/`; the bundled `klodi-skill/` is referenced by `openclaw.plugin.json#skills` (`["./klodi-skill"]`). There is no separate "write skill to klodi_home" step — OpenClaw resolves skill files from the plugin's installed root.
 - **Re-seed mechanism:** `pnpm copy-skill` at build time. On the user side, re-installing the plugin pulls a fresh skill bundle. `klodi_setup_reseed_policies` re-seeds only the policy files under `${klodi_home}/policies/`.
 

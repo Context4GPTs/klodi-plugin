@@ -259,7 +259,7 @@ def stage_mcp_assets() -> None:
     schemas_dst = STAGED / "src" / "schemas.json"
     shutil.copy2(schemas_src, schemas_dst)
 
-    skill_src = REPO_ROOT / "skill"
+    skill_src = REPO_ROOT / "klodi-skill"
     if not skill_src.is_dir():
         sys.stderr.write(
             f"[vendor] skill bundle missing at {skill_src} — refusing to stage.\n"

@@ -54,7 +54,7 @@ What `klodi_setup_status` returns for this host that's host-specific.
 
 ## 6. Skill delivery path
 
-Where the adapter materializes `klodi-plugin/skill/` for the agent to read.
+Where the adapter materializes `klodi-plugin/klodi-skill/` for the agent to read.
 
 - Build-time bundle path (e.g., npm package's `skill/` root, wheel's `package_data`).
 - Install-time disk write (e.g., `${klodi_home}/skill/` on first `klodi-<host>-setup`).

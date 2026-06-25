@@ -5,10 +5,11 @@
  * "Repository and release topology": several host registries copy the
  * plugin to a local cache and block path traversal outside the plugin
  * root, so we copy the bytes rather than rely on symlinks. The
- * authoritative source is `klodi-plugin/skill/` — adapter-local copies
- * are build artifacts, never edited by hand. The destination is
- * namespaced `klodi-skill/` so the host-published skill slug cannot
- * collide with other plugins that ship a generic `skill/` folder.
+ * authoritative source is `klodi-plugin/klodi-skill/` — adapter-local
+ * copies are build artifacts, never edited by hand. The source dir is
+ * namespaced `klodi-skill/` (and so is this destination) so the
+ * host-published skill slug cannot collide with other plugins that ship
+ * a generic `skill/` folder.
  *
  * Reseed semantics (per **R § P3-19**, Option A):
  *   - Default (no flag): if `./klodi-skill/` exists, log a `[reseed]`
@@ -25,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import process from "node:process";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SOURCE = resolve(HERE, "..", "..", "skill");
+const SOURCE = resolve(HERE, "..", "..", "klodi-skill");
 const TARGET = resolve(HERE, "klodi-skill");
 
 // Tiny CLI: we accept exactly --no-reseed and --help. No need for a
@@ -36,7 +37,7 @@ const argv = process.argv.slice(2);
 
 if (argv.includes("--help") || argv.includes("-h")) {
   process.stdout.write(
-    "copy-skill.mjs — copy klodi-plugin/skill/ into adapters/openclaw/klodi-skill/\n"
+    "copy-skill.mjs — copy klodi-plugin/klodi-skill/ into adapters/openclaw/klodi-skill/\n"
     + "\n"
     + "Options:\n"
     + "  --no-reseed   Refuse to overwrite an existing ./klodi-skill/ directory.\n"

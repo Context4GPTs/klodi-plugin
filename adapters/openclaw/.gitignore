@@ -2,9 +2,9 @@ node_modules/
 dist/
 *.tgz
 
-# copy-skill.mjs writes the canonical klodi-plugin/skill/ here at build
-# time, into a namespaced klodi-skill/ so the published host skill slug
-# can't collide with other plugins shipping a generic skill/ folder. The
-# adapter-local copy is a build artifact; the source of truth is the
-# repo-root skill/ directory shared by all hosts.
+# copy-skill.mjs writes the canonical klodi-plugin/klodi-skill/ here at
+# build time, into a namespaced klodi-skill/ so the published host skill
+# slug can't collide with other plugins shipping a generic skill/ folder.
+# The adapter-local copy is a build artifact; the source of truth is the
+# repo-root klodi-skill/ directory shared by all hosts.
 klodi-skill/

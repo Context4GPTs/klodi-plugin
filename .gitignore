@@ -171,8 +171,8 @@ CLAUDE.md
 INDEX.base
 .mcp.json
 
-# Build-time skill copy — canonical source is klodi-plugin/skill/; each
-# adapter's publish pipeline copies it into its own adapter root via
+# Build-time skill copy — canonical source is klodi-plugin/klodi-skill/;
+# each adapter's publish pipeline copies it into its own adapter root via
 # `copy-skill.mjs`. Never commit the adapter-local copy. openclaw copies
 # into a namespaced `klodi-skill/` so the published host skill slug can't
 # collide with other plugins shipping a generic `skill/` folder.
