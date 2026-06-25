@@ -9,11 +9,29 @@
  */
 
 import { KlodiClient, KlodiRequestError } from "@klodi/nats-client";
-import { getConfigPath, getCredsPath } from "./paths.js";
+import { getConfigPath, getCredsPath, getPluginSource } from "./paths.js";
 import type { PluginAPILike } from "./plugin-api-types.js";
 
 let client: KlodiClient | null = null;
 let pluginApi: PluginAPILike | null = null;
+
+/** Static runtime identifier for this adapter — the `openclaw` literal lives
+ * only here, never in the shared adapter-agnostic `@klodi/nats-client`. */
+const RUNTIME = "openclaw";
+
+/**
+ * Adapter-owned analytics dimensions stamped on every outbound RPC by the
+ * shared client. `X-Klodi-Runtime` is the static adapter literal;
+ * `X-Klodi-Plugin-Source` is resolved once at construction from the install
+ * channel (`unknown` when undeterminable — always present, never omitted, never
+ * silently `npm`). Both ride only the already-authenticated NATS connection.
+ */
+function buildRuntimeHeaders(): Record<string, string> {
+  return {
+    "X-Klodi-Runtime": RUNTIME,
+    "X-Klodi-Plugin-Source": getPluginSource(),
+  };
+}
 
 /**
  * Establish (or reuse) the singleton client. Idempotent — repeated
@@ -25,6 +43,7 @@ export async function connectClient(api: PluginAPILike): Promise<KlodiClient> {
     client = new KlodiClient({
       credsPath: getCredsPath(),
       configPath: getConfigPath(),
+      runtimeHeaders: buildRuntimeHeaders(),
       onError: (err: unknown, context: Record<string, unknown>) => {
         api.logger.warn("klodi_client_error", {
           error: err instanceof Error ? err.message : String(err),
@@ -54,6 +73,7 @@ export function getClient(): KlodiClient {
     client = new KlodiClient({
       credsPath: getCredsPath(),
       configPath: getConfigPath(),
+      runtimeHeaders: buildRuntimeHeaders(),
       onError: (err: unknown, context: Record<string, unknown>) => {
         pluginApi?.logger.warn("klodi_client_error", {
           error: err instanceof Error ? err.message : String(err),

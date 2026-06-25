@@ -77,6 +77,29 @@ export function getApiUrlSource(): ConfigSource {
 }
 
 /**
+ * Install channel this plugin was delivered through (`clawhub` / `npm` / …),
+ * stamped as the `X-Klodi-Plugin-Source` analytics header on outbound RPCs.
+ *
+ * The channel cannot be baked into the artifact: one byte-identical tarball
+ * ships to both npm and ClawHub (see the publish pipeline), so a build-time
+ * constant can't distinguish them. The signal is known only to the installer
+ * that fetched the plugin, which sets `KLODI_PLUGIN_SOURCE` out-of-band — no
+ * file written, no probe, no first-run beacon. Absent that marker the floor is
+ * the literal `unknown`: non-null and queryable, so the marketplace
+ * registration row's `plugin_source` is always source-segmentable rather than
+ * null — and never silently mis-attributed to `npm`. There is no config/
+ * pluginConfig override route (unlike home/api-url) — the installer owns it.
+ */
+export function getPluginSource(): string {
+  return process.env["KLODI_PLUGIN_SOURCE"] ?? "unknown";
+}
+
+export function getPluginSourceSource(): ConfigSource {
+  if (process.env["KLODI_PLUGIN_SOURCE"]) return "env";
+  return "default";
+}
+
+/**
  * Apply plugin-scoped config overrides from `api.pluginConfig`.
  * OpenClaw populates this object from `plugins.klodi.config.*` after
  * validation against `openclaw.plugin.json#configSchema`. Reading from

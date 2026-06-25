@@ -165,6 +165,8 @@ describe("plugin entry", () => {
         api_url_source: expect.any(String),
         klodi_home: expect.any(String),
         klodi_home_source: expect.any(String),
+        plugin_source: expect.any(String),
+        plugin_source_source: expect.any(String),
       }),
     );
   });
