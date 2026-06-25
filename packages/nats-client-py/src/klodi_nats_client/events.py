@@ -19,24 +19,37 @@ EventId = str
 # ─── Channel stream events (delivered via subscribe_channels) ─────────
 
 
-class ChannelMessageEvent(TypedDict):
-    """Delivered to ``subscribe_channels`` handlers.
-
-    Published directly to ``p2p.v1.channels.<channel_id>.<sender>.msg``
-    by the sender; the receiver's ``klodi-channels-<user_id>`` consumer
-    delivers it as a wake. The ``sequence`` field is filled in by
-    JetStream-side metadata, not the publisher's body.
-    """
+class _ChannelMessageBody(TypedDict):
+    """Required fields present in the publisher's wire body."""
 
     kind: Literal["channel.message"]
     event_id: EventId
     channel_id: str
     message_id: str
-    sequence: int
     sender_user_id: str
     sender_handle: str
     content: str
     created_at: str
+
+
+class ChannelMessageEvent(_ChannelMessageBody, total=False):
+    """Delivered to ``subscribe_channels`` handlers.
+
+    Published directly to ``p2p.v1.channels.<channel_id>.<sender>.msg``
+    by the sender; the receiver's ``klodi-channels-<user_id>`` consumer
+    delivers it as a wake.
+
+    ``sequence`` is the one optional key: it is JetStream-injected
+    post-parse from ``msg.info().stream_sequence`` and is absent from the
+    publisher body, so the wire fixture omits it. Splitting it into a
+    ``total=False`` subclass (rather than ``NotRequired``) keeps the key
+    genuinely optional at runtime under ``from __future__ import
+    annotations`` — a bare ``NotRequired`` is stringized by PEP 563 and
+    silently lands in ``__required_keys__``. Mirrors Rust ``events.rs``
+    ``#[serde(default)] sequence: u64``.
+    """
+
+    sequence: int
 
 
 # ─── Notification stream events (delivered via subscribe_notifications) ─
@@ -113,12 +126,56 @@ class CommentPostedEvent(TypedDict):
     created_at: str
 
 
+# ─── Delivery offers (carried inside a search.match listing summary) ──
+#
+# Mirrors ``tool-catalog/src/delivery.ts:DeliveryOffer`` and Rust
+# ``events.rs:DeliveryOffer`` field-for-field. ``method`` is the
+# discriminator (``pickup`` / ``ship`` / ``digital``); the wire uses
+# camelCase ``shipsTo``. Replaces the prior flat
+# ``(delivery_method, location_area)`` pair — see ``delivery.ts`` header
+# for the redesign rationale.
+
+
+class PickupLocation(TypedDict):
+    lat: float
+    lng: float
+    area: str
+
+
+class PickupOffer(TypedDict):
+    method: Literal["pickup"]
+    location: PickupLocation
+
+
+class ShipOrigin(TypedDict):
+    country: str  # ISO 3166-1 alpha-2
+
+
+# Functional TypedDict form: the wire key is ``from`` (a Python keyword),
+# which the class-statement form cannot express. ``shipsTo`` keeps its
+# camelCase wire spelling to mirror ``delivery.ts`` / Rust ``serde(rename)``.
+ShipOffer = TypedDict(
+    "ShipOffer",
+    {
+        "method": Literal["ship"],
+        "from": ShipOrigin,
+        "shipsTo": list[str],
+    },
+)
+
+
+class DigitalOffer(TypedDict):
+    method: Literal["digital"]
+
+
+DeliveryOffer = Union[PickupOffer, ShipOffer, DigitalOffer]
+
+
 class ListingSummary(TypedDict):
     title: str
     asking_price: int
     currency: str
-    delivery_method: str
-    location_area: str | None
+    fulfillment: list[DeliveryOffer]
     seller_handle: str
     photos: list[str]
 
@@ -160,6 +217,8 @@ __all__ = [
     "ChannelLifecycleEvent",
     "ChannelMessageEvent",
     "CommentPostedEvent",
+    "DeliveryOffer",
+    "DigitalOffer",
     "EventId",
     "ListingStateEvent",
     "ListingStatusChangedEvent",
@@ -167,6 +226,10 @@ __all__ = [
     "NotificationEvent",
     "OfferProposedEvent",
     "OfferRespondedEvent",
+    "PickupLocation",
+    "PickupOffer",
     "SearchMatchEvent",
+    "ShipOffer",
+    "ShipOrigin",
     "TransactionStateEvent",
 ]
