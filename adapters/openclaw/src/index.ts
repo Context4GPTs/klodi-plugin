@@ -49,6 +49,8 @@ import {
   getApiUrlSource,
   getKlodiHome,
   getKlodiHomeSource,
+  getPluginSource,
+  getPluginSourceSource,
   type KlodiPluginConfig,
 } from "./lib/paths.js";
 import type { PluginAPILike } from "./lib/plugin-api-types.js";
@@ -106,6 +108,8 @@ export default definePluginEntry({
       api_url_source: getApiUrlSource(),
       klodi_home: getKlodiHome(),
       klodi_home_source: getKlodiHomeSource(),
+      plugin_source: getPluginSource(),
+      plugin_source_source: getPluginSourceSource(),
     });
   },
 });
