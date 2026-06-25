@@ -1,5 +1,5 @@
 ---
-id: 0017-klodi-skill-bundle-slug
+id: 0018-klodi-skill-bundle-slug
 title: Skill bundle is namespaced `klodi-skill` at build time; `${klodi_home}/skill` install-time stays `skill`
 tags: [skill, bundle, vendoring, publish, naming, collision, adapters, openclaw]
 card: rename-skill-folder-and-frontmatter-to-klodi-skill
@@ -8,7 +8,7 @@ updated_at: 2026-06-25
 updated_by_card: rename-skill-folder-and-frontmatter-to-klodi-skill
 ---
 
-# ADR-0017 — Skill bundle is namespaced `klodi-skill` at build time; `${klodi_home}/skill` install-time stays `skill`
+# ADR-0018 — Skill bundle is namespaced `klodi-skill` at build time; `${klodi_home}/skill` install-time stays `skill`
 
 ## Status
 

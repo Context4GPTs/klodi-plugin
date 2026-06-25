@@ -8,7 +8,7 @@ Rows are sorted **newest `updated_at` first**.
 
 | Doc | Title | Tags | Updated |
 |---|---|---|---|
-| [[0017-klodi-skill-bundle-slug]] | Skill bundle is namespaced `klodi-skill` at build time; `${klodi_home}/skill` install-time stays `skill` | skill, bundle, vendoring, publish, naming, collision, adapters, openclaw | 2026-06-25 |
+| [[0018-klodi-skill-bundle-slug]] | Skill bundle is namespaced `klodi-skill` at build time; `${klodi_home}/skill` install-time stays `skill` | skill, bundle, vendoring, publish, naming, collision, adapters, openclaw | 2026-06-25 |
 | [[0009-vendored-ts-workspace-deps]] | Workspace TS deps vendored into `dist/_vendor/` at publish time | publish, vendoring, typescript | 2026-06-23 |
 | [[0014-tool-symmetry-axes]] | Three tool-symmetry axes — manifest↔registered, referenced⊆catalog, catalog↔registered-by-name | symmetry, drift, manifest, catalog, tools, openclaw, gate, contracts | 2026-06-23 |
 | [[0016-wake-log-correlator-contract]] | wake_enqueued correlator — echo the producer's event_id, never mint one; contract codegen'd into 3 loggers but emitter-satisfied only in openclaw | logging, correlator, wake, observability, catalog, contracts, adapters, parity, openclaw | 2026-06-23 |
