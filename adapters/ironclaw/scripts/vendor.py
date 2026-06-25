@@ -265,6 +265,9 @@ def stage_mcp_assets() -> None:
             f"[vendor] skill bundle missing at {skill_src} — refusing to stage.\n"
         )
         raise SystemExit(1)
+    # Source slug is `klodi-skill`; the staged-crate destination stays
+    # `skill` — it is the crate's internal layout, not a canonical-source
+    # ref, and no test guards it. Do not "consistency-fix" it. See ADR-0017.
     skill_dst = STAGED / "skill"
     if skill_dst.exists():
         shutil.rmtree(skill_dst)
