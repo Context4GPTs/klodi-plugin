@@ -2,7 +2,7 @@
 """Materialize the canonical klodi skill bundle into the nanobot adapter.
 
 Sibling of ``klodi-plugin/adapters/hermes/scripts/copy-skill.py`` —
-copies the authoritative ``klodi-plugin/skill/`` tree into the
+copies the authoritative ``klodi-plugin/klodi-skill/`` tree into the
 nanobot adapter's ``skills/klodi/`` folder so the adapter directory
 is self-contained when packaged or installed.
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 HERE = Path(__file__).resolve().parent
-SOURCE = HERE.parent.parent.parent / "skill"
+SOURCE = HERE.parent.parent.parent / "klodi-skill"
 TARGET = HERE.parent / "skills" / "klodi"
 
 

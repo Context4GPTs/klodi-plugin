@@ -159,12 +159,13 @@ export function getSecurityPolicyPath(): string {
 
 /**
  * Locate the plugin's bundled skill dir.
- * Compiled as dist/lib/paths.js; skill lives at ../../skill
- * relative to this module.
+ * Compiled as dist/lib/paths.js; skill lives at ../../klodi-skill
+ * relative to this module (copy-skill.mjs writes the bundle there and
+ * package.json#files ships it at <pkgroot>/klodi-skill).
  */
 export function getBundledSkillDir(): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  return join(here, "..", "..", "skill");
+  return join(here, "..", "..", "klodi-skill");
 }
 
 export function getNegotiationStyleTemplatePath(): string {

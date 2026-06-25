@@ -43,7 +43,7 @@ host_shape: in_agent
 
 ## 6. Skill delivery path
 
-- **Build-time bundle:** `klodi-plugin/skill/` is the canonical source. `klodi-plugin/adapters/hermes/scripts/copy-skill.py` copies the tree into `klodi-plugin/adapters/hermes/src/klodi_hermes/skills/klodi/` (gitignored). The wheel includes this via `MANIFEST.in` (`recursive-include skills *`); `__init__.py::_register_skills` registers everything under `${plugin_dir}/skills/` with Hermes's skill API at plugin load.
+- **Build-time bundle:** `klodi-plugin/klodi-skill/` is the canonical source. `klodi-plugin/adapters/hermes/scripts/copy-skill.py` copies the tree into `klodi-plugin/adapters/hermes/src/klodi_hermes/skills/klodi/` (gitignored). The wheel includes this via `MANIFEST.in` (`recursive-include skills *`); `__init__.py::_register_skills` registers everything under `${plugin_dir}/skills/` with Hermes's skill API at plugin load.
 - **Install-time disk write:** `klodi-hermes-setup` calls `seed_skill_dir(klodi_home, ${plugin_dir}/skills/klodi)` (via `hermes_installer.py`) which force-copies the bundle into `${klodi_home}/skill/`. Idempotent.
 - **Re-seed mechanism:** `klodi_setup_reseed_skill` local tool re-runs the same copy at runtime (used after a plugin upgrade if the on-disk skill drifts).
 

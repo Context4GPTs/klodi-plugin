@@ -43,7 +43,7 @@ host_shape: in_agent
 
 ## 6. Skill delivery path
 
-- **Build-time bundle:** `klodi-plugin/adapters/nanobot/scripts/copy-skill.py` copies `klodi-plugin/skill/` into `klodi-plugin/adapters/nanobot/skills/klodi/`. The wheel includes this via `MANIFEST.in` (`recursive-include skills *`).
+- **Build-time bundle:** `klodi-plugin/adapters/nanobot/scripts/copy-skill.py` copies `klodi-plugin/klodi-skill/` into `klodi-plugin/adapters/nanobot/skills/klodi/`. The wheel includes this via `MANIFEST.in` (`recursive-include skills *`).
 - **Install-time disk write:** `klodi-nanobot-setup` calls `seed_skill_dir(klodi_home, ${plugin_dir}/skills/klodi)` (via `nanobot_installer.py`) which force-copies the bundle into `${klodi_home}/skill/`. Idempotent.
 - **Re-seed mechanism:** re-run `klodi-nanobot-setup`. No in-agent reseed tool today (deferred until nanobot exposes a richer in-process tool surface).
 

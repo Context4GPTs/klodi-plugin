@@ -8,6 +8,7 @@ Rows are sorted **newest `updated_at` first**.
 
 | Doc | Title | Tags | Updated |
 |---|---|---|---|
+| [[0018-klodi-skill-bundle-slug]] | Skill bundle is namespaced `klodi-skill` at build time; `${klodi_home}/skill` install-time stays `skill` | skill, bundle, vendoring, publish, naming, collision, adapters, openclaw | 2026-06-25 |
 | [[0017-golden-corpus-cross-language-contract]] | Golden corpus is the cross-language wake-event contract (Decision 7) — fixtures mirror the publisher wire body, not the enriched event | golden, contract, drift, cross-language, events, codegen, nats, gate, fixtures | 2026-06-25 |
 | [[0009-vendored-ts-workspace-deps]] | Workspace TS deps vendored into `dist/_vendor/` at publish time | publish, vendoring, typescript | 2026-06-23 |
 | [[0014-tool-symmetry-axes]] | Three tool-symmetry axes — manifest↔registered, referenced⊆catalog, catalog↔registered-by-name | symmetry, drift, manifest, catalog, tools, openclaw, gate, contracts | 2026-06-23 |

@@ -23,7 +23,7 @@
   "main": "./dist/index.js",
   "files": [
     "dist",
-    "skill",
+    "klodi-skill",
     "openclaw.plugin.json",
     "README.md",
     "SECURITY.md",

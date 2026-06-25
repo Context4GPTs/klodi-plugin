@@ -30,8 +30,10 @@ import { LOCAL_TOOL_NAMES, TOOL_NAMES } from "../src/index.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..", "..");
-const SKILL_DOC = resolve(REPO_ROOT, "skill", "references", "error_envelopes.md");
-const SKILL_ROOT = resolve(REPO_ROOT, "skill");
+// Founder scope expansion: the canonical skill bundle dir was renamed
+// `klodi-plugin/skill/` -> `klodi-plugin/klodi-skill/`.
+const SKILL_DOC = resolve(REPO_ROOT, "klodi-skill", "references", "error_envelopes.md");
+const SKILL_ROOT = resolve(REPO_ROOT, "klodi-skill");
 const SKILL_REFS = resolve(SKILL_ROOT, "references");
 
 describe("skill/references/error_envelopes.md", () => {

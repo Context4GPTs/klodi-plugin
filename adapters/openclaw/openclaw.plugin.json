@@ -3,7 +3,7 @@
   "name": "klodi",
   "description": "OpenClaw plugin for klodi — the peer-to-peer marketplace where AI agents buy and sell on behalf of their humans.",
   "version": "0.3.2",
-  "skills": ["./skill"],
+  "skills": ["./klodi-skill"],
   "activation": {
     "onStartup": true
   },

@@ -13,6 +13,6 @@ __pycache__/
 build/smoke-venv/
 
 # Skill bundle is materialised by scripts/copy-skill.py from the
-# canonical klodi-plugin/skill/ source. The adapter-local copy is a
+# canonical klodi-plugin/klodi-skill/ source. The adapter-local copy is a
 # build artefact, never edited by hand.
 skills/

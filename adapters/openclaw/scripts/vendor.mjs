@@ -75,7 +75,7 @@ const VENDOR_ROOT = join(STAGE, "dist", "_vendor");
 // Top-level adapter files that ride into the published tarball. Mirrors
 // package.json#files. package.json itself is written separately (stripped).
 const TOP_LEVEL_FILES = ["README.md", "SECURITY.md", "LICENSE", "NOTICE", "openclaw.plugin.json"];
-const TOP_LEVEL_DIRS = ["skill"];
+const TOP_LEVEL_DIRS = ["klodi-skill"];
 
 // Workspace deps that ride into the artefact as inlined source (not as
 // registry-fetchable packages). Their entries vanish from the published

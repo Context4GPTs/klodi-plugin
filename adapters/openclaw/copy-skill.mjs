@@ -1,20 +1,23 @@
 #!/usr/bin/env node
 /**
  * Materialize the canonical klodi skill bundle into this adapter's
- * root as `./skill/` ahead of build and pack. Per 0010 § "Repository
- * and release topology": several host registries copy the plugin to
- * a local cache and block path traversal outside the plugin root, so
- * we copy the bytes rather than rely on symlinks. The authoritative
- * source is `klodi-plugin/skill/` — adapter-local copies are build
- * artifacts, never edited by hand.
+ * root as `./klodi-skill/` ahead of build and pack. Per 0010 §
+ * "Repository and release topology": several host registries copy the
+ * plugin to a local cache and block path traversal outside the plugin
+ * root, so we copy the bytes rather than rely on symlinks. The
+ * authoritative source is `klodi-plugin/klodi-skill/` — adapter-local
+ * copies are build artifacts, never edited by hand. The source dir is
+ * namespaced `klodi-skill/` (and so is this destination) so the
+ * host-published skill slug cannot collide with other plugins that ship
+ * a generic `skill/` folder.
  *
  * Reseed semantics (per **R § P3-19**, Option A):
- *   - Default (no flag): if `./skill/` exists, log a `[reseed]`
+ *   - Default (no flag): if `./klodi-skill/` exists, log a `[reseed]`
  *     warning line BEFORE the destructive overwrite so an unexpected
  *     reseed is visible in build logs. Then overwrite.
- *   - `--no-reseed`: refuse to overwrite `./skill/` when it exists,
- *     exit 1 with a clear error. Use when the adapter's local skill
- *     copy was edited locally and must not be reset.
+ *   - `--no-reseed`: refuse to overwrite `./klodi-skill/` when it
+ *     exists, exit 1 with a clear error. Use when the adapter's local
+ *     skill copy was edited locally and must not be reset.
  */
 
 import { cpSync, existsSync, rmSync } from "node:fs";
@@ -23,8 +26,8 @@ import { fileURLToPath } from "node:url";
 import process from "node:process";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SOURCE = resolve(HERE, "..", "..", "skill");
-const TARGET = resolve(HERE, "skill");
+const SOURCE = resolve(HERE, "..", "..", "klodi-skill");
+const TARGET = resolve(HERE, "klodi-skill");
 
 // Tiny CLI: we accept exactly --no-reseed and --help. No need for a
 // dependency — this script runs at build time, before any deps are
@@ -34,10 +37,10 @@ const argv = process.argv.slice(2);
 
 if (argv.includes("--help") || argv.includes("-h")) {
   process.stdout.write(
-    "copy-skill.mjs — copy klodi-plugin/skill/ into adapters/openclaw/skill/\n"
+    "copy-skill.mjs — copy klodi-plugin/klodi-skill/ into adapters/openclaw/klodi-skill/\n"
     + "\n"
     + "Options:\n"
-    + "  --no-reseed   Refuse to overwrite an existing ./skill/ directory.\n"
+    + "  --no-reseed   Refuse to overwrite an existing ./klodi-skill/ directory.\n"
     + "                Default behaviour (no flag) is to log a [reseed]\n"
     + "                warning then overwrite, so existing build flows\n"
     + "                that never pass a flag continue to work.\n"

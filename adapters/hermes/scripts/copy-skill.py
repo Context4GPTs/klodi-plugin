@@ -7,7 +7,7 @@ canonical layout: a plugin's bundled skills live at
 its playbook via `ctx.register_skill("klodi", skills/klodi/SKILL.md)`
 at plugin load time.
 
-Build step: copy the authoritative `klodi-plugin/skill/` bundle into
+Build step: copy the authoritative `klodi-plugin/klodi-skill/` bundle into
 `adapters/hermes/src/klodi_hermes/skills/klodi/` so the bundle ships as
 package data inside the wheel. After `pip install klodi-hermes`,
 `__init__.py`'s `_register_skills(ctx, Path(__file__).parent)` walks
@@ -24,7 +24,7 @@ from pathlib import Path
 
 
 HERE = Path(__file__).resolve().parent
-SOURCE = HERE.parent.parent.parent / "skill"
+SOURCE = HERE.parent.parent.parent / "klodi-skill"
 TARGET = HERE.parent / "src" / "klodi_hermes" / "skills" / "klodi"
 
 

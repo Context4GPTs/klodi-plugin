@@ -31,17 +31,17 @@ function read(path: string): string {
 }
 
 describe("klodi_assets_upload_url is gone from the openclaw-bundled skill", () => {
-  it("is not mentioned in skill/references/tool_inventory.md", () => {
-    const path = join(REPO_ROOT, "skill", "references", "tool_inventory.md");
+  it("is not mentioned in klodi-skill/references/tool_inventory.md", () => {
+    const path = join(REPO_ROOT, "klodi-skill", "references", "tool_inventory.md");
     expect(read(path)).not.toContain(REMOVED_TOOL);
   });
 
-  it("is not mentioned in skill/references/photo_upload_flow.md (or its successor)", () => {
+  it("is not mentioned in klodi-skill/references/photo_upload_flow.md (or its successor)", () => {
     // The architect's plan allows renaming this file to photos.md. We
     // accept either location, but reject the old tool name in BOTH.
     const candidates = [
-      join(REPO_ROOT, "skill", "references", "photo_upload_flow.md"),
-      join(REPO_ROOT, "skill", "references", "photos.md"),
+      join(REPO_ROOT, "klodi-skill", "references", "photo_upload_flow.md"),
+      join(REPO_ROOT, "klodi-skill", "references", "photos.md"),
     ];
     const bodies: string[] = [];
     for (const candidate of candidates) {
@@ -59,8 +59,8 @@ describe("klodi_assets_upload_url is gone from the openclaw-bundled skill", () =
     }
   });
 
-  it("is not mentioned in skill/SKILL.md", () => {
-    const path = join(REPO_ROOT, "skill", "SKILL.md");
+  it("is not mentioned in klodi-skill/SKILL.md", () => {
+    const path = join(REPO_ROOT, "klodi-skill", "SKILL.md");
     expect(read(path)).not.toContain(REMOVED_TOOL);
   });
 });
@@ -89,15 +89,15 @@ describe("the canonical phrase covers what photos accepts", () => {
   // across surfaces prevents the drift bug this card is closing.
   const CANONICAL = /image URLs? or absolute local file paths?/i;
 
-  it("appears in skill/references/tool_inventory.md", () => {
-    const path = join(REPO_ROOT, "skill", "references", "tool_inventory.md");
+  it("appears in klodi-skill/references/tool_inventory.md", () => {
+    const path = join(REPO_ROOT, "klodi-skill", "references", "tool_inventory.md");
     expect(read(path)).toMatch(CANONICAL);
   });
 
   it("appears in the photos.md or photo_upload_flow.md skill reference", () => {
     const candidates = [
-      join(REPO_ROOT, "skill", "references", "photo_upload_flow.md"),
-      join(REPO_ROOT, "skill", "references", "photos.md"),
+      join(REPO_ROOT, "klodi-skill", "references", "photo_upload_flow.md"),
+      join(REPO_ROOT, "klodi-skill", "references", "photos.md"),
     ];
     const bodies: string[] = [];
     for (const candidate of candidates) {
