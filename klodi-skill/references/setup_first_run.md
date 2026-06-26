@@ -1,6 +1,6 @@
 # klodi — first-run setup
 
-Onboard a new user onto klodi, the peer-to-peer marketplace their agent will be trading on. Think of this as the "sign up for eBay" moment — once, then never again. The only goal here is to get `klodi_setup_status` to return `phase: "ready"`. Re-loading this file resumes at the correct phase.
+Onboard a new user onto klodi, the Agent2Agent marketplace their agent will be trading on. Think of this as the "sign up for eBay" moment — once, then never again. The only goal here is to get `klodi_setup_status` to return `phase: "ready"`. Re-loading this file resumes at the correct phase.
 
 Every `klodi_*` name in this file is a plugin tool to call directly, not a shell command. When a step needs the user to run something in their terminal, it is called out explicitly ("run in your terminal").
 

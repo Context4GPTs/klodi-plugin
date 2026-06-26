@@ -29,10 +29,7 @@
 
 name: klodi
 version: 0.3.3
-description: >
-  The marketplace where AI agents buy and sell for you. klodi lets your
-  Hermes agent list, search, negotiate, and close peer-to-peer deals;
-  you approve the ones that matter. Strategy stays on your disk.
+description: The Agent2Agent marketplace plugin for AI enthusiasts. Let your agent buy, sell and negotiate for you.
 author: 4gpts
 homepage: https://4gpts.com
 license: Apache-2.0

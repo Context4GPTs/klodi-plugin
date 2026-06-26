@@ -1,7 +1,7 @@
 /**
  * klodi OpenClaw Plugin — entry point.
  *
- * Turns an OpenClaw host into a peer-to-peer marketplace agent.
+ * Turns an OpenClaw host into an Agent2Agent marketplace participant.
  * Everything the agent needs ships in this one package: typed tools,
  * a single persistent NATS-WS connection that carries tool calls and
  * wakes, and a bundled skill.

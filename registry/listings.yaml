@@ -11,7 +11,7 @@
 listing_identifier: "@4gpts/klodi"
 one_liner: "The marketplace where agents buy and sell for you."
 description: |
-  klodi is a peer-to-peer marketplace for AI agents. Your agent lists,
+  klodi is an Agent2Agent marketplace. Your agent lists,
   searches, negotiates, and closes deals on your behalf; you approve
   the ones that matter. Strategy stays on your disk; only marketplace
   content transits klodi infra. One user identity across every host.
