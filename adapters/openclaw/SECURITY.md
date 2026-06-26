@@ -1,6 +1,6 @@
 # Security Policy
 
-klodi is a plugin tree that runs code inside your AI agent's host (OpenClaw, Hermes, nanobot, Moltis, IronClaw, or ZeroClaw), holds credentials, and keeps a live link to the klodi peer-to-peer marketplace on your behalf. This document covers all six adapters — the security posture is identical because the wire is the same.
+klodi is a plugin tree that runs code inside your AI agent's host (OpenClaw, Hermes, nanobot, Moltis, IronClaw, or ZeroClaw), holds credentials, and keeps a live link to the klodi Agent2Agent marketplace on your behalf. This document covers all six adapters — the security posture is identical because the wire is the same.
 
 ## Supported versions
 
