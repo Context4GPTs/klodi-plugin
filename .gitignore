@@ -185,6 +185,12 @@ klodi-plugin/adapters/openclaw/klodi-skill/
 # pnpm build:vendored — never commit.
 adapters/*/.publish-stage/
 
+# Root pnpm workspace lockfile — regenerated on demand from the committed
+# per-package pnpm-lock.yaml files when `pnpm --filter` runs from the repo
+# root (codegen). pnpm-workspace.yaml IS committed; this hoisted root lock
+# is a derived artefact and would shadow the per-package lockfiles.
+/pnpm-lock.yaml
+
 # Internal docs — local-only, not shipped with the repo or any release
 # artefact. Public-facing context lives in docs/decisions/ (ADRs),
 # docs/specs/hosts/ (per-host adapter specs), SECURITY.md, and
