@@ -4,6 +4,22 @@ All notable changes to klodi-plugin (every adapter — `@4gpts/klodi` for OpenCl
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). All adapters move together — they share a single version line. Pre-1.0 the public surface is not yet stable — check this file on every upgrade before bumping the pinned version.
 
+## [0.3.3] — 2026-06-26 — runtime analytics headers, wake-event contract repair, klodi-skill bundle namespace
+
+**All six adapters move to `0.3.3` together (lockstep version line).** OpenClaw shipped `0.3.2`; the other five (`klodi-hermes`, `klodi-nanobot`, `klodi-moltis`, `klodi-ironclaw`, `klodi-zeroclaw`) were bumped to `0.3.2` in their manifests but never published, so `0.3.3` is their first release since `0.3.1`. Three changes land since `0.3.2`.
+
+### Added
+
+- **OpenClaw RPCs now carry runtime + install-source headers.** Every outbound OpenClaw RPC stamps `X-Klodi-Runtime: openclaw` and `X-Klodi-Plugin-Source` (`clawhub` / `npm` / `unknown`, read from `KLODI_PLUGIN_SOURCE`) via a constructor-injected static header map on the shared `nats-client-ts`. This lets the marketplace populate a non-null `plugin_source` on `user_registration_events` for the install→registration funnel; it is also logged in `klodi_plugin_loaded`. The shared client stamps whatever keys it is handed — the `openclaw` literal and the plugin-source concept stay in the adapter, inert without injection.
+
+### Fixed
+
+- **Python wake-event model + cross-language contract tests realigned to the canonical golden corpus.** The shared corpus and the Rust shapes had migrated weeks earlier while the Python `klodi_nats_client` model and the TS/Python contract suites still asserted the dead schema. `search.match` now carries a `fulfillment` array of method-tagged `DeliveryOffer`s (`pickup` / `ship` / `digital`) instead of the flat `delivery_method` / `location_area` pair; `channel.message` no longer carries an in-body `sequence` (JetStream injects it post-parse). Recorded as ADR-0017. **Out-of-tree Python consumers of `klodi_nats_client`** (the vendored client inside `klodi-hermes` / `klodi-nanobot`) must move to the `fulfillment` union — re-vendor to pick up the new `events.py`.
+
+### Changed
+
+- **The canonical build-time skill bundle is namespaced `klodi-skill/`.** The source dir `klodi-plugin/skill/` is renamed to `klodi-plugin/klodi-skill/`, and every adapter build-input consumer moves with it (OpenClaw `copy-skill.mjs` / `vendor.mjs`, hermes/nanobot `copy-skill.py`, moltis/ironclaw `vendor.py`, `registry/listings.yaml`). The OpenClaw plugin now publishes its skill under the namespaced `klodi-skill` slug so it cannot collide with other hosts shipping a generic `skill/` folder. The install-time `${klodi_home}/skill` per-user state path is deliberately unchanged (renaming user state would break upgrades); zeroclaw ships no embedded skill and is untouched. Recorded as ADR-0018.
+
 ## [0.3.2] — 2026-06-24 — reconcile openclaw package↔manifest version drift
 
 **All adapters.** Packaging-metadata patch bump in lockstep — no functional or wire changes. The OpenClaw plugin registry flagged `klodi` as `package-manifest-version-drift` and disabled the target: the published `0.3.1` declared `package.json` version `0.3.1` but an `openclaw.plugin.json` manifest version of `0.3.0`. The two diverged because `scripts/stamp-version.mjs` rewrote only the manifest's pinned-tag GitHub URLs at publish time, never the manifest's own top-level `version` field — so the `0.3.0 → 0.3.1` bump left the manifest behind.

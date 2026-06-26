@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "klodi-moltis"
-version = "0.3.1"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "clap",

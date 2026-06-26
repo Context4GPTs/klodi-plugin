@@ -40,8 +40,7 @@ WHEEL="${WHEELS[0]}"
 log "using wheel: $(basename "$WHEEL")"
 
 log "creating throw-away venv at $SMOKE_VENV"
-python3 -m venv "$SMOKE_VENV"
-"$SMOKE_VENV/bin/pip" install --quiet --upgrade pip
+uv venv --seed --python 3.12 "$SMOKE_VENV"
 
 log "installing wheel into smoke venv (with deps)"
 "$SMOKE_VENV/bin/pip" install --quiet "$WHEEL"

@@ -61,8 +61,7 @@ log "using wheel: $(basename "$WHEEL")"
 # --- Set up a clean venv ---------------------------------------------------
 
 log "creating throw-away venv at $SMOKE_VENV"
-python3 -m venv "$SMOKE_VENV"
-"$SMOKE_VENV/bin/pip" install --quiet --upgrade pip
+uv venv --seed --python 3.12 "$SMOKE_VENV"
 
 # Install with deps so import-time references to nats-py / websockets etc.
 # resolve. The wheel's own deps (post-vendoring) should be just the

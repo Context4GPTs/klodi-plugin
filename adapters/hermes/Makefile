@@ -95,8 +95,7 @@ render-readme:
 
 build: vendor
 	@rm -rf "$(DIST)"
-	@python3 -m pip install --quiet --upgrade build
-	@cd "$(STAGED)" && python3 -m build --outdir "$(DIST)"
+	@cd "$(STAGED)" && uv build --out-dir "$(DIST)"
 	@echo "[build] $(PACKAGE) artifacts ready in $(DIST)"
 
 pack-inspect: build
@@ -118,12 +117,10 @@ release-notes:
 prepublish: stamp-version changelog-check smoke tag
 
 publish-dry: prepublish
-	@python3 -m pip install --quiet --upgrade twine
-	@python3 -m twine check $(DIST)/*
+	@uvx twine check $(DIST)/*
 
 publish: prepublish
-	@python3 -m pip install --quiet --upgrade twine
-	@python3 -m twine upload $(DIST)/*
+	@uvx twine upload $(DIST)/*
 
 clean:
 	@rm -rf build/ dist/ *.egg-info
