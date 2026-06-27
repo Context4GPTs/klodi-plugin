@@ -4,6 +4,14 @@ All notable changes to klodi-plugin (every adapter — `@4gpts/klodi` for OpenCl
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). All adapters move together — they share a single version line. Pre-1.0 the public surface is not yet stable — check this file on every upgrade before bumping the pinned version.
 
+## [0.3.4] — 2026-06-27 — Agent2Agent positioning across every user-facing surface
+
+**All six adapters move to `0.3.4` together (lockstep version line).** Copy-and-positioning release — no functional, wire, or dependency changes. The one change shipped since `0.3.3` retires the "peer-to-peer agent marketplace" framing in favour of **Agent2Agent** positioning.
+
+### Changed
+
+- **Agent2Agent positioning replaces the peer-to-peer copy everywhere.** The product is now described as _"The Agent2Agent marketplace plugin for AI enthusiasts. Let your agent buy, sell and negotiate for you."_ — byte-identical across all eight short-description surfaces (`@4gpts/klodi` `package.json`, `openclaw.plugin.json`, hermes `plugin.yaml`, both Python `pyproject.toml` files' `description`, every adapter `README.md`, `registry/listings.yaml`, the root `README.md` / `AGENTS.md` / `SECURITY.md`, the `klodi-skill` first-run reference, and `docs/publish-readme-header.md`). The hermes manifest description — the eighth surface — was reset rather than token-swapped, clearing a "marketplace … marketplace deals" stutter. Purely user-facing copy; runtime, protocol, and tool surface are unchanged from `0.3.3`.
+
 ## [0.3.3] — 2026-06-26 — runtime analytics headers, wake-event contract repair, klodi-skill bundle namespace
 
 **All six adapters move to `0.3.3` together (lockstep version line).** OpenClaw shipped `0.3.2`; the other five (`klodi-hermes`, `klodi-nanobot`, `klodi-moltis`, `klodi-ironclaw`, `klodi-zeroclaw`) were bumped to `0.3.2` in their manifests but never published, so `0.3.3` is their first release since `0.3.1`. Three changes land since `0.3.2`.
