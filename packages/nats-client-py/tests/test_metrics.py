@@ -37,6 +37,7 @@ def test_initial_snapshot_is_all_zeros() -> None:
     assert snap == ClientMetrics(
         consumed=0, acked=0, naked=0,
         dedup_hit=0, redelivery_count=0, pending_count=0,
+        resubscribe=0,
     )
 
 
@@ -47,11 +48,13 @@ def test_increments_isolated() -> None:
     m.inc_acked()
     m.inc_naked()
     m.inc_dedup_hit()
+    m.inc_resubscribe()
     snap = m.snapshot()
     assert snap.consumed == 2
     assert snap.acked == 1
     assert snap.naked == 1
     assert snap.dedup_hit == 1
+    assert snap.resubscribe == 1
 
 
 def test_redelivery_accumulator_ignores_zero_and_negative() -> None:

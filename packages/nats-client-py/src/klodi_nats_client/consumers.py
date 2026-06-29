@@ -32,6 +32,7 @@ from nats.errors import TimeoutError as NatsTimeoutError
 from nats.js import JetStreamContext
 from nats.js.errors import NotFoundError
 
+from klodi_nats_client.backoff import BackoffPolicy
 from klodi_nats_client.events import (
     ChannelMessageEvent,
     NotificationEvent,
@@ -82,6 +83,7 @@ _FETCH_TIMEOUT_SECONDS = 5.0
 NotificationHandler = Callable[[NotificationEvent], Awaitable[None]]
 ChannelHandler = Callable[[ChannelMessageEvent], Awaitable[None]]
 ErrorSink = Callable[[BaseException], None]
+Sleeper = Callable[[float], Awaitable[None]]
 
 
 class _EventIdLru:
@@ -264,6 +266,31 @@ async def _dispatch_message(
         metrics.inc_acked()
 
 
+async def _bind_pull_subscription(
+    js: JetStreamContext,
+    stream: str,
+    durable: str,
+    missing_code: str,
+) -> Any:
+    """Bind a pull subscription, mapping a deleted durable to a typed
+    setup error.
+
+    A ``NotFoundError`` on (re-)bind means the server-managed durable
+    (D5/D7) is gone — a human fix, not a transient flap. Surface it as
+    :class:`KlodiSetupError` so the loop ends loudly instead of spinning
+    forever on a hard-down consumer (the re-bind-storm failure mode).
+    """
+    try:
+        return await js.pull_subscribe_bind(consumer=durable, stream=stream)
+    except NotFoundError as exc:
+        raise KlodiSetupError(
+            missing_code,
+            f"{missing_code}: durable={durable} stream={stream} deleted "
+            "server-side (D5/D7) during a transport flap — re-run "
+            "klodi_register or contact support.",
+        ) from exc
+
+
 async def _consume_loop(
     js: JetStreamContext,
     stream: str,
@@ -272,35 +299,94 @@ async def _consume_loop(
     on_error: ErrorSink,
     stop_event: asyncio.Event,
     metrics: MutableMetrics | None = None,
+    *,
+    missing_code: str = "consumer_missing",
+    sleep: Sleeper | None = None,
+    backoff: BackoffPolicy | None = None,
 ) -> None:
-    """Pull-fetch loop. Exits when ``stop_event`` is set."""
-    sub = await js.pull_subscribe_bind(consumer=durable, stream=stream)
+    """Reconnect-resilient pull-fetch loop. Exits when ``stop_event`` set.
+
+    A transport flap (``nats: unexpected EOF`` / 502) drops the bound
+    pull subscription; nats-py reconnects the WS, but the bound
+    subscription's deliver inbox can go stale and never resume. So on a
+    transport-level fetch error we discard the stale ``sub``, back off
+    exponentially (the cross-language ``BackoffPolicy``, not a flat 1s),
+    and re-bind IN PLACE — emitting ``consumer_resubscribe`` so a
+    never-resuming loop is visible rather than a silent wedge (INV-1).
+
+    Load-bearing invariant: the dedup ``_EventIdLru`` is created ONCE and
+    preserved across re-binds. A durable consumer resumes from its last
+    ack, so a wake delivered-but-unacked during the blip is redelivered;
+    the surviving LRU recognises it (``has`` → ack + dedup) and never
+    double-injects. Tearing the loop down to re-subscribe would reset the
+    LRU and reintroduce the double-wake — hence in-place re-bind only.
+
+    ``sleep``/``backoff`` are injectable seams for deterministic tests;
+    production uses a stop-aware sleep so a pending stop interrupts the
+    backoff instead of blocking for the full cap.
+    """
+    policy = backoff if backoff is not None else BackoffPolicy()
+
+    async def _stop_aware_sleep(delay: float) -> None:
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=delay)
+        except (asyncio.TimeoutError, TimeoutError):
+            return
+
+    sleep_fn = sleep if sleep is not None else _stop_aware_sleep
+
     lru = _EventIdLru()
+    sub: Any = None
+    bound_once = False
     try:
         while not stop_event.is_set():
+            if sub is None:
+                try:
+                    sub = await _bind_pull_subscription(
+                        js, stream, durable, missing_code
+                    )
+                except (KlodiSetupError, asyncio.CancelledError):
+                    raise
+                except BaseException as err:  # noqa: BLE001 — bind flap, retry
+                    on_error(err)
+                    await sleep_fn(policy.next_delay())
+                    continue
+                if bound_once:
+                    if metrics is not None:
+                        metrics.inc_resubscribe()
+                    log.info(
+                        "consumer_resubscribe durable=%s stream=%s attempt=%d",
+                        durable, stream, policy.attempt,
+                    )
+                bound_once = True
             try:
                 msgs = await sub.fetch(
                     batch=_FETCH_BATCH,
                     timeout=_FETCH_TIMEOUT_SECONDS,
                 )
             except NatsTimeoutError:
-                # Normal — no messages waiting. Loop to re-check stop.
+                # Normal — no messages waiting. Healthy poll → reset cursor.
+                policy.reset()
                 continue
             except asyncio.CancelledError:
                 raise
-            except BaseException as err:  # noqa: BLE001 — surface + retry
+            except BaseException as err:  # noqa: BLE001 — transport drop
                 on_error(err)
-                # Brief backoff before retry so we don't hot-loop on
-                # transient connection errors.
-                await asyncio.sleep(1.0)
+                # Drop the (presumed-dead) sub WITHOUT awaiting an
+                # unsubscribe that could hang on a broken connection; the
+                # server-side durable is untouched. Re-bind next iteration.
+                sub = None
+                await sleep_fn(policy.next_delay())
                 continue
+            policy.reset()
             for msg in msgs:
                 await _dispatch_message(msg, lru, handler, on_error, metrics)
     finally:
-        try:
-            await sub.unsubscribe()
-        except BaseException as err:  # noqa: BLE001 — best-effort
-            on_error(err)
+        if sub is not None:
+            try:
+                await sub.unsubscribe()
+            except BaseException as err:  # noqa: BLE001 — best-effort
+                on_error(err)
 
 
 def _seed_pending_from_info(info: Any, metrics: MutableMetrics | None) -> None:
@@ -354,6 +440,7 @@ async def subscribe_notifications(
             on_error,
             stop_event,
             metrics,
+            missing_code="notifications_consumer_missing",
         )
 
     task = asyncio.create_task(
@@ -398,6 +485,7 @@ async def subscribe_channels(
             on_error,
             stop_event,
             metrics,
+            missing_code="channels_consumer_missing",
         )
 
     task = asyncio.create_task(

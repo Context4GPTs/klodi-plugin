@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -29,10 +28,14 @@ from klodi_nats_client import (
     load_config,
     load_creds,
 )
+from klodi_nats_client.backoff import BackoffPolicy
 from klodi_nats_client.consumers import (
+    KlodiSetupError,
+    _consume_loop,
     _EventIdLru,
     _dispatch_message,
 )
+from klodi_nats_client.metrics import MutableMetrics
 from klodi_nats_client.publish import publish_channel_message
 
 
@@ -622,3 +625,215 @@ async def test_subscribe_channels_raises_setup_error_when_consumer_missing(
     assert js.pull_subscribe_bind.await_count == 0
 
     await client.close()
+
+
+# ── Reconnect-resilient consume loop (Piece 1a) ───────────────────────
+#
+# The long-lived consume loop must survive a transport flap (EOF/502) by
+# re-binding its pull subscription IN PLACE, backing off exponentially,
+# and — critically — keeping its dedup ``_EventIdLru`` alive across the
+# re-bind so a wake delivered-but-unacked before the drop is never
+# double-injected on JetStream redelivery.
+
+
+from nats.errors import TimeoutError as _NatsTimeoutError  # noqa: E402
+
+
+async def _instant_sleep(_delay: float) -> None:
+    """Inject in place of the loop's backoff sleep so tests don't wait."""
+    return None
+
+
+class _ScriptedSub:
+    """Fake ``PullSubscription`` driven by a fetch script.
+
+    Each script item is either a ``list`` of msgs to return or a
+    ``BaseException`` instance to raise on that ``fetch`` call. When the
+    script is exhausted the sub sets ``stop_event`` (if given) and raises
+    ``NatsTimeoutError`` so the loop drains and exits on the next stop
+    check — exactly how the production loop treats an idle poll.
+    """
+
+    def __init__(
+        self, script: list[Any], *, stop_event: asyncio.Event | None = None
+    ) -> None:
+        self._script = list(script)
+        self._i = 0
+        self.unsubscribe_count = 0
+        self._stop_event = stop_event
+
+    async def fetch(self, batch: int, timeout: float) -> list[Any]:
+        if self._i >= len(self._script):
+            if self._stop_event is not None:
+                self._stop_event.set()
+            raise _NatsTimeoutError()
+        item = self._script[self._i]
+        self._i += 1
+        if isinstance(item, BaseException):
+            raise item
+        return list(item)
+
+    async def unsubscribe(self) -> None:
+        self.unsubscribe_count += 1
+
+
+class _RebindingJs:
+    """Fake JetStream that hands the SAME ``sub`` back on every
+    ``pull_subscribe_bind`` (re-bind returns a fresh client handle to the
+    same server-side durable) and counts the binds."""
+
+    def __init__(self, sub: _ScriptedSub) -> None:
+        self._sub = sub
+        self.bind_count = 0
+
+    async def pull_subscribe_bind(self, consumer: str, stream: str) -> Any:
+        self.bind_count += 1
+        return self._sub
+
+
+@pytest.mark.asyncio
+async def test_consume_loop_no_double_inject_across_rebind() -> None:
+    """AC-7: a wake dispatched (its ``event_id`` remembered) before a
+    transport drop must NOT be re-dispatched when JetStream redelivers it
+    after an in-place re-bind — the preserved ``_EventIdLru`` dedups it.
+    This is the guard against the LRU-reset regression."""
+    handler_calls: list[Any] = []
+
+    async def handler(payload: Any) -> None:
+        handler_calls.append(payload)
+
+    stop = asyncio.Event()
+    e1 = _make_msg({"event_id": "e1", "kind": "offer.proposed"})
+    e1_redeliver = _make_msg({"event_id": "e1", "kind": "offer.proposed"})
+    # deliver e1 → transport drop → re-bind → JetStream redelivers e1.
+    sub = _ScriptedSub(
+        [[e1], ConnectionError("nats: unexpected EOF"), [e1_redeliver]],
+        stop_event=stop,
+    )
+    js = _RebindingJs(sub)
+    metrics = MutableMetrics()
+    errors: list[BaseException] = []
+
+    await _consume_loop(
+        js, "P2P_NOTIFICATIONS", "klodi-notifications-u", handler,
+        errors.append, stop, metrics,
+        sleep=_instant_sleep, backoff=BackoffPolicy(jitter_ratio=0.0),
+    )
+
+    assert len(handler_calls) == 1          # invoked exactly once
+    assert handler_calls[0]["event_id"] == "e1"
+    assert js.bind_count == 2               # an in-place re-bind happened
+    assert metrics.snapshot().resubscribe == 1
+    assert metrics.snapshot().dedup_hit == 1
+    assert e1.ack.await_count == 1          # original acked
+    assert e1_redeliver.ack.await_count == 1  # redelivery acked (deduped)
+
+
+@pytest.mark.asyncio
+async def test_consume_loop_resumes_backlog_in_order_after_flap() -> None:
+    """AC-6: when ``fetch`` raises a transport error for a window and then
+    a re-bound subscription succeeds, delivery resumes (the post-flap
+    backlog drains in order) on the SAME long-lived loop — no
+    application-driven close()/fresh-subscribe."""
+    received: list[str] = []
+
+    async def handler(payload: Any) -> None:
+        received.append(payload["event_id"])
+
+    stop = asyncio.Event()
+    msgs = {k: _make_msg({"event_id": k, "kind": "offer.proposed"})
+            for k in ("e1", "e2", "e3", "e4")}
+    sub = _ScriptedSub(
+        [
+            [msgs["e1"]],
+            ConnectionError("nats: unexpected EOF"),
+            ConnectionError("502 bad gateway"),
+            [msgs["e2"]], [msgs["e3"]], [msgs["e4"]],
+        ],
+        stop_event=stop,
+    )
+    js = _RebindingJs(sub)
+    errors: list[BaseException] = []
+
+    await _consume_loop(
+        js, "P2P_NOTIFICATIONS", "klodi-notifications-u", handler,
+        errors.append, stop, MutableMetrics(),
+        sleep=_instant_sleep, backoff=BackoffPolicy(jitter_ratio=0.0),
+    )
+
+    assert received == ["e1", "e2", "e3", "e4"]
+    assert js.bind_count == 3  # initial + one re-bind per transport error
+
+
+@pytest.mark.asyncio
+async def test_consume_loop_backoff_is_exponential_and_resets_on_success() -> None:
+    """AC-8: successive transport errors back off via
+    ``compute_backoff_seconds`` (NOT a flat 1s), and the cursor resets
+    after the first successful fetch."""
+    delays: list[float] = []
+
+    async def recording_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    async def handler(_payload: Any) -> None:
+        raise AssertionError("no messages are dispatched in this scenario")
+
+    stop = asyncio.Event()
+    # fail, fail, success(empty → reset), fail, then exhaust → stop.
+    sub = _ScriptedSub(
+        [
+            ConnectionError("eof-1"),
+            ConnectionError("eof-2"),
+            [],
+            ConnectionError("eof-3"),
+        ],
+        stop_event=stop,
+    )
+    js = _RebindingJs(sub)
+
+    await _consume_loop(
+        js, "P2P_NOTIFICATIONS", "klodi-notifications-u", handler,
+        (lambda _e: None), stop, MutableMetrics(),
+        sleep=recording_sleep, backoff=BackoffPolicy(jitter_ratio=0.0),
+    )
+
+    assert len(delays) == 3
+    assert delays[0] == pytest.approx(0.250)   # attempt 1
+    assert delays[1] == pytest.approx(0.500)   # attempt 2 — exponential
+    assert delays[2] == pytest.approx(0.250)   # cursor reset after success
+    assert 1.0 not in delays                    # never the flat-1s anti-pattern
+
+
+@pytest.mark.asyncio
+async def test_consume_loop_surfaces_setup_error_when_consumer_deleted() -> None:
+    """If the durable consumer is deleted server-side during a flap, the
+    re-bind's ``NotFoundError`` must surface as ``KlodiSetupError`` out of
+    the loop — it must NOT spin silently forever on a hard-down consumer
+    (the re-bind-storm failure mode)."""
+    from nats.js.errors import NotFoundError
+
+    async def handler(_payload: Any) -> None:
+        return None
+
+    stop = asyncio.Event()
+    sub = _ScriptedSub([ConnectionError("eof")])
+
+    class _DeletedOnRebindJs:
+        def __init__(self) -> None:
+            self.bind_count = 0
+
+        async def pull_subscribe_bind(self, consumer: str, stream: str) -> Any:
+            self.bind_count += 1
+            if self.bind_count == 1:
+                return sub
+            raise NotFoundError()
+
+    js = _DeletedOnRebindJs()
+    with pytest.raises(KlodiSetupError) as ei:
+        await _consume_loop(
+            js, "P2P_NOTIFICATIONS", "klodi-notifications-u", handler,
+            (lambda _e: None), stop, MutableMetrics(),
+            sleep=_instant_sleep, backoff=BackoffPolicy(jitter_ratio=0.0),
+            missing_code="notifications_consumer_missing",
+        )
+    assert ei.value.code == "notifications_consumer_missing"

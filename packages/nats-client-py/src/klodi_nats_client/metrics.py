@@ -30,6 +30,11 @@ class ClientMetrics:
     dedup_hit: int
     redelivery_count: int
     pending_count: int
+    # Times the consume loop re-bound its pull subscription after a
+    # transport flap. A non-zero, climbing value means the transport is
+    # flapping; a value that climbs without ``consumed`` advancing means a
+    # consumer that re-binds but never resumes — the wedge INV-1 forbids.
+    resubscribe: int
 
 
 class MutableMetrics:
@@ -42,6 +47,7 @@ class MutableMetrics:
         "_dedup_hit",
         "_redelivery_count",
         "_pending_count",
+        "_resubscribe",
     )
 
     def __init__(self) -> None:
@@ -51,6 +57,7 @@ class MutableMetrics:
         self._dedup_hit = 0
         self._redelivery_count = 0
         self._pending_count = 0
+        self._resubscribe = 0
 
     def inc_consumed(self) -> None:
         self._consumed += 1
@@ -63,6 +70,10 @@ class MutableMetrics:
 
     def inc_dedup_hit(self) -> None:
         self._dedup_hit += 1
+
+    def inc_resubscribe(self) -> None:
+        """Count an in-place pull-subscription re-bind after a flap."""
+        self._resubscribe += 1
 
     def add_redelivery(self, count: int) -> None:
         """Add the message's redelivery count (0 for first delivery)."""
@@ -83,6 +94,7 @@ class MutableMetrics:
             dedup_hit=self._dedup_hit,
             redelivery_count=self._redelivery_count,
             pending_count=self._pending_count,
+            resubscribe=self._resubscribe,
         )
 
 
