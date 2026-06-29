@@ -89,7 +89,7 @@ _SESSION_KEY_FIELD_BY_DOMAIN: dict[str, str] = {
 # here is deliberately distinct from the retired shared-session literal
 # ``klodi-wake`` (hyphen), so a namespaced key can never contain that
 # substring.
-_SESSION_NAMESPACE = "klodi:"
+_WAKE_SESSION_NAMESPACE = "klodi:"
 
 _EPHEMERAL_SESSION_PREFIX = "wake-"
 
@@ -111,7 +111,7 @@ def derive_wake_session(event: dict[str, Any]) -> str:
 
     Every key is namespaced under ``klodi:`` (so the sibling outbound path
     can exclude the wake-session family from operator-session resolution —
-    see ``_SESSION_NAMESPACE``). One marketplace conversation == one
+    see ``_WAKE_SESSION_NAMESPACE``). One marketplace conversation == one
     session, so a session's history stays bounded per conversation instead
     of one shared session growing unbounded (the round-3 defect). A kind
     whose key field is present returns ``klodi:<id>``; a kind with no
@@ -127,9 +127,9 @@ def derive_wake_session(event: dict[str, Any]) -> str:
     if key_field:
         value = event.get(key_field)
         if value:
-            return f"{_SESSION_NAMESPACE}{value}"
+            return f"{_WAKE_SESSION_NAMESPACE}{value}"
     event_id = str(event.get("event_id", "") or "")
-    return f"{_SESSION_NAMESPACE}{_EPHEMERAL_SESSION_PREFIX}{event_id or uuid.uuid4()}"
+    return f"{_WAKE_SESSION_NAMESPACE}{_EPHEMERAL_SESSION_PREFIX}{event_id or uuid.uuid4()}"
 
 
 def _summarize_notification(event: dict[str, Any]) -> str:
