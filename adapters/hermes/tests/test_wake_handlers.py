@@ -343,3 +343,42 @@ async def test_handler_with_ctx_lacking_inject_method_logs_and_returns() -> None
     await wake_handlers.handle_notification(
         {"event_id": "e1", "kind": "channel.opened"},
     )
+
+
+@pytest.mark.asyncio
+async def test_inject_calls_session_less_ctx_without_session_kwarg(
+    caplog: Any,
+) -> None:
+    """P3 (review round 3) — duck-typed boundary: ``inject_message`` is a
+    SHARED contract reached via ``getattr`` and also implemented by the
+    in-process per-chat ctx, whose signature is ``inject_message(text,
+    role)`` — NO ``session`` kwarg. ``_inject`` must introspect and OMIT
+    ``session`` for such a ctx rather than passing it blindly and
+    TypeError-ing into the swallow path. The session-less ctx must still be
+    invoked, the wake must not be logged as a failure.
+
+    A naive impl that always passes ``session=`` fails here (the call
+    TypeErrors, gets swallowed to ``wake_inject_failed``, and the recorded
+    call list stays empty)."""
+
+    class _SessionLessCtx:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def inject_message(self, text: str, role: str = "system") -> None:
+            self.calls.append((text, role))
+
+    ctx = _SessionLessCtx()
+    wake_handlers.bind_ctx(ctx)
+
+    with caplog.at_level("WARNING", logger="klodi_hermes.wake"):
+        await wake_handlers.handle_notification(
+            {"event_id": "e1", "kind": "channel.opened", "channel_id": "C1"},
+        )
+
+    assert len(ctx.calls) == 1, "session-less ctx must still be invoked"
+    assert ctx.calls[0][1] == "system"
+    assert not any("wake_inject_failed" in r.message for r in caplog.records), (
+        "passing session= to a session-less ctx must NOT crash into the"
+        " swallow path"
+    )

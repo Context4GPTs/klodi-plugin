@@ -75,16 +75,17 @@ def test_inject_spawns_session_scoped_chat(caplog: Any) -> None:
     runner = _RecordingRunner(returncode=0)
     ctx = BridgeCtx(hermes_bin="/opt/hermes/.venv/bin/hermes", runner=runner)
     with caplog.at_level("INFO", logger="klodi_hermes.bridge"):
-        ctx.inject_message("hello wake", role="system", session="channel-42")
+        ctx.inject_message("hello wake", role="system", session="klodi:channel-42")
     assert len(runner.calls) == 1
     cmd = runner.calls[0]["cmd"]
     assert cmd == [
         "/opt/hermes/.venv/bin/hermes", "chat", "-q", "hello wake",
-        "--session", "channel-42", "-Q",
+        "--session", "klodi:channel-42", "-Q",
     ]
     # The isolation invariant, asserted both ways: the per-wake dedicated
-    # session is present and the operator-session resume flag is absent.
-    assert "--session" in cmd and cmd[cmd.index("--session") + 1] == "channel-42"
+    # (namespaced) session is present and the operator-session resume flag
+    # is absent. The bridge is a pass-through — the keyer owns the prefix.
+    assert "--session" in cmd and cmd[cmd.index("--session") + 1] == "klodi:channel-42"
     assert "--continue" not in cmd
     # The retired shared session must never leak into the argv.
     assert "klodi-wake" not in cmd
@@ -99,10 +100,10 @@ def test_inject_uses_session_argument_in_argv() -> None:
     value must flow into the argv verbatim, never a hardcoded literal."""
     runner = _RecordingRunner(returncode=0)
     ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
-    ctx.inject_message("x", session="listing-99")
+    ctx.inject_message("x", session="klodi:listing-99")
     cmd = runner.calls[0]["cmd"]
     assert "--session" in cmd
-    assert cmd[cmd.index("--session") + 1] == "listing-99"
+    assert cmd[cmd.index("--session") + 1] == "klodi:listing-99"
     assert "--continue" not in cmd
 
 
