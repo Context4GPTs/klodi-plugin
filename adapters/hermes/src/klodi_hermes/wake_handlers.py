@@ -136,6 +136,33 @@ class WakeEntity:
     entity_id: str
 
 
+def _reject_traversal_entity_id(entity_id: str) -> str:
+    """Refuse a marketplace-supplied id that is not a safe single path
+    component, at the SOURCE — before it becomes a ``--session klodi:<id>``
+    argument or (threaded via the spawn env) a
+    ``${KLODI_HOME}/pending/<id>.json`` filename. A traversal / absolute id
+    here implies a compromised marketplace server (THREAT_MODEL T5).
+
+    This is the coarse boundary gate: it rejects path separators, parent
+    refs, leading ``.`` and the empty string. It is deliberately
+    case-tolerant (the gate is path-SAFETY, not id formatting) — the durable
+    store applies the stricter lowercase allow-list
+    (``pending_decisions._validate_entity_id``) as the authoritative filename
+    gate. Raises ``ValueError`` so a poisoned id never derives an entity.
+    """
+    if (
+        not entity_id
+        or "/" in entity_id
+        or "\\" in entity_id
+        or entity_id.startswith(".")
+    ):
+        raise ValueError(
+            f"unsafe marketplace entity id {entity_id!r}: must not be empty,"
+            " contain a path separator, or start with '.'"
+        )
+    return entity_id
+
+
 def derive_wake_entity(event: dict[str, Any]) -> WakeEntity:
     """Derive a wake's marketplace entity, keyed off ``event.kind``.
 
@@ -147,6 +174,12 @@ def derive_wake_entity(event: dict[str, Any]) -> WakeEntity:
     unbounded-context bug. A wake with neither a key nor an ``event_id``
     gets a unique ``wake-<uuid4>`` so the fallback can never itself become
     a shared session.
+
+    The marketplace-supplied id is validated at this boundary
+    (``_reject_traversal_entity_id``) so a poisoned/traversal server id is
+    refused at the SOURCE — it never becomes a ``--session`` key or a pending
+    filename downstream. The internally-built ephemeral fallback is safe by
+    construction (``wake-`` + event_id / uuid4) and needs no boundary check.
     """
     kind = str(event.get("kind", ""))
     key_field = _SESSION_KEY_FIELD_BY_DOMAIN.get(kind.split(".", 1)[0])
@@ -155,7 +188,7 @@ def derive_wake_entity(event: dict[str, Any]) -> WakeEntity:
         if value:
             return WakeEntity(
                 entity_type=_ENTITY_TYPE_BY_KEY_FIELD[key_field],
-                entity_id=str(value),
+                entity_id=_reject_traversal_entity_id(str(value)),
             )
     event_id = str(event.get("event_id", "") or "")
     fallback_id = f"{_EPHEMERAL_SESSION_PREFIX}{event_id or uuid.uuid4()}"

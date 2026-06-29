@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,17 @@ _PENDING_SUBDIR = "pending"
 _RECORD_SUFFIX = ".json"
 _TEMP_SUFFIX = ".tmp"
 _STATUS_OPEN = "open"
+
+# An entity_id becomes a ``${KLODI_HOME}/pending/<entity_id>.json`` filename,
+# so it MUST be a safe single path component. It flows from marketplace event
+# data (server-assigned ids), so a traversal / absolute / empty id implies a
+# compromised marketplace server (THREAT_MODEL T5). This is the authoritative
+# filename gate — it mirrors watch.py::_validate_slug, the exact control the
+# codebase already applies to the analogous buy/<slug>.md write. Every real id
+# shape matches it: UUIDs, search slugs, ``wake-<uuid>`` ephemerals,
+# ``listing_42.v2`` slugs.
+_ENTITY_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_ENTITY_ID_MAX_LENGTH = 120
 
 _PENDING_DECISIONS_DESCRIPTION = (
     "List the open human-in-the-loop decisions awaiting the operator's"
@@ -183,12 +195,53 @@ def register_pending_tools(ctx: Any) -> int:
     return 1
 
 
+def _validate_entity_id(entity_id: str) -> str:
+    """Refuse an entity_id that is not a safe single path component before it
+    becomes a ``pending/<entity_id>.json`` filename. Raises ``ValueError``
+    (the same disposition watch.py::_validate_slug uses) on an empty,
+    over-long, or disallowed id — rejecting ``/``, ``..``, a leading ``.``
+    and absolute paths. The store's authoritative gate; the wake boundary
+    (``wake_handlers.derive_wake_entity``) rejects traversal ids earlier too
+    (defense in depth)."""
+    if not isinstance(entity_id, str) or not entity_id:
+        raise ValueError("entity_id must be a non-empty string")
+    if len(entity_id) > _ENTITY_ID_MAX_LENGTH:
+        raise ValueError(
+            f"entity_id must be at most {_ENTITY_ID_MAX_LENGTH} chars"
+        )
+    if not _ENTITY_ID_PATTERN.fullmatch(entity_id):
+        raise ValueError(
+            "entity_id must match [a-z0-9][a-z0-9._-]* — lowercase"
+            " alphanumerics plus '.', '_', '-' (no '/', '..', leading '.',"
+            " or absolute paths)"
+        )
+    return entity_id
+
+
 def _pending_dir() -> Path:
     return default_klodi_home() / _PENDING_SUBDIR
 
 
+def _ensure_pending_dir() -> Path:
+    """Create ``pending/`` 0o700, mirroring watch.py::_ensure_buy_dir. The
+    records are not secrets (no 0600 file mode needed), but the dir matches the
+    0700 its sibling buy/ dir gets — defense in depth so a record never sits in
+    a world-readable dir even if a future path escaped the 0700 ${KLODI_HOME}
+    parent."""
+    path = _pending_dir()
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
+
+
 def _record_path(entity_id: str) -> Path:
-    return _pending_dir() / f"{entity_id}{_RECORD_SUFFIX}"
+    # The single choke point that turns an entity_id into a filesystem path:
+    # validate HERE so no code path (record_pending or resolve_pending) can
+    # ever build a path from an unsafe, traversal-laden id.
+    return _pending_dir() / f"{_validate_entity_id(entity_id)}{_RECORD_SUFFIX}"
 
 
 def _read_record(path: Path) -> PendingDecision | None:
@@ -218,7 +271,7 @@ def _read_record(path: Path) -> PendingDecision | None:
 
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_pending_dir()
     # Temp sits beside the target (same filesystem → rename is atomic) and
     # ends in ``.tmp`` so a torn write is never globbed as a ``*.json``
     # record by a concurrent reader.
