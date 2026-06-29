@@ -355,4 +355,122 @@ mod tests {
         assert_eq!(json["event_id"], "e2");
         assert_eq!(json["payload"]["sequence"], 42);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // card/audit-all-adapters-for-silent-wake-inject-failure — RED (qa-developer)
+    //
+    // Seam 2 — shared rust-http forwarder (moltis + ironclaw) (ACs 2, 3, 4).
+    //
+    // `HttpStructuredHandler::handle` (:267-307) today maps EVERY non-2xx AND
+    // every transport error to WARN + `Err`, which `dispatch` propagates into a
+    // JetStream NAK / redeliver-then-drop. There is NO 4xx-deterministic vs
+    // 5xx/transient distinction, so a deterministic 4xx (bad URL / bad token /
+    // bad payload) redelivers pointlessly and then drops silently after
+    // `max_deliver` — never alarmed, never terminal. The fix (per ADR-0019's
+    // deterministic→ACK call, mirrored per language) classifies the HTTP status:
+    //
+    //   - 4xx  = deterministic → `logger.error(…_deterministic_failure)` + ACK
+    //            (return `Ok(())`) — stop the futile redeliver-then-drop;
+    //   - 5xx / transport / timeout = transient → keep WARN + `Err` (NAK).
+    //
+    // These tests assert the load-bearing, observable-today DISPOSITION
+    // (`Ok` = ACK vs `Err` = NAK). The 4xx test fails RED (handler returns `Err`
+    // today); the 5xx + transport tests are GUARDS (already `Err`, must stay
+    // `Err`).
+    //
+    // NOTE — the DISTINCT ERROR-severity alarm (ACs 2/3) is NOT asserted here:
+    // `HttpStructuredHandler::new` builds its `KlodiLogger` internally on
+    // `StdSink`, with no injection point, so the log stream is uncapturable from
+    // a unit test. GREEN must add a `LoggerSink`/`KlodiLogger` injection on the
+    // handler (the `klodi-logger` crate already ships `CaptureSink` + `with_sink`);
+    // qa adds the severity assertion (4xx → one ERROR alarm carrying status+body;
+    // 5xx/transport → WARN only) once that seam exists. See the GREEN handoff.
+    use wiremock::matchers::method as wm_method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn wake_for_test() -> WakeEvent {
+        let evt = NotificationEvent::ListingCreated {
+            event_id: "e-http-1".into(),
+            listing_id: "l1".into(),
+            title: Some("vintage chair".into()),
+        };
+        WakeEvent::Notification {
+            kind: evt.kind().to_string(),
+            event_id: evt.event_id().to_string(),
+            user_id: "u1".into(),
+            payload: evt,
+        }
+    }
+
+    fn handler_for(wake_url: String) -> HttpStructuredHandler {
+        HttpStructuredHandler::new(
+            wake_url,
+            Some("tok".into()),
+            "klodi-test/0".into(),
+            "klodi_test".into(),
+            std::time::Duration::from_secs(5),
+        )
+        .expect("building HttpStructuredHandler")
+    }
+
+    /// AC 4 (+ AC 2) — a deterministic 4xx must ACK (`Ok`) so the wake is not
+    /// redelivered-then-silently-dropped; the alarm, not redelivery, is the
+    /// surface. Fails RED: the handler returns `Err` on every non-2xx today.
+    #[tokio::test]
+    async fn handle_4xx_acks_with_ok_to_stop_futile_redelivery() {
+        let server = MockServer::start().await;
+        Mock::given(wm_method("POST"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad token"))
+            .mount(&server)
+            .await;
+
+        let handler = handler_for(server.uri());
+        let event = wake_for_test();
+        let result = handler.handle(&event).await;
+
+        assert!(
+            result.is_ok(),
+            "a deterministic 4xx must ACK (Ok) — redelivering it just burns \
+             max_deliver and drops silently; got {result:?}",
+        );
+    }
+
+    /// AC 3 — a 5xx is transient: keep the NAK (`Err`) so JetStream redelivers.
+    /// GUARD: passes today, must keep passing after the 4xx/5xx split lands.
+    #[tokio::test]
+    async fn handle_5xx_naks_with_err_to_redeliver_transient() {
+        let server = MockServer::start().await;
+        Mock::given(wm_method("POST"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+            .mount(&server)
+            .await;
+
+        let handler = handler_for(server.uri());
+        let event = wake_for_test();
+        let result = handler.handle(&event).await;
+
+        assert!(
+            result.is_err(),
+            "a transient 5xx must NAK (Err) so JetStream redelivers; got {result:?}",
+        );
+    }
+
+    /// AC 3 — a transport error (connection refused) is transient: keep the NAK
+    /// (`Err`). GUARD: passes today, must keep passing.
+    #[tokio::test]
+    async fn handle_transport_error_naks_with_err() {
+        // Bind then drop to get a definitely-closed port → connection refused.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let handler = handler_for(format!("http://127.0.0.1:{port}/"));
+        let event = wake_for_test();
+        let result = handler.handle(&event).await;
+
+        assert!(
+            result.is_err(),
+            "a transport error must NAK (Err) so JetStream redelivers; got {result:?}",
+        );
+    }
 }
