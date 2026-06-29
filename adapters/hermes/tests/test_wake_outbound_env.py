@@ -167,3 +167,55 @@ async def test_channel_message_wake_also_threads_entity_env() -> None:
     assert session == f"{_KLODI_NS}{event['channel_id']}"
     assert env["KLODI_WAKE_ENTITY_ID"] == str(event["channel_id"])
     assert env["KLODI_WAKE_ENTITY_TYPE"] == "channel"
+
+
+# ── Belt-and-suspenders (review round 1, P1): refuse a poisoned id at the
+#    DERIVATION boundary, not only at the store ─────────────────────────
+#
+# The marketplace-supplied entity id flows derive_wake_entity → the spawned
+# ``--session klodi:<id>`` AND ``KLODI_WAKE_ENTITY_ID`` → message.py →
+# record_pending → ``${KLODI_HOME}/pending/<id>.json``. The store guard is
+# the backstop; this pins the SOURCE guard so a poisoned id never even
+# becomes a session key or env value. A traversal id implies a compromised
+# marketplace server (THREAT_MODEL T5) — bounded, but the codebase already
+# decided this id class must be validated.
+
+_POISONED_SERVER_IDS = [
+    "../../evil",
+    "../escape",
+    "a/b",
+    "/abs/evil",
+    "..",
+]
+
+
+@pytest.mark.parametrize("poisoned", _POISONED_SERVER_IDS)
+def test_derive_wake_entity_rejects_poisoned_server_id(poisoned: str) -> None:
+    """P1 belt-and-suspenders: derive_wake_entity must REFUSE a traversal /
+    absolute marketplace id (raises ValueError) so it never becomes a path
+    component or a --session key downstream."""
+    event = {
+        "kind": "offer.proposed",
+        "listing_id": poisoned,
+        "event_id": "a1b2c3d4-0007-4000-8000-000000000007",
+    }
+    with pytest.raises(ValueError):
+        wake_handlers.derive_wake_entity(event)
+
+
+def test_derive_wake_entity_accepts_legitimate_server_ids() -> None:
+    """P1 companion: the boundary guard must accept the real id shapes — a
+    UUID listing id and a slug search id — so valid wakes still derive their
+    entity (and the existing golden-fixture keystone tests keep passing)."""
+    uid = "11111111-1111-4111-8111-111111111111"
+    listing = wake_handlers.derive_wake_entity(
+        {"kind": "offer.proposed", "listing_id": uid, "event_id": "e"}
+    )
+    assert listing.entity_type == "listing"
+    assert listing.entity_id == uid
+
+    search = wake_handlers.derive_wake_entity(
+        {"kind": "search.match", "search_slug": "vintage-camera", "event_id": "e"}
+    )
+    assert search.entity_type == "search"
+    assert search.entity_id == "vintage-camera"
