@@ -46,6 +46,7 @@ import inspect
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from klodi_hermes.bridge import _DIAG_TAIL, WakeInjectFailed
@@ -81,17 +82,34 @@ _SESSION_KEY_FIELD_BY_DOMAIN: dict[str, str] = {
     "search": "search_slug",
 }
 
-# Namespace prefix on EVERY wake-session name. Lets the sibling outbound
-# path (which resolves the operator's active session from
-# ``active_sessions.json``) exclude the whole wake-session family by this
-# prefix — a bare entity id (esp. a ``search_slug`` like ``vintage-camera``)
-# is otherwise indistinguishable from an operator session name. The colon
-# here is deliberately distinct from the retired shared-session literal
-# ``klodi-wake`` (hyphen), so a namespaced key can never contain that
-# substring.
-_WAKE_SESSION_NAMESPACE = "klodi:"
+# The entity DOMAIN each session-key field scopes to — the ``entity_type``
+# half of the outbound pending-decision key (Piece 4). Derived off the same
+# key field as the session so the two halves of the round-trip never drift:
+# an ``offer.*`` wake keys ``(listing, <listing_id>)`` and the reply turn
+# re-grounds via ``klodi_offer_mine`` / ``klodi_list_get``.
+_ENTITY_TYPE_BY_KEY_FIELD: dict[str, str] = {
+    "channel_id": "channel",
+    "listing_id": "listing",
+    "transaction_id": "transaction",
+    "search_slug": "search",
+}
+
+# Namespace prefix on EVERY wake-session name. Lets the outbound resolver
+# (``message.resolve_operator_target``, which reads the operator's active
+# session from ``active_sessions.json``) exclude the whole wake-session
+# family by this prefix — a bare entity id (esp. a ``search_slug`` like
+# ``vintage-camera``) is otherwise indistinguishable from an operator
+# session name. PUBLIC: this is the shared cross-module contract the
+# resolver imports. The colon here is deliberately distinct from the
+# retired shared-session literal ``klodi-wake`` (hyphen), so a namespaced
+# key can never contain that substring.
+WAKE_SESSION_NAMESPACE = "klodi:"
 
 _EPHEMERAL_SESSION_PREFIX = "wake-"
+
+# Entity type of the ephemeral fallback (no mapped domain / absent key
+# field) — bounded to one wake, never a marketplace conversation.
+_EPHEMERAL_ENTITY_TYPE = "wake"
 
 # A conversation's terminal events — after these the session is reclaimed
 # (best-effort ``drain_session``). channel.message/opened, offer.*,
@@ -106,30 +124,56 @@ _TERMINAL_KINDS = frozenset({
 })
 
 
-def derive_wake_session(event: dict[str, Any]) -> str:
-    """Derive the ``--session`` key for a wake, keyed off ``event.kind``.
+@dataclass(frozen=True)
+class WakeEntity:
+    """The marketplace entity a wake belongs to — the
+    ``(entity_type, entity_id)`` the outbound round-trip keys its
+    pending-decision on. ``entity_id`` is also the wake-session key (minus
+    the ``klodi:`` namespace), so the inbound and outbound keys are the
+    same id by construction."""
 
-    Every key is namespaced under ``klodi:`` (so the sibling outbound path
-    can exclude the wake-session family from operator-session resolution —
-    see ``_WAKE_SESSION_NAMESPACE``). One marketplace conversation == one
-    session, so a session's history stays bounded per conversation instead
-    of one shared session growing unbounded (the round-3 defect). A kind
-    whose key field is present returns ``klodi:<id>``; a kind with no
-    mapped domain, or whose key field is absent/empty, falls back to a
-    per-wake EPHEMERAL ``klodi:wake-<event_id>`` — NEVER a shared growing
-    session, which would re-introduce the unbounded-context bug. A wake
-    with neither a key nor an ``event_id`` gets a unique
-    ``klodi:wake-<uuid4>`` so the fallback can never itself become a shared
-    session.
+    entity_type: str
+    entity_id: str
+
+
+def derive_wake_entity(event: dict[str, Any]) -> WakeEntity:
+    """Derive a wake's marketplace entity, keyed off ``event.kind``.
+
+    The entity TYPE is the DOMAIN the key field scopes to, NOT the kind
+    prefix: ``offer.*`` / ``comment.*`` / ``listing.*`` all scope to the
+    LISTING. A kind whose key field is absent/empty (or whose domain is
+    unmapped) falls back to a per-wake EPHEMERAL ``wake-<event_id>`` id of
+    type ``wake`` — never a shared constant, which would re-introduce the
+    unbounded-context bug. A wake with neither a key nor an ``event_id``
+    gets a unique ``wake-<uuid4>`` so the fallback can never itself become
+    a shared session.
     """
     kind = str(event.get("kind", ""))
     key_field = _SESSION_KEY_FIELD_BY_DOMAIN.get(kind.split(".", 1)[0])
     if key_field:
         value = event.get(key_field)
         if value:
-            return f"{_WAKE_SESSION_NAMESPACE}{value}"
+            return WakeEntity(
+                entity_type=_ENTITY_TYPE_BY_KEY_FIELD[key_field],
+                entity_id=str(value),
+            )
     event_id = str(event.get("event_id", "") or "")
-    return f"{_WAKE_SESSION_NAMESPACE}{_EPHEMERAL_SESSION_PREFIX}{event_id or uuid.uuid4()}"
+    fallback_id = f"{_EPHEMERAL_SESSION_PREFIX}{event_id or uuid.uuid4()}"
+    return WakeEntity(entity_type=_EPHEMERAL_ENTITY_TYPE, entity_id=fallback_id)
+
+
+def _session_for_entity(entity: WakeEntity) -> str:
+    return f"{WAKE_SESSION_NAMESPACE}{entity.entity_id}"
+
+
+def derive_wake_session(event: dict[str, Any]) -> str:
+    """The ``--session`` key for a wake: the wake entity id namespaced
+    under ``klodi:`` (so the outbound resolver can exclude the wake-session
+    family from operator-session resolution — see
+    ``WAKE_SESSION_NAMESPACE``). One marketplace conversation == one
+    session, so a session's history stays bounded per conversation instead
+    of one shared session growing unbounded (the round-3 defect)."""
+    return _session_for_entity(derive_wake_entity(event))
 
 
 def _summarize_notification(event: dict[str, Any]) -> str:
@@ -268,8 +312,16 @@ async def handle_notification(event: dict[str, Any]) -> None:
     event_id = str(event.get("event_id", ""))
     log.info("wake_received kind=%s event_id=%s", kind, event_id)
     text = format_notification_wake(event)
-    session = derive_wake_session(event)
-    await _inject(text, kind=kind, event_id=event_id, session=session)
+    entity = derive_wake_entity(event)
+    session = _session_for_entity(entity)
+    await _inject(
+        text,
+        kind=kind,
+        event_id=event_id,
+        session=session,
+        entity_type=entity.entity_type,
+        entity_id=entity.entity_id,
+    )
 
 
 async def handle_channel_message(event: dict[str, Any]) -> None:
@@ -279,41 +331,62 @@ async def handle_channel_message(event: dict[str, Any]) -> None:
         "wake_received kind=channel.message event_id=%s", event_id,
     )
     text = format_channel_wake(event)
-    session = derive_wake_session(event)
+    entity = derive_wake_entity(event)
+    session = _session_for_entity(entity)
     await _inject(
-        text, kind="channel.message", event_id=event_id, session=session
+        text,
+        kind="channel.message",
+        event_id=event_id,
+        session=session,
+        entity_type=entity.entity_type,
+        entity_id=entity.entity_id,
     )
 
 
-def _inject_accepts_session(inject: Any) -> bool:
-    """Whether the bound ctx's ``inject_message`` accepts a ``session`` kwarg.
+def _supported_inject_kwargs(inject: Any, **candidate: str) -> dict[str, str]:
+    """The subset of ``candidate`` keyword args the bound ``inject_message``
+    actually accepts.
 
     Two ctx types legitimately bind here: the daemon's ``BridgeCtx``
-    (shells out ``hermes chat --session <key>`` — needs the per-wake
-    session) and hermes's in-process per-chat ctx (injects into the live
-    chat — has no session concept; its ``inject_message(text, role)``
-    predates this kwarg). Pass ``session`` only to a ctx that accepts it
-    so threading the conversation key never breaks the in-process contract.
+    (shells ``hermes chat --session <key>`` and sets the ``KLODI_WAKE_*``
+    spawn env — takes ``session`` + ``entity_type`` / ``entity_id`` /
+    ``event_id``) and hermes's in-process per-chat ctx (injects into the
+    live chat — its ``inject_message(text, role)`` predates all of these).
+    A ctx exposing ``**kwargs`` takes them all; otherwise only the names
+    in its signature pass — so threading the wake context never breaks the
+    in-process contract.
     """
     try:
         params = inspect.signature(inject).parameters
     except (TypeError, ValueError):
-        return False
+        return {}
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
-        return True
-    return "session" in params
+        return dict(candidate)
+    return {name: value for name, value in candidate.items() if name in params}
 
 
-async def _call_inject(inject: Any, text: str, *, session: str) -> None:
+async def _call_inject(
+    inject: Any,
+    text: str,
+    *,
+    session: str,
+    entity_type: str,
+    entity_id: str,
+    event_id: str,
+) -> None:
     """Run the (sync, blocking) inject off the asyncio loop. ``inject``
     blocks on a ``hermes chat --session <key>`` subprocess for the agent
     turn's duration; a worker thread keeps the loop — shared by both
     consumer pull-fetches and the nats-py WS heartbeat — ticking.
     Cross-inject serialization stays in ``BridgeCtx._inject_lock``."""
-    if _inject_accepts_session(inject):
-        await asyncio.to_thread(inject, text, role="system", session=session)
-    else:
-        await asyncio.to_thread(inject, text, role="system")
+    extra = _supported_inject_kwargs(
+        inject,
+        session=session,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        event_id=event_id,
+    )
+    await asyncio.to_thread(inject, text, role="system", **extra)
 
 
 async def _drain_session(ctx: Any, *, kind: str, session: str) -> None:
@@ -334,7 +407,15 @@ async def _drain_session(ctx: Any, *, kind: str, session: str) -> None:
         )
 
 
-async def _inject(text: str, *, kind: str, event_id: str, session: str) -> None:
+async def _inject(
+    text: str,
+    *,
+    kind: str,
+    event_id: str,
+    session: str,
+    entity_type: str,
+    entity_id: str,
+) -> None:
     ctx = _CTX
     if ctx is None:
         log.info("wake_no_ctx kind=%s", kind)
@@ -344,7 +425,14 @@ async def _inject(text: str, *, kind: str, event_id: str, session: str) -> None:
         log.info("wake_no_inject_method kind=%s", kind)
         return
     try:
-        await _call_inject(inject, text, session=session)
+        await _call_inject(
+            inject,
+            text,
+            session=session,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            event_id=event_id,
+        )
     except WakeInjectFailed as err:
         # Deterministic failure (a misconfig that fails identically every
         # wake): surface a LOUD, correlated, operator-visible ERROR alarm
@@ -380,7 +468,10 @@ async def _inject(text: str, *, kind: str, event_id: str, session: str) -> None:
 
 
 __all__ = [
+    "WAKE_SESSION_NAMESPACE",
+    "WakeEntity",
     "bind_ctx",
+    "derive_wake_entity",
     "derive_wake_session",
     "format_channel_wake",
     "format_notification_wake",
