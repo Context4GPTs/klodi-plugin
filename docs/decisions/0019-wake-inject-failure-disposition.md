@@ -97,8 +97,14 @@ The invariants, held adapter-portable:
 - **Bridge asserts/creates a channel-bound session before inject — rejected and now moot.** It
   would couple the bridge to hermes's session-storage and channel-binding internals it
   explicitly disclaims owning (`bridge.py` module docstring). Piece 2 removes the dependency
-  entirely by running every wake in a dedicated isolated `klodi-wake` session (no `--continue`),
-  so there is nothing on the operator side to assert.
+  entirely by running every wake in a dedicated session keyed off the event — **per
+  conversation**, not the operator's: `channel_id` for channel.*, `listing_id` for
+  offer.*/comment.*/listing.*, `transaction_id` for transaction.*, `search_slug` for
+  search.match, and an ephemeral `wake-<event_id>` fallback when the key field is absent —
+  always without `--continue`. (Superseding the earlier single shared `klodi-wake` session,
+  which grew unbounded for the daemon's lifetime; see `wake_handlers.derive_wake_session`. A
+  conversation's terminal event triggers a best-effort, probe-gated `drain_session`.) There is
+  nothing on the operator side to assert.
 - **Emit the alarm inside `bridge.inject_message` directly — rejected.** The bridge has
   `exit`/`stdout`/`stderr` but **not** `kind`/`event_id`, so it cannot emit one correlated line;
   one ERROR at the handler beats a bridge diag line + a handler correlation line.
@@ -127,7 +133,9 @@ line. A future change must not widen the alarm to echo a redacted field
   "Failure modes" block). `_DIAG_TAIL = 500` is the shared truncation bound.
 - **Alarm:** `adapters/hermes/src/klodi_hermes/wake_handlers.py` — `_inject`'s
   `except WakeInjectFailed` arm (placed before the broad `except`; emits the correlated ERROR,
-  no re-raise). `event_id` threaded up from `handle_notification`/`handle_channel_message`.
+  no re-raise). `event_id` threaded up from `handle_notification`/`handle_channel_message`;
+  the alarm also carries the resolved per-conversation `session` key (so an operator can see
+  which conversation's wake failed).
 - **ACK seam:** `packages/nats-client-py/src/klodi_nats_client/consumers.py` —
   `_dispatch_message` ACKs on handler return, NAKs on raise. Unchanged: the disposition is chosen
   in the adapter, not the consumer.

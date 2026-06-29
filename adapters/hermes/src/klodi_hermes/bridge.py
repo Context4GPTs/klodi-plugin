@@ -10,11 +10,16 @@ The bridge productizes that bypass. It mirrors the pattern OpenClaw's
 adapter uses against its gateway runtime (long-running process imports
 the plugin, calls ``register(ctx)`` once, stays alive so the JetStream
 consumers keep delivering). The production ctx's ``inject_message``
-shells out to ``hermes chat -q <text> --session klodi-wake -Q`` to run
-each wake as an ISOLATED turn in a dedicated klodi session — never
-``--continue`` into the operator's live conversation. The agent reasons
-about the marketplace event with the klodi toolset and acts on its own,
-leaving the human's other chats untouched.
+shells out to ``hermes chat -q <text> --session <key> -Q`` to run each
+wake as an ISOLATED turn in a session scoped to its CONVERSATION — the
+session key is derived per-wake from the event (channel thread / listing
+/ transaction / standing search; see
+``wake_handlers.derive_wake_session``) and threaded down, never
+``--continue`` into the operator's live conversation. Per-conversation
+keying bounds each session's history to one conversation instead of
+letting one shared session grow unbounded for the daemon's whole life.
+The agent reasons about the marketplace event with the klodi toolset and
+acts on its own, leaving the human's other chats untouched.
 
 Run shape:
   * Bridge boots; if creds are absent it polls until ``klodi_register``
@@ -63,14 +68,6 @@ DEFAULT_INJECT_TIMEOUT_SECONDS = 120
 # is invisible during a demo and fast enough for a fresh container.
 DEFAULT_CREDS_POLL_SECONDS = 5
 
-# Dedicated, stable session every klodi wake runs in. Isolated from the
-# operator's chats by construction: no ``--continue``, a fixed
-# ``--session`` the bridge owns. Overridable via ``KLODI_WAKE_SESSION``
-# (resolved in ``bridge_main``). The wake pump's ``max_ack_pending: 1``
-# plus ``BridgeCtx._inject_lock`` serialize writes, so the single session
-# never has concurrent writers.
-KLODI_WAKE_SESSION = "klodi-wake"
-
 # Truncate captured subprocess streams to the same bound the legacy
 # WARNING used, so an alarm carrying a runaway traceback stays bounded.
 _DIAG_TAIL = 500
@@ -113,13 +110,16 @@ class BridgeCtx:
         The bridge's calls keep ``register()`` happy without claiming
         a duplicate tool surface.
       * ``register_skill(name, path)`` — stub for the same reason.
-      * ``inject_message(text, role)`` — production path. Shells out
-        to ``hermes chat -q <text> --session klodi-wake -Q``; blocks
-        until the chat subprocess exits. The wake pump's
-        ``max_ack_pending: 1`` already serializes deliveries, so
-        blocking here is the right shape for ordered wake processing.
+      * ``inject_message(text, role, *, session)`` — production path.
+        Shells out to ``hermes chat -q <text> --session <session> -Q``;
+        blocks until the chat subprocess exits. ``session`` is the
+        per-wake conversation key threaded down from the handler. The
+        wake pump's ``max_ack_pending: 1`` already serializes deliveries,
+        so blocking here is the right shape for ordered wake processing.
         A fast nonzero exit raises :class:`WakeInjectFailed`; a timeout
         is logged and swallowed.
+      * ``drain_session(session)`` — best-effort reclamation of a
+        session after its conversation's terminal event (probe-gated).
     """
 
     def __init__(
@@ -127,20 +127,28 @@ class BridgeCtx:
         *,
         hermes_bin: str,
         inject_timeout_seconds: int = DEFAULT_INJECT_TIMEOUT_SECONDS,
-        wake_session: str = KLODI_WAKE_SESSION,
         runner: Any = None,
     ) -> None:
         self._hermes_bin = hermes_bin
         self._inject_timeout_s = inject_timeout_seconds
-        self._wake_session = wake_session
         # Tests inject a stub runner. Production uses subprocess.run.
         self._run = runner if runner is not None else subprocess.run
         # Cross-consumer serialization: ``handle_notification`` and
         # ``handle_channel_message`` run on separate consumer loops, so
-        # both can fire concurrently. Every wake runs in the one shared
-        # ``klodi-wake`` session — two parallel chats against it would
-        # race on its history. The lock holds the second inject until the
-        # first chat exits.
+        # both can fire concurrently. With per-conversation session keys,
+        # two wakes for the SAME conversation (e.g. a ``channel.message``
+        # and a ``channel.closed`` for one channel, arriving on the two
+        # consumers) would otherwise race on that session's history. The
+        # lock holds the second inject until the first chat exits.
+        #
+        # TODO(perf, confirmed-safe but deferred): the two-consumer
+        # topology + ``max_ack_pending=1`` (consumers.py) bound this to at
+        # most two concurrent wakes, so the lock COULD narrow to per-session
+        # (same key serializes, different keys parallelize). Deferred: a
+        # per-key lock map is itself an unbounded-growth vector — the very
+        # bug class this card removes — and would need its own GC, all for a
+        # max-two-concurrent-wake workload. The global lock is the correct
+        # default (correctness over throughput); revisit only under load.
         self._inject_lock = threading.Lock()
 
     def register_tool(self, **_kwargs: Any) -> None:
@@ -151,12 +159,19 @@ class BridgeCtx:
         # The bridge does not own the skill surface. Per-chat ctx does.
         return None
 
-    def inject_message(self, text: str, role: str = "system") -> None:
-        """Run one isolated wake turn. Classifies the outcome:
+    def inject_message(
+        self, text: str, role: str = "system", *, session: str
+    ) -> None:
+        """Run one wake turn in its conversation's session. Classifies:
 
           * timeout → WARNING + return (transient; swallow stays)
           * nonzero exit → raise :class:`WakeInjectFailed` (deterministic)
           * exit 0 → ``wake_inject_complete`` INFO
+
+        ``session`` is the per-wake conversation key derived by
+        ``wake_handlers.derive_wake_session`` and threaded down — a wake
+        never resumes the operator's session (no ``--continue``) and never
+        shares one global session across conversations.
         """
         cmd = [
             self._hermes_bin,
@@ -164,7 +179,7 @@ class BridgeCtx:
             "-q",
             text,
             "--session",
-            self._wake_session,
+            session,
             "-Q",
         ]
         with self._inject_lock:
@@ -178,8 +193,9 @@ class BridgeCtx:
                 )
             except subprocess.TimeoutExpired:
                 log.warning(
-                    "wake_inject_timeout role=%s timeout_s=%d",
+                    "wake_inject_timeout role=%s session=%s timeout_s=%d",
                     role,
+                    session,
                     self._inject_timeout_s,
                 )
                 return
@@ -193,11 +209,34 @@ class BridgeCtx:
                     returncode=returncode, stdout=stdout, stderr=stderr
                 )
             log.info(
-                "wake_inject_complete role=%s exit=%d len=%d",
+                "wake_inject_complete role=%s session=%s exit=%d len=%d",
                 role,
+                session,
                 returncode,
                 len(text),
             )
+
+    def drain_session(self, session: str) -> None:
+        """Best-effort reclamation of a wake session after its
+        conversation's terminal event (``channel.closed`` /
+        ``listing.sold|withdrawn|expired`` /
+        ``transaction.completed|cancelled``). The per-key model already
+        bounds each session to one conversation; draining a finished one
+        would free its on-disk history rather than let it idle.
+
+        PROBE-GATED (merge gate): hermes session deletion BY ID is
+        UNCONFIRMED in this environment (no ``hermes`` binary / wiki to run
+        ``hermes chat --help`` or inspect the session store). Until the
+        deletion command is confirmed we deliberately do NOT shell out a
+        *guessed* command — we record the drain intent and leave the
+        session to idle. This is safe-by-default: the per-key model already
+        bounds each session to a single conversation (a strict improvement
+        over the old shared session), so a non-reclaimed cold session is at
+        worst inert. When the probe confirms the command, the real hermes
+        deletion subprocess goes HERE. NEVER raises — a drain is
+        best-effort and a failed drain is not a failed wake.
+        """
+        log.info("wake_session_drain session=%s reclaim=probe_gated", session)
 
 
 class Bridge:
@@ -209,7 +248,6 @@ class Bridge:
         klodi_home: Path,
         hermes_bin: str,
         inject_timeout_seconds: int = DEFAULT_INJECT_TIMEOUT_SECONDS,
-        wake_session: str = KLODI_WAKE_SESSION,
         creds_poll_seconds: int = DEFAULT_CREDS_POLL_SECONDS,
         ctx_factory: Any = None,
         klodi_loader: Any = None,
@@ -217,7 +255,6 @@ class Bridge:
         self._klodi_home = klodi_home
         self._hermes_bin = hermes_bin
         self._inject_timeout_s = inject_timeout_seconds
-        self._wake_session = wake_session
         self._creds_poll_s = creds_poll_seconds
         self._stop = threading.Event()
         # Test seams. Production injects sensible defaults below.
@@ -333,7 +370,6 @@ class Bridge:
         return BridgeCtx(
             hermes_bin=self._hermes_bin,
             inject_timeout_seconds=self._inject_timeout_s,
-            wake_session=self._wake_session,
         )
 
     def _default_klodi_loader(self) -> Any:
@@ -359,7 +395,6 @@ class Bridge:
 __all__ = [
     "DEFAULT_CREDS_POLL_SECONDS",
     "DEFAULT_INJECT_TIMEOUT_SECONDS",
-    "KLODI_WAKE_SESSION",
     "Bridge",
     "BridgeCtx",
     "WakeInjectFailed",
