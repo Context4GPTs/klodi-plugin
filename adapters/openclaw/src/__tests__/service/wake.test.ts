@@ -45,10 +45,12 @@ function createFakeApi(opts: FakeApiOptions = {}): {
   calls: RecordedCall[];
   warnEvents: Array<{ event: string; ctx: Record<string, unknown> }>;
   infoEvents: Array<{ event: string; ctx: Record<string, unknown> }>;
+  errorEvents: Array<{ event: string; ctx: Record<string, unknown> }>;
 } {
   const calls: RecordedCall[] = [];
   const warnEvents: Array<{ event: string; ctx: Record<string, unknown> }> = [];
   const infoEvents: Array<{ event: string; ctx: Record<string, unknown> }> = [];
+  const errorEvents: Array<{ event: string; ctx: Record<string, unknown> }> = [];
 
   const enqueueImpl =
     opts.enqueueImpl ?? (async () => { /* default: succeed */ });
@@ -65,7 +67,8 @@ function createFakeApi(opts: FakeApiOptions = {}): {
         infoEvents.push({ event, ctx }),
       warn: (event: string, ctx: Record<string, unknown> = {}) =>
         warnEvents.push({ event, ctx }),
-      error: () => undefined,
+      error: (event: string, ctx: Record<string, unknown> = {}) =>
+        errorEvents.push({ event, ctx }),
       debug: () => undefined,
     },
     runtime: {
@@ -82,7 +85,7 @@ function createFakeApi(opts: FakeApiOptions = {}): {
     },
   } as unknown as PluginAPI;
 
-  return { api, calls, warnEvents, infoEvents };
+  return { api, calls, warnEvents, infoEvents, errorEvents };
 }
 
 describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
@@ -133,24 +136,48 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
     });
   });
 
-  describe("enqueue stage failure", () => {
-    it("returns early without calling heartbeat and does NOT rethrow", async () => {
-      const { api, calls, warnEvents } = createFakeApi({
+  // card/audit-all-adapters-for-silent-wake-inject-failure — RED (qa-developer)
+  //
+  // Seam 4a — openclaw enqueue-failure ERROR alarm (AC 2).
+  //
+  // An enqueue failure is DETERMINISTIC (a missing sessionKey, a malformed
+  // event — re-enqueue re-fails), so ACK stays correct (redelivery is futile),
+  // BUT today it logs at WARN and operators demonstrably do not watch WARN
+  // (the exact hermes Bug-2 shape). The fix raises it to `api.logger.error`
+  // as a distinct, alertable event — keeping the name `wake_failed` with
+  // `stage: "enqueue"` — while still ACKing (no rethrow, no heartbeat). These
+  // tests assert the ERROR severity; they fail RED while the arm logs at WARN.
+  describe("enqueue stage failure (deterministic → ERROR alarm + ACK)", () => {
+    it("logs a distinct ERROR alarm (not WARN) and still ACKs (no rethrow)", async () => {
+      const { api, calls, errorEvents, warnEvents } = createFakeApi({
         enqueueImpl: async () => {
           throw new Error("queue is full");
         },
       });
 
+      // ACK: a deterministic enqueue failure does not redeliver — resolves.
       await expect(
         wakeAgent(api, "text", "offer.proposed"),
       ).resolves.toBeUndefined();
 
       expect(calls.map((c) => c.fn)).toEqual(["enqueue"]);
-      const failed = warnEvents.find((e) => e.event === "wake_failed");
-      expect(failed).toBeTruthy();
+      // The alarm must be operator-visible (ERROR), not buried at WARN.
+      const failed = errorEvents.find((e) => e.event === "wake_failed");
+      expect(
+        failed,
+        "enqueue failure must emit a distinct ERROR alarm (operators do not"
+          + " watch WARN); got error events: "
+          + JSON.stringify(errorEvents),
+      ).toBeTruthy();
       expect(failed?.ctx["stage"]).toBe("enqueue");
       expect(failed?.ctx["reason"]).toBe("offer.proposed");
       expect(failed?.ctx["message"]).toBe("queue is full");
+      // And it is no longer the WARN it used to be.
+      expect(
+        warnEvents.find(
+          (e) => e.event === "wake_failed" && e.ctx["stage"] === "enqueue",
+        ),
+      ).toBeUndefined();
     });
 
     it("never sends a heartbeat when enqueue fails (would flush an empty queue)", async () => {
@@ -307,6 +334,51 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
       expect(ctx["entry_exists"]).toBe(false);
       expect(ctx["most_recent_key"]).toBe("agent:main:explicit:tui-1");
       expect(ctx["most_recent_matches_resolved"]).toBe(false);
+    });
+
+    // card/audit-all-adapters-for-silent-wake-inject-failure — RED (qa-developer)
+    //
+    // Seam 4b — openclaw Bug 3 (silent-success / dead-session) (AC 5).
+    //
+    // The most insidious bug: a wake to a resolved session with NO entry does
+    // not *fail* — enqueueSystemEvent succeeds, wake_enqueued logs at INFO with
+    // `entry_exists: false`, the consumer ACKs, and the wake lands on a dead
+    // session the user never reads. The diagnostic was added to OBSERVE this,
+    // but "a diagnostic nobody alarms on is not a surface" — it is buried as a
+    // field on an INFO success line. The fix: when the resolved key has no
+    // entry (`entry_exists === false`), emit a distinct OPERATOR-VISIBLE ERROR
+    // alarm. This test fails RED while the only signal is the INFO field.
+    //
+    // Framed on the SURFACING behavior (an alarm fires when the resolved
+    // session is dead), independent of HOW the key is derived — so it stays
+    // valid under the epic's pending per-conversation session-keying redesign.
+    it("fires an operator-visible ERROR alarm when the resolved session has no store entry", async () => {
+      // Canonical wake target `agent:main:main` is ABSENT; the only live
+      // session is an explicit TUI one → the wake lands in a void.
+      writeFileSync(
+        storePath,
+        JSON.stringify({
+          "agent:main:explicit:tui-1": {
+            sessionId: "uuid-tui",
+            updatedAt: Date.now(),
+          },
+        }),
+      );
+      const { api, errorEvents } = createFakeApi({
+        config: { session: { store: storePath } },
+      });
+
+      await wakeAgent(api, "x", "y");
+
+      const alarm = errorEvents.find((e) => e.event === "wake_dead_session");
+      expect(
+        alarm,
+        "a wake to a no-entry session must raise an operator-visible ERROR"
+          + " alarm — not be buried as entry_exists:false on the INFO line;"
+          + " got error events: " + JSON.stringify(errorEvents),
+      ).toBeTruthy();
+      expect(alarm?.ctx["sessionKey"]).toBe("agent:main:main");
+      expect(alarm?.ctx["entry_exists"]).toBe(false);
     });
 
     it("excludes :subagent: and :heartbeat keys from most_recent_key even when they have higher updatedAt", async () => {
