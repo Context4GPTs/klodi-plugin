@@ -37,7 +37,7 @@ import json
 import logging
 from typing import Any
 
-from klodi_hermes.bridge import WakeInjectFailed
+from klodi_hermes.bridge import _DIAG_TAIL, WakeInjectFailed
 
 log = logging.getLogger("klodi_hermes.wake")
 
@@ -235,8 +235,8 @@ async def _inject(text: str, *, kind: str, event_id: str) -> None:
             kind,
             event_id,
             err.returncode,
-            err.stdout[-500:],
-            err.stderr[-500:],
+            err.stdout[-_DIAG_TAIL:],
+            err.stderr[-_DIAG_TAIL:],
         )
     except BaseException as err:  # noqa: BLE001 — wake is best-effort
         log.warning(
