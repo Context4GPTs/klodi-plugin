@@ -98,13 +98,19 @@ The invariants, held adapter-portable:
   would couple the bridge to hermes's session-storage and channel-binding internals it
   explicitly disclaims owning (`bridge.py` module docstring). Piece 2 removes the dependency
   entirely by running every wake in a dedicated session keyed off the event — **per
-  conversation**, not the operator's: `channel_id` for channel.*, `listing_id` for
-  offer.*/comment.*/listing.*, `transaction_id` for transaction.*, `search_slug` for
-  search.match, and an ephemeral `wake-<event_id>` fallback when the key field is absent —
-  always without `--continue`. (Superseding the earlier single shared `klodi-wake` session,
-  which grew unbounded for the daemon's lifetime; see `wake_handlers.derive_wake_session`. A
-  conversation's terminal event triggers a best-effort, probe-gated `drain_session`.) There is
-  nothing on the operator side to assert.
+  conversation**, not the operator's, and **namespaced under `klodi:`**: `klodi:<channel_id>`
+  for channel.*, `klodi:<listing_id>` for offer.*/comment.*/listing.*, `klodi:<transaction_id>`
+  for transaction.*, `klodi:<search_slug>` for search.match, and an ephemeral
+  `klodi:wake-<event_id>` fallback when the key field is absent — always without `--continue`.
+  The `klodi:` namespace is load-bearing: the sibling outbound card
+  (`wake-outbound-roundtrip-message-and-correlation`) resolves the operator's active session from
+  `active_sessions.json` and excludes the wake-session family by this prefix — a bare entity id
+  (esp. a `search_slug` like `vintage-camera`) is otherwise indistinguishable from an operator
+  session. (Superseding the earlier single shared `klodi-wake` session, which grew unbounded for
+  the daemon's lifetime; see `wake_handlers.derive_wake_session`. The colon namespace is distinct
+  from the retired `klodi-wake` hyphen literal. A conversation's terminal event triggers a
+  best-effort, probe-gated `drain_session` on the same namespaced key.) There is nothing on the
+  operator side to assert.
 - **Emit the alarm inside `bridge.inject_message` directly — rejected.** The bridge has
   `exit`/`stdout`/`stderr` but **not** `kind`/`event_id`, so it cannot emit one correlated line;
   one ERROR at the handler beats a bridge diag line + a handler correlation line.

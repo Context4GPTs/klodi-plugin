@@ -13,8 +13,9 @@ consumers keep delivering). The production ctx's ``inject_message``
 shells out to ``hermes chat -q <text> --session <key> -Q`` to run each
 wake as an ISOLATED turn in a session scoped to its CONVERSATION — the
 session key is derived per-wake from the event (channel thread / listing
-/ transaction / standing search; see
-``wake_handlers.derive_wake_session``) and threaded down, never
+/ transaction / standing search), namespaced under ``klodi:`` so it can
+never be mistaken for an operator session (see
+``wake_handlers.derive_wake_session``), and threaded down, never
 ``--continue`` into the operator's live conversation. Per-conversation
 keying bounds each session's history to one conversation instead of
 letting one shared session grow unbounded for the daemon's whole life.

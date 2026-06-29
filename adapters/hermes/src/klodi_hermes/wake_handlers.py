@@ -81,6 +81,16 @@ _SESSION_KEY_FIELD_BY_DOMAIN: dict[str, str] = {
     "search": "search_slug",
 }
 
+# Namespace prefix on EVERY wake-session name. Lets the sibling outbound
+# path (which resolves the operator's active session from
+# ``active_sessions.json``) exclude the whole wake-session family by this
+# prefix — a bare entity id (esp. a ``search_slug`` like ``vintage-camera``)
+# is otherwise indistinguishable from an operator session name. The colon
+# here is deliberately distinct from the retired shared-session literal
+# ``klodi-wake`` (hyphen), so a namespaced key can never contain that
+# substring.
+_SESSION_NAMESPACE = "klodi:"
+
 _EPHEMERAL_SESSION_PREFIX = "wake-"
 
 # A conversation's terminal events — after these the session is reclaimed
@@ -99,24 +109,27 @@ _TERMINAL_KINDS = frozenset({
 def derive_wake_session(event: dict[str, Any]) -> str:
     """Derive the ``--session`` key for a wake, keyed off ``event.kind``.
 
-    One marketplace conversation == one session, so a session's history
-    stays bounded per conversation instead of one shared session growing
-    unbounded (the round-3 defect). A kind whose key field is present
-    returns that id; a kind with no mapped domain, or whose key field is
-    absent/empty, falls back to a per-wake EPHEMERAL session
-    (``wake-<event_id>``) — NEVER a shared growing session, which would
-    re-introduce the unbounded-context bug. A wake with neither a key nor
-    an ``event_id`` gets a unique ``wake-<uuid>`` so the fallback can
-    never itself become a shared session.
+    Every key is namespaced under ``klodi:`` (so the sibling outbound path
+    can exclude the wake-session family from operator-session resolution —
+    see ``_SESSION_NAMESPACE``). One marketplace conversation == one
+    session, so a session's history stays bounded per conversation instead
+    of one shared session growing unbounded (the round-3 defect). A kind
+    whose key field is present returns ``klodi:<id>``; a kind with no
+    mapped domain, or whose key field is absent/empty, falls back to a
+    per-wake EPHEMERAL ``klodi:wake-<event_id>`` — NEVER a shared growing
+    session, which would re-introduce the unbounded-context bug. A wake
+    with neither a key nor an ``event_id`` gets a unique
+    ``klodi:wake-<uuid4>`` so the fallback can never itself become a shared
+    session.
     """
     kind = str(event.get("kind", ""))
     key_field = _SESSION_KEY_FIELD_BY_DOMAIN.get(kind.split(".", 1)[0])
     if key_field:
         value = event.get(key_field)
         if value:
-            return str(value)
+            return f"{_SESSION_NAMESPACE}{value}"
     event_id = str(event.get("event_id", "") or "")
-    return f"{_EPHEMERAL_SESSION_PREFIX}{event_id or uuid.uuid4()}"
+    return f"{_SESSION_NAMESPACE}{_EPHEMERAL_SESSION_PREFIX}{event_id or uuid.uuid4()}"
 
 
 def _summarize_notification(event: dict[str, Any]) -> str:
