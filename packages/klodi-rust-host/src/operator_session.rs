@@ -266,3 +266,316 @@ mod tests {
         assert!(ts.ends_with('Z'));
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// card/audit-all-adapters-for-silent-wake-inject-failure — RED (qa-developer)
+//
+// Seam 1 — zeroclaw post-ACK worker classification (ACs 2, 3, 6).
+//
+// zeroclaw ACKs the NATS message at *dispatch* time (daemon.rs), so the
+// post-ACK `run_worker` below is the ONLY place a relay failure can ever
+// surface — redelivery is structurally impossible. Today the worker swallows
+// EVERY `send_and_wait` error at WARN + `continue` (`run_worker` :110-116), so a
+// deterministic failure (stale session → gateway error frame, bad bearer,
+// handshake) is an unrecoverable SILENT loss. The fix (mirroring the existing
+// `BadToken → tracing::error!` Telegram arm at :150-154, and the hermes
+// `wake_inject_deterministic_failure` ERROR template) must classify `ChatError`:
+//
+//   - deterministic (`Gateway` / `Handshake` / `Request` / `Encode`) → a DISTINCT
+//     `tracing::error!` alarm naming the cause (ACs 2, 6);
+//   - transient    (`Timeout` / `Transport` / `EarlyClose`)          → stay WARN
+//     only, never the deterministic ERROR alarm (ACs 3, 6).
+//
+// There is NO return value / telegram side effect on the error path (the worker
+// `continue`s), so the only observable contract is the log SEVERITY. These tests
+// install a minimal in-test `tracing::Subscriber` recorder and drive `run_worker`
+// directly on the current-thread runtime (so the thread-local default captures
+// the worker's events), feeding it one wake whose chat turn fails against a
+// scripted WS gateway. They compile against the EXISTING worker signature and
+// fail RED on the missing ERROR severity — not on a missing symbol — so the rest
+// of the crate's tests still build + pass.
+#[cfg(test)]
+mod alarm_classification_red_tests {
+    use super::*;
+
+    use futures_util::{SinkExt, StreamExt};
+    use klodi_nats_client::NotificationEvent;
+    use std::sync::Mutex;
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::handshake::server::{
+        Request as HsRequest, Response as HsResponse,
+    };
+    use tracing::field::{Field, Visit};
+    use tracing::{Dispatch, Event, Level, Metadata, Subscriber, span};
+
+    use crate::telegram::TelegramClient;
+    use crate::zeroclaw_chat::ChatClient;
+
+    /// One captured `tracing` event: its severity + a flattened render of every
+    /// field (message + `error = %err`), enough to assert level and that the
+    /// alarm names the failure cause.
+    #[derive(Clone)]
+    struct RecordedEvent {
+        level: Level,
+        rendered: String,
+    }
+
+    #[derive(Default)]
+    struct RecorderInner {
+        events: Mutex<Vec<RecordedEvent>>,
+    }
+
+    // Clone newtype over a shared `Arc` so `Dispatch::new` can own one clone
+    // while the test keeps a read handle to the SAME recorder. A local type is
+    // required to impl the foreign `Subscriber` trait (`Arc` is not fundamental,
+    // so `impl Subscriber for Arc<_>` violates the orphan rule).
+    #[derive(Clone, Default)]
+    struct Recorder(Arc<RecorderInner>);
+
+    impl Recorder {
+        fn errors_containing(&self, needle: &str) -> usize {
+            self.0
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.level == Level::ERROR && e.rendered.contains(needle))
+                .count()
+        }
+
+        fn any_error(&self) -> bool {
+            self.0
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.level == Level::ERROR)
+        }
+
+        fn any_warn(&self) -> bool {
+            self.0
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.level == Level::WARN)
+        }
+
+        fn dump(&self) -> String {
+            self.0
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|e| format!("[{}]{}", e.level, e.rendered))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        }
+    }
+
+    struct FieldCollector {
+        out: String,
+    }
+
+    impl Visit for FieldCollector {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            use std::fmt::Write;
+            let _ = write!(self.out, " {}={:?}", field.name(), value);
+        }
+    }
+
+    // `enabled` is narrowed to INFO/WARN/ERROR so debug/trace noise from the WS
+    // stack is dropped.
+    impl Subscriber for Recorder {
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            let l = *metadata.level();
+            l == Level::ERROR || l == Level::WARN || l == Level::INFO
+        }
+        fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+        fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+        fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+        fn event(&self, event: &Event<'_>) {
+            let level = *event.metadata().level();
+            let mut collector = FieldCollector { out: String::new() };
+            event.record(&mut collector);
+            self.0
+                .events
+                .lock()
+                .unwrap()
+                .push(RecordedEvent { level, rendered: collector.out });
+        }
+        fn enter(&self, _span: &span::Id) {}
+        fn exit(&self, _span: &span::Id) {}
+    }
+
+    /// Single-connection scripted WS gateway. Mirrors the helper in
+    /// `zeroclaw_chat::tests`.
+    async fn run_scripted_ws<F, Fut>(port_tx: oneshot::Sender<u16>, scenario: F)
+    where
+        F: FnOnce(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> Fut
+            + Send
+            + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        port_tx.send(listener.local_addr().unwrap().port()).unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let callback = |_req: &HsRequest, response: HsResponse| Ok(response);
+        let ws = tokio_tungstenite::accept_hdr_async(stream, callback)
+            .await
+            .unwrap();
+        scenario(ws).await;
+    }
+
+    fn wake_for_test() -> WakeEvent {
+        let evt = NotificationEvent::ListingCreated {
+            event_id: "e-zc-1".into(),
+            listing_id: "l1".into(),
+            title: Some("vintage chair".into()),
+        };
+        WakeEvent::Notification {
+            kind: evt.kind().to_string(),
+            event_id: evt.event_id().to_string(),
+            user_id: "u1".into(),
+            payload: evt,
+        }
+    }
+
+    /// AC 2 + AC 6 — a deterministic `ChatError::Gateway` (e.g. a stale session
+    /// the gateway rejects with an error frame) must surface a DISTINCT
+    /// ERROR-severity alarm that names the gateway code. Today the worker logs it
+    /// at WARN + `continue`, so this fails RED: zero ERROR events carry the code.
+    #[tokio::test]
+    async fn worker_emits_error_alarm_on_deterministic_gateway_failure() {
+        let recorder = Arc::new(Recorder::default());
+        let dispatch = Dispatch::new(recorder.clone());
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        let (port_tx, port_rx) = oneshot::channel();
+        let server = tokio::spawn(run_scripted_ws(port_tx, |mut ws| async move {
+            ws.send(Message::Text(
+                serde_json::json!({
+                    "type": "session_start",
+                    "session_id": "session-1",
+                    "resumed": true,
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+            // Consume the client's outbound `message` frame, then reject with a
+            // gateway error frame — the stale-session / bad-bearer shape.
+            let _ = ws.next().await;
+            ws.send(Message::Text(
+                serde_json::json!({
+                    "type": "error",
+                    "code": "session_not_found",
+                    "message": "no such session",
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        }));
+        let port = port_rx.await.unwrap();
+
+        let chat = Arc::new(ChatClient::new(
+            format!("http://127.0.0.1:{port}"),
+            "tok".into(),
+            "session-1".into(),
+        ));
+        // Never reached on the error path (the worker `continue`s before send).
+        let telegram = Arc::new(TelegramClient::with_base(
+            "BOT".into(),
+            "http://127.0.0.1:1".into(),
+        ));
+        let ctx = WorkerCtx {
+            chat_id: 99,
+            chat,
+            telegram,
+            klodi_home: PathBuf::from("/nonexistent-klodi-home"),
+        };
+
+        let (etx, erx) = mpsc::channel::<InboundEvent>(4);
+        etx.send(InboundEvent::Wake(wake_for_test())).await.unwrap();
+        drop(etx); // close the inbox so the worker drains one event then exits
+
+        run_worker(ctx, erx).await;
+        let _ = server.await;
+
+        assert!(
+            recorder.errors_containing("session_not_found") >= 1,
+            "deterministic Gateway failure must raise a DISTINCT ERROR alarm \
+             naming the gateway code (post-ACK = the only possible surface); \
+             recorded events: {}",
+            recorder.dump(),
+        );
+    }
+
+    /// AC 3 + AC 6 — a transient `ChatError::Timeout` keeps its existing WARN
+    /// disposition and must NOT raise the deterministic ERROR alarm. This is the
+    /// classification GUARD: it passes today (worker only WARNs) and must keep
+    /// passing after the fix (Timeout stays transient).
+    #[tokio::test]
+    async fn worker_keeps_warn_only_on_transient_timeout_failure() {
+        let recorder = Arc::new(Recorder::default());
+        let dispatch = Dispatch::new(recorder.clone());
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        let (port_tx, port_rx) = oneshot::channel();
+        let server = tokio::spawn(run_scripted_ws(port_tx, |mut ws| async move {
+            ws.send(Message::Text(
+                serde_json::json!({"type": "session_start"}).to_string(),
+            ))
+            .await
+            .unwrap();
+            let _ = ws.next().await;
+            // Hold without `done` so the client's turn timeout fires.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }));
+        let port = port_rx.await.unwrap();
+
+        let chat = Arc::new(
+            ChatClient::new(
+                format!("http://127.0.0.1:{port}"),
+                "tok".into(),
+                "session-1".into(),
+            )
+            .with_turn_timeout(Duration::from_millis(150)),
+        );
+        let telegram = Arc::new(TelegramClient::with_base(
+            "BOT".into(),
+            "http://127.0.0.1:1".into(),
+        ));
+        let ctx = WorkerCtx {
+            chat_id: 99,
+            chat,
+            telegram,
+            klodi_home: PathBuf::from("/nonexistent-klodi-home"),
+        };
+
+        let (etx, erx) = mpsc::channel::<InboundEvent>(4);
+        etx.send(InboundEvent::Wake(wake_for_test())).await.unwrap();
+        drop(etx);
+
+        run_worker(ctx, erx).await;
+        let _ = server.await;
+
+        assert!(
+            !recorder.any_error(),
+            "a transient Timeout must NOT raise an ERROR alarm — it stays WARN; \
+             recorded events: {}",
+            recorder.dump(),
+        );
+        assert!(
+            recorder.any_warn(),
+            "expected the transient timeout to still log a WARN; recorded: {}",
+            recorder.dump(),
+        );
+    }
+}
