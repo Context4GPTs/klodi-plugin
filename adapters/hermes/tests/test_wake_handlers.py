@@ -47,9 +47,14 @@ class _BlockingInjectCtx:
         self.threads: list[int] = []
         self._lock = threading.Lock()
 
-    def inject_message(self, text: str, role: str = "system") -> None:
+    def inject_message(
+        self, text: str, role: str = "system", *, session: str = ""
+    ) -> None:
         # Match BridgeCtx's cross-call serialization: the production
         # ctx holds a threading.Lock around its subprocess.run call.
+        # ``session`` is the per-wake key threaded down from ``_inject``;
+        # this stub records only the role (the session is asserted via
+        # argv in test_wake_session_keying.py).
         with self._lock:
             self.threads.append(threading.get_ident())
             self.calls.append((text, {"role": role}))
@@ -143,7 +148,9 @@ async def test_inject_failure_is_caught_so_handler_returns_normally(
     deterministic failure."""
 
     class _RaisingCtx:
-        def inject_message(self, _text: str, role: str = "system") -> None:
+        def inject_message(
+            self, _text: str, role: str = "system", *, session: str = ""
+        ) -> None:
             raise RuntimeError("boom")
 
     wake_handlers.bind_ctx(_RaisingCtx())
@@ -171,7 +178,9 @@ async def test_deterministic_failure_emits_correlated_error_alarm(
     consumer still acks)."""
 
     class _FailingCtx:
-        def inject_message(self, _text: str, role: str = "system") -> None:
+        def inject_message(
+            self, _text: str, role: str = "system", *, session: str = ""
+        ) -> None:
             raise WakeInjectFailed(
                 returncode=1,
                 stdout="hermes: unknown session 'klodi-wake'",
@@ -211,7 +220,9 @@ async def test_deterministic_failure_distinct_from_timeout_swallow(
     class _TimeoutSwallowCtx:
         # Mirrors BridgeCtx on TimeoutExpired: it logs + returns None,
         # so from the handler's view inject simply completed.
-        def inject_message(self, _text: str, role: str = "system") -> None:
+        def inject_message(
+            self, _text: str, role: str = "system", *, session: str = ""
+        ) -> None:
             return None
 
     wake_handlers.bind_ctx(_TimeoutSwallowCtx())
@@ -242,7 +253,9 @@ async def test_dispatch_acks_deterministic_failure_and_never_naks(
     from klodi_nats_client.consumers import _EventIdLru, _dispatch_message
 
     class _FailingCtx:
-        def inject_message(self, _text: str, role: str = "system") -> None:
+        def inject_message(
+            self, _text: str, role: str = "system", *, session: str = ""
+        ) -> None:
             raise WakeInjectFailed(returncode=1, stdout="boom-diag", stderr="")
 
     wake_handlers.bind_ctx(_FailingCtx())
