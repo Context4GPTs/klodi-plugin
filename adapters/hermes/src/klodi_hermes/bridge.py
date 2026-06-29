@@ -26,7 +26,7 @@ Run shape:
     durable JetStream consumers.
   * The bridge sleeps on its stop event. SIGTERM / SIGINT → shutdown.
 
-Failure modes (two classes, deliberately distinguished here):
+Failure modes (two classes, deliberately distinguished here — see ADR-0019):
   * Inject subprocess TIMEOUT — logged at WARNING, swallowed. The wake
     handler returns; the consumer acks; JetStream's ``max_deliver: 5``
     does NOT redeliver because nothing raised. Losing one wake is the

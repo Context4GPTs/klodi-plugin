@@ -228,7 +228,7 @@ async def _inject(text: str, *, kind: str, event_id: str) -> None:
         # deterministic failure would burn max_deliver and drop anyway);
         # the alarm — not redelivery — is the surface. The wake's state
         # stays re-queryable from the marketplace once the operator fixes
-        # the cause.
+        # the cause. See ADR-0019 (disposition by failure class).
         log.error(
             "wake_inject_deterministic_failure kind=%s event_id=%s exit=%d"
             " stdout=%r stderr=%r",
