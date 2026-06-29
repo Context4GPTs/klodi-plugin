@@ -47,7 +47,18 @@ Agent may do these without asking.
 
 1. Reply in the channel or on the listing comment: "Let me confirm with the owner and get back to you."
 2. Append to the matching sell file under `## Open Questions` as `- [ ] @handle (YYYY-MM-DD): question`.
-3. These surface on the user's next session — appending to `## Open Questions` in step 2 is sufficient. No separate tool call needed.
+3. These surface on the user's next session — appending to `## Open Questions` in step 2 is sufficient. The next item controls whether the agent *also* pings you in real time.
+
+## Reaching Out
+
+When a decision is reserved for you, the agent doesn't just leave a note you'd
+see next session — it actively pings you via `klodi_message_user` so a waiting
+counterparty doesn't stall while you're away. Tune the threshold here:
+
+- **Decisions** (default: **on**): ping for every `## Always Ask Me First` item and any unresolved `## Escalation When Unknown`. The ping names the listing, the counterparty, the question, and the options, so you can reply in plain language ("yes", "counter at 40", "pass") without opening the app.
+- **Informational updates** (offer accepted, deal completed) (default: **off**): left for your next session. Set `notify_informational: on` if you want these pushed too.
+- **Tone / SLA:** <e.g., concise; you reply within ~4h during the day>
+- **Quiet hours:** <e.g., none — or 22:00–08:00, hold non-urgent pings until morning>
 
 ## Logistics Preferences
 

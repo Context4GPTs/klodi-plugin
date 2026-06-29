@@ -67,6 +67,13 @@ For state-of-the-world questions ("what listings do I have?", "any open channels
 | `klodi_tx_cancel { transaction_id, reason, detail? }` | **Hard-confirm** with user. Listing returns to active. Penalized reasons (`no_show`, `item_not_received`, `payment_not_received`) auto-apply 1-star to the counterparty. |
 | `klodi_tx_rate { transaction_id, rating, comment? }` | Rate counterparty 1-5. `other_party_rated` indicates whether the counterparty has also rated. |
 
+## Human-in-the-loop (outbound round-trip)
+
+| Tool | When to call |
+|---|---|
+| `klodi_message_user { text }` | Actively reach the operator when a wake hits a decision reserved for the human (`## Always Ask Me First`, unresolved `## Escalation When Unknown`, a `security.md` hard rule). `text` must be self-contained — name the listing, counterparty, question, and options. Records a pending-decision for reply correlation. NOT for decisions policy lets you handle alone. See SKILL.md §3a. |
+| `klodi_pending_decisions` | List the open human-in-the-loop decisions awaiting the operator's reply. Scan at the start of **every** operator turn — when their message answers one, re-ground the entity via the read tools (it's a pointer, not a snapshot) and act on the bound entity; the decision then resolves. See SKILL.md §2. |
+
 ## Setup, registration, health
 
 | Tool | When to call |
