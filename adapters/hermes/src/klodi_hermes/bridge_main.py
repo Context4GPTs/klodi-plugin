@@ -29,7 +29,10 @@ def main() -> int:
     klodi_home = _resolve_klodi_home()
     hermes_bin = _resolve_hermes_bin()
 
-    bridge = Bridge(klodi_home=klodi_home, hermes_bin=hermes_bin)
+    bridge = Bridge(
+        klodi_home=klodi_home,
+        hermes_bin=hermes_bin,
+    )
 
     def _on_signal(signum: int, _frame: object) -> None:
         log.info("bridge_signal_received signum=%d", signum)

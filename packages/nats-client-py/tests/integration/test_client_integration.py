@@ -228,3 +228,73 @@ async def test_drains_3_event_backlog_after_reconnect_in_order(
         assert [e["event_id"] for e in received] == published_ids
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_resumes_backlog_after_in_place_flap_same_client(
+    test_user: dict[str, str],
+    publisher: SyntheticPublisher,
+) -> None:
+    """AC-6 (Piece 1a) — real-NATS in-place flap.
+
+    Unlike ``test_drains_3_event_backlog_after_reconnect_in_order`` (which
+    does a clean ``close()`` + a brand-new client + fresh ``subscribe()``),
+    this drives the production daemon's actual path: a mid-stream transport
+    drop with NO application ``close()`` and NO re-subscribe. The same
+    long-lived client + consume loop must re-bind its pull subscription in
+    place and resume delivery.
+
+    The flap is injected via nats-py's own read-loop fault entry point
+    (``Client._process_op_err``), which is exactly what fires on a real
+    ``nats: unexpected EOF`` / 502 — it triggers the ``allow_reconnect``
+    machinery while the client object stays alive.
+    """
+    import nats.errors
+
+    client = KlodiClient(
+        creds_path=test_user["creds_path"],
+        config_path=test_user["config_path"],
+    )
+    received: list[dict[str, Any]] = []
+    backlog_seen = asyncio.Event()
+
+    async def handler(event: Any) -> None:
+        received.append(event)
+        if len(received) >= 4:  # 1 pre-flap + 3 post-flap backlog
+            backlog_seen.set()
+
+    try:
+        await client.connect()
+        await client.subscribe_notifications(handler)
+        await asyncio.sleep(0.25)
+
+        # 1. Prove the loop is live before the flap.
+        pre = await publisher.publish_notification(
+            user_id=test_user["user_id"], kind="offer.proposed",
+            payload={"phase": "pre-flap"},
+        )
+
+        # 2. Force an in-place transport drop — no client.close().
+        await client._nc._process_op_err(  # type: ignore[attr-defined]
+            nats.errors.Error("simulated mid-stream EOF")
+        )
+
+        # 3. Publish a backlog while the transport is re-establishing.
+        backlog_kinds = ["search.match", "comment.posted", "rating.received"]
+        published_ids = [pre.event_id]
+        for kind in backlog_kinds:
+            ack = await publisher.publish_notification(
+                user_id=test_user["user_id"], kind=kind,
+                payload={"phase": "post-flap"},
+            )
+            published_ids.append(ack.event_id)
+
+        # 4. The SAME client re-binds in place and drains the backlog.
+        await asyncio.wait_for(backlog_seen.wait(), timeout=20)
+
+        got_ids = [e["event_id"] for e in received]
+        assert set(published_ids).issubset(set(got_ids))
+        # No duplicates — the preserved dedup LRU guards redelivery.
+        assert len(got_ids) == len(set(got_ids))
+    finally:
+        await client.close()

@@ -23,6 +23,7 @@ from klodi_hermes.bridge import (
     DEFAULT_INJECT_TIMEOUT_SECONDS,
     Bridge,
     BridgeCtx,
+    WakeInjectFailed,
 )
 
 
@@ -33,10 +34,15 @@ class _RecordingRunner:
     """Stub ``subprocess.run``; captures invocations + scripts results."""
 
     def __init__(self, *, returncode: int = 0, stderr: str = "",
+                 stdout: str = "",
                  raise_timeout: bool = False, sleep_s: float = 0.0) -> None:
         self.calls: list[dict[str, Any]] = []
         self.returncode = returncode
         self.stderr = stderr
+        # Configurable so failure tests can drive a quiet (-Q) CLI that
+        # writes its diagnostic to stdout with an empty stderr — the exact
+        # shape that made the bug invisible. (Was hardcoded to "".)
+        self.stdout = stdout
         self.raise_timeout = raise_timeout
         self.sleep_s = sleep_s
 
@@ -46,7 +52,9 @@ class _RecordingRunner:
             time.sleep(self.sleep_s)
         if self.raise_timeout:
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0))
-        return SimpleNamespace(returncode=self.returncode, stderr=self.stderr, stdout="")
+        return SimpleNamespace(
+            returncode=self.returncode, stderr=self.stderr, stdout=self.stdout
+        )
 
 
 def test_register_tool_and_skill_are_stubs() -> None:
@@ -57,27 +65,52 @@ def test_register_tool_and_skill_are_stubs() -> None:
     assert ctx.register_skill("klodi", Path("/tmp/SKILL.md")) is None
 
 
-def test_inject_spawns_chat_continue_with_text_and_role_logged(caplog: Any) -> None:
-    """inject_message must shell out to ``hermes chat -q <text> --continue -Q``."""
+def test_inject_spawns_session_scoped_chat(caplog: Any) -> None:
+    """AC-4′ (isolation invariant) under the per-key model: inject_message
+    runs the wake turn in the DEDICATED ``--session <session>`` threaded
+    down from the handler, with NO ``--continue`` — so a klodi wake never
+    resumes (or pollutes) the operator's most-recent session. The session
+    is now a per-wake argument (the conversation key), not ctx-owned
+    state. The argv is the bridge's verifiable isolation mechanism."""
     runner = _RecordingRunner(returncode=0)
     ctx = BridgeCtx(hermes_bin="/opt/hermes/.venv/bin/hermes", runner=runner)
     with caplog.at_level("INFO", logger="klodi_hermes.bridge"):
-        ctx.inject_message("hello wake", role="system")
+        ctx.inject_message("hello wake", role="system", session="klodi:channel-42")
     assert len(runner.calls) == 1
-    assert runner.calls[0]["cmd"] == [
+    cmd = runner.calls[0]["cmd"]
+    assert cmd == [
         "/opt/hermes/.venv/bin/hermes", "chat", "-q", "hello wake",
-        "--continue", "-Q",
+        "--session", "klodi:channel-42", "-Q",
     ]
+    # The isolation invariant, asserted both ways: the per-wake dedicated
+    # (namespaced) session is present and the operator-session resume flag
+    # is absent. The bridge is a pass-through — the keyer owns the prefix.
+    assert "--session" in cmd and cmd[cmd.index("--session") + 1] == "klodi:channel-42"
+    assert "--continue" not in cmd
+    # The retired shared session must never leak into the argv.
+    assert "klodi-wake" not in cmd
     # capture_output + text=True so we get strings back for logging.
     assert runner.calls[0]["capture_output"] is True
     assert runner.calls[0]["text"] is True
     assert any("wake_inject_complete" in r.message for r in caplog.records)
 
 
+def test_inject_uses_session_argument_in_argv() -> None:
+    """The session is a per-wake argument threaded from the handler — the
+    value must flow into the argv verbatim, never a hardcoded literal."""
+    runner = _RecordingRunner(returncode=0)
+    ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
+    ctx.inject_message("x", session="klodi:listing-99")
+    cmd = runner.calls[0]["cmd"]
+    assert "--session" in cmd
+    assert cmd[cmd.index("--session") + 1] == "klodi:listing-99"
+    assert "--continue" not in cmd
+
+
 def test_inject_default_timeout_passed_to_runner() -> None:
     runner = _RecordingRunner()
     ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
-    ctx.inject_message("x")
+    ctx.inject_message("x", session="s")
     assert runner.calls[0]["timeout"] == DEFAULT_INJECT_TIMEOUT_SECONDS
 
 
@@ -87,7 +120,7 @@ def test_inject_custom_timeout_passed_to_runner() -> None:
         hermes_bin="/usr/bin/hermes", runner=runner,
         inject_timeout_seconds=42,
     )
-    ctx.inject_message("x")
+    ctx.inject_message("x", session="s")
     assert runner.calls[0]["timeout"] == 42
 
 
@@ -98,27 +131,61 @@ def test_inject_timeout_swallowed_and_logged(caplog: Any) -> None:
     ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner,
                     inject_timeout_seconds=1)
     with caplog.at_level("WARNING", logger="klodi_hermes.bridge"):
-        ctx.inject_message("late wake")
+        ctx.inject_message("late wake", session="s")
     assert any("wake_inject_timeout" in r.message for r in caplog.records)
 
 
-def test_inject_nonzero_exit_logged_not_raised(caplog: Any) -> None:
-    runner = _RecordingRunner(returncode=2, stderr="hermes: missing model")
+def test_inject_nonzero_exit_raises_wake_inject_failed_with_stdout() -> None:
+    """AC-1 + AC-2 (bridge layer): a fast deterministic nonzero exit must
+    RAISE ``WakeInjectFailed`` carrying the full subprocess diagnostics —
+    crucially ``stdout``, where a quiet (-Q) CLI writes its error while
+    leaving stderr empty. This overturns the old swallow-to-WARNING
+    behaviour: a deterministic failure may not be silently dropped.
+
+    (Replaces ``test_inject_nonzero_exit_logged_not_raised`` — its very
+    name encoded the bug the fix removes.)"""
+    runner = _RecordingRunner(
+        returncode=2,
+        stdout="hermes: unknown session 'klodi-wake'",
+        stderr="",
+    )
     ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
-    with caplog.at_level("WARNING", logger="klodi_hermes.bridge"):
-        ctx.inject_message("x")
-    assert any("wake_inject_nonzero" in r.message for r in caplog.records)
-    assert any("hermes: missing model" in r.message for r in caplog.records)
+    with pytest.raises(WakeInjectFailed) as ei:
+        ctx.inject_message("x", session="listing-1")
+    assert ei.value.returncode == 2
+    assert "unknown session 'klodi-wake'" in ei.value.stdout
+    assert ei.value.stderr == ""
 
 
-def test_inject_serializes_concurrent_calls() -> None:
-    """A second inject_message must wait for the first to exit; the
-    lock prevents two ``hermes chat --continue`` processes racing on
-    the same session file."""
+def test_inject_nonzero_exit_carries_stderr_too() -> None:
+    """Both streams are preserved on the typed exception so the handler's
+    alarm is fully explainable regardless of where the CLI writes."""
+    runner = _RecordingRunner(
+        returncode=1, stdout="", stderr="hermes: missing model",
+    )
+    ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
+    with pytest.raises(WakeInjectFailed) as ei:
+        ctx.inject_message("x", session="listing-1")
+    assert ei.value.returncode == 1
+    assert "missing model" in ei.value.stderr
+
+
+def test_inject_serializes_concurrent_calls_on_same_session() -> None:
+    """Two injects targeting the SAME session must not run concurrently —
+    the lock prevents two ``hermes chat --session <s>`` processes racing on
+    the same session file. (Same-key serialization holds whether the lock
+    stays global or narrows to per-session; this test pins only the
+    same-key guarantee the redesign must preserve.)"""
     runner = _RecordingRunner(sleep_s=0.05)
     ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
-    threads = [threading.Thread(target=ctx.inject_message, args=(f"w{i}",))
-               for i in range(3)]
+    threads = [
+        threading.Thread(
+            target=ctx.inject_message,
+            args=(f"w{i}",),
+            kwargs={"session": "channel-shared"},
+        )
+        for i in range(3)
+    ]
     start = time.monotonic()
     for t in threads:
         t.start()

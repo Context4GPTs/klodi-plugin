@@ -11,24 +11,44 @@ via ``ctx.inject_message(text, role="system")``. The format mirrors
 ``klodi-plugin/adapters/openclaw/src/service/wake-handlers.ts`` so
 agents see the same shape regardless of host.
 
+Each wake runs in a session scoped to its CONVERSATION. ``_inject``
+derives the session key off ``event.kind`` (see
+``derive_wake_session``) and threads it down into the bridge ctx's
+``inject_message``, so per-conversation history stays bounded instead
+of one shared session growing unbounded for the daemon's lifetime. On a
+conversation's terminal event (channel closed, listing sold/withdrawn/
+expired, transaction completed/cancelled) the handler issues a
+best-effort ``drain_session`` to reclaim it.
+
 Hermes's daemon is long-running; the connection lives for the
 daemon's lifetime, and consumer pull loops live on a dedicated
 asyncio thread (see ``client.py``). The bridge ctx's
-``inject_message`` blocks on a ``hermes chat --continue`` subprocess
-for the agent turn's duration, so the inject is dispatched off the
-loop via ``asyncio.to_thread``. Otherwise the running subprocess
-freezes the second consumer's pull-fetch and the nats-py WS
+``inject_message`` blocks on a ``hermes chat --session <key>``
+subprocess for the agent turn's duration, so the inject is dispatched
+off the loop via ``asyncio.to_thread``. Otherwise the running
+subprocess freezes the second consumer's pull-fetch and the nats-py WS
 heartbeat, and the WS reconnect can't run until after the chat
 exits — at which point the consumer is dead and silently stops
 delivering wakes.
+
+Failure surface (the no-silent-drop contract): a fast deterministic
+inject failure raises :class:`klodi_hermes.bridge.WakeInjectFailed`,
+which ``_inject`` turns into a loud, correlated ERROR alarm
+(``wake_inject_deterministic_failure``) carrying the subprocess
+diagnostics plus ``kind``/``event_id``. A timeout stays a swallowed
+WARNING in the bridge. Anything else stays a best-effort WARNING here.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
+import uuid
 from typing import Any
+
+from klodi_hermes.bridge import _DIAG_TAIL, WakeInjectFailed
 
 log = logging.getLogger("klodi_hermes.wake")
 
@@ -40,6 +60,76 @@ def bind_ctx(ctx: Any) -> None:
     reach the running session via ``inject_message``."""
     global _CTX
     _CTX = ctx
+
+
+# Per-domain session-key field — the conversation a wake belongs to.
+# FINAL, verified against the tool-catalog golden fixtures. Keyed by the
+# kind's DOMAIN prefix (``kind.split(".")[0]``), NOT "first id present":
+# several kinds carry more than one id (``offer.accepted`` has both
+# ``listing_id`` and ``transaction_id``; ``channel.*`` and
+# ``transaction.*`` also carry ``listing_id``), so only the prefix is
+# authoritative. ``offer.*`` / ``comment.*`` / ``listing.*`` all scope to
+# the LISTING (the negotiation's subject); ``transaction.*`` to the
+# transaction; ``channel.*`` to the channel thread; ``search.match`` to
+# the standing search.
+_SESSION_KEY_FIELD_BY_DOMAIN: dict[str, str] = {
+    "channel": "channel_id",
+    "offer": "listing_id",
+    "comment": "listing_id",
+    "listing": "listing_id",
+    "transaction": "transaction_id",
+    "search": "search_slug",
+}
+
+# Namespace prefix on EVERY wake-session name. Lets the sibling outbound
+# path (which resolves the operator's active session from
+# ``active_sessions.json``) exclude the whole wake-session family by this
+# prefix — a bare entity id (esp. a ``search_slug`` like ``vintage-camera``)
+# is otherwise indistinguishable from an operator session name. The colon
+# here is deliberately distinct from the retired shared-session literal
+# ``klodi-wake`` (hyphen), so a namespaced key can never contain that
+# substring.
+_WAKE_SESSION_NAMESPACE = "klodi:"
+
+_EPHEMERAL_SESSION_PREFIX = "wake-"
+
+# A conversation's terminal events — after these the session is reclaimed
+# (best-effort ``drain_session``). channel.message/opened, offer.*,
+# listing.created etc. are mid-conversation and never drain.
+_TERMINAL_KINDS = frozenset({
+    "channel.closed",
+    "listing.sold",
+    "listing.withdrawn",
+    "listing.expired",
+    "transaction.completed",
+    "transaction.cancelled",
+})
+
+
+def derive_wake_session(event: dict[str, Any]) -> str:
+    """Derive the ``--session`` key for a wake, keyed off ``event.kind``.
+
+    Every key is namespaced under ``klodi:`` (so the sibling outbound path
+    can exclude the wake-session family from operator-session resolution —
+    see ``_WAKE_SESSION_NAMESPACE``). One marketplace conversation == one
+    session, so a session's history stays bounded per conversation instead
+    of one shared session growing unbounded (the round-3 defect). A kind
+    whose key field is present returns ``klodi:<id>``; a kind with no
+    mapped domain, or whose key field is absent/empty, falls back to a
+    per-wake EPHEMERAL ``klodi:wake-<event_id>`` — NEVER a shared growing
+    session, which would re-introduce the unbounded-context bug. A wake
+    with neither a key nor an ``event_id`` gets a unique
+    ``klodi:wake-<uuid4>`` so the fallback can never itself become a shared
+    session.
+    """
+    kind = str(event.get("kind", ""))
+    key_field = _SESSION_KEY_FIELD_BY_DOMAIN.get(kind.split(".", 1)[0])
+    if key_field:
+        value = event.get(key_field)
+        if value:
+            return f"{_WAKE_SESSION_NAMESPACE}{value}"
+    event_id = str(event.get("event_id", "") or "")
+    return f"{_WAKE_SESSION_NAMESPACE}{_EPHEMERAL_SESSION_PREFIX}{event_id or uuid.uuid4()}"
 
 
 def _summarize_notification(event: dict[str, Any]) -> str:
@@ -178,7 +268,8 @@ async def handle_notification(event: dict[str, Any]) -> None:
     event_id = str(event.get("event_id", ""))
     log.info("wake_received kind=%s event_id=%s", kind, event_id)
     text = format_notification_wake(event)
-    await _inject(text, kind=kind)
+    session = derive_wake_session(event)
+    await _inject(text, kind=kind, event_id=event_id, session=session)
 
 
 async def handle_channel_message(event: dict[str, Any]) -> None:
@@ -188,10 +279,62 @@ async def handle_channel_message(event: dict[str, Any]) -> None:
         "wake_received kind=channel.message event_id=%s", event_id,
     )
     text = format_channel_wake(event)
-    await _inject(text, kind="channel.message")
+    session = derive_wake_session(event)
+    await _inject(
+        text, kind="channel.message", event_id=event_id, session=session
+    )
 
 
-async def _inject(text: str, *, kind: str) -> None:
+def _inject_accepts_session(inject: Any) -> bool:
+    """Whether the bound ctx's ``inject_message`` accepts a ``session`` kwarg.
+
+    Two ctx types legitimately bind here: the daemon's ``BridgeCtx``
+    (shells out ``hermes chat --session <key>`` — needs the per-wake
+    session) and hermes's in-process per-chat ctx (injects into the live
+    chat — has no session concept; its ``inject_message(text, role)``
+    predates this kwarg). Pass ``session`` only to a ctx that accepts it
+    so threading the conversation key never breaks the in-process contract.
+    """
+    try:
+        params = inspect.signature(inject).parameters
+    except (TypeError, ValueError):
+        return False
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return True
+    return "session" in params
+
+
+async def _call_inject(inject: Any, text: str, *, session: str) -> None:
+    """Run the (sync, blocking) inject off the asyncio loop. ``inject``
+    blocks on a ``hermes chat --session <key>`` subprocess for the agent
+    turn's duration; a worker thread keeps the loop — shared by both
+    consumer pull-fetches and the nats-py WS heartbeat — ticking.
+    Cross-inject serialization stays in ``BridgeCtx._inject_lock``."""
+    if _inject_accepts_session(inject):
+        await asyncio.to_thread(inject, text, role="system", session=session)
+    else:
+        await asyncio.to_thread(inject, text, role="system")
+
+
+async def _drain_session(ctx: Any, *, kind: str, session: str) -> None:
+    """Best-effort reclamation of a session whose conversation just hit its
+    terminal event. The call site is in-scope; whether hermes actually
+    reclaims the session is probe-gated (see ``BridgeCtx.drain_session``).
+    A ctx without ``drain_session`` (the in-process per-chat ctx, test
+    stubs) is a clean no-op — same getattr-guard convention as inject."""
+    drain = getattr(ctx, "drain_session", None)
+    if drain is None:
+        return
+    try:
+        await asyncio.to_thread(drain, session)
+    except BaseException as err:  # noqa: BLE001 — drain is best-effort
+        log.warning(
+            "wake_session_drain_failed kind=%s session=%s error=%s",
+            kind, session, err,
+        )
+
+
+async def _inject(text: str, *, kind: str, event_id: str, session: str) -> None:
     ctx = _CTX
     if ctx is None:
         log.info("wake_no_ctx kind=%s", kind)
@@ -201,20 +344,44 @@ async def _inject(text: str, *, kind: str) -> None:
         log.info("wake_no_inject_method kind=%s", kind)
         return
     try:
-        # ``inject`` is sync and, in the bridge ctx, blocks on a
-        # ``hermes chat --continue`` subprocess for the agent turn's
-        # duration. Run it on a worker thread so the asyncio loop —
-        # shared by both consumer pull-fetches and the nats-py WS
-        # heartbeat — keeps ticking. Cross-inject serialization stays
-        # in ``BridgeCtx._inject_lock`` (threading.Lock), which is
-        # already correct for cross-thread callers.
-        await asyncio.to_thread(inject, text, role="system")
+        await _call_inject(inject, text, session=session)
+    except WakeInjectFailed as err:
+        # Deterministic failure (a misconfig that fails identically every
+        # wake): surface a LOUD, correlated, operator-visible ERROR alarm
+        # — distinct from the routine timeout WARNING that operators
+        # demonstrably did not watch. This arm is placed BEFORE the broad
+        # ``except`` so the typed failure is never downgraded to WARNING.
+        # We do NOT re-raise: the consumer still acks (re-delivering a
+        # deterministic failure would burn max_deliver and drop anyway);
+        # the alarm — not redelivery — is the surface. The wake's state
+        # stays re-queryable from the marketplace once the operator fixes
+        # the cause. ``session`` is carried for correlation (which
+        # conversation's wake failed). See ADR-0019.
+        log.error(
+            "wake_inject_deterministic_failure kind=%s event_id=%s session=%s"
+            " exit=%d stdout=%r stderr=%r",
+            kind,
+            event_id,
+            session,
+            err.returncode,
+            err.stdout[-_DIAG_TAIL:],
+            err.stderr[-_DIAG_TAIL:],
+        )
     except BaseException as err:  # noqa: BLE001 — wake is best-effort
-        log.warning("wake_inject_failed kind=%s error=%s", kind, err)
+        log.warning(
+            "wake_inject_failed kind=%s event_id=%s session=%s error=%s",
+            kind, event_id, session, err,
+        )
+    # Terminal event → reclaim the conversation's session (best-effort).
+    # Runs regardless of inject outcome: a closed channel / sold listing /
+    # finished transaction is over even if its wake failed.
+    if kind in _TERMINAL_KINDS:
+        await _drain_session(ctx, kind=kind, session=session)
 
 
 __all__ = [
     "bind_ctx",
+    "derive_wake_session",
     "format_channel_wake",
     "format_notification_wake",
     "handle_channel_message",
