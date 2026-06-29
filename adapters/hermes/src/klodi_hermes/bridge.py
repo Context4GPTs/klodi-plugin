@@ -10,8 +10,11 @@ The bridge productizes that bypass. It mirrors the pattern OpenClaw's
 adapter uses against its gateway runtime (long-running process imports
 the plugin, calls ``register(ctx)`` once, stays alive so the JetStream
 consumers keep delivering). The production ctx's ``inject_message``
-shells out to ``hermes chat -q <text> --continue -Q`` to deliver each
-wake into the persona's most recent session.
+shells out to ``hermes chat -q <text> --session klodi-wake -Q`` to run
+each wake as an ISOLATED turn in a dedicated klodi session — never
+``--continue`` into the operator's live conversation. The agent reasons
+about the marketplace event with the klodi toolset and acts on its own,
+leaving the human's other chats untouched.
 
 Run shape:
   * Bridge boots; if creds are absent it polls until ``klodi_register``
@@ -23,12 +26,22 @@ Run shape:
     durable JetStream consumers.
   * The bridge sleeps on its stop event. SIGTERM / SIGINT → shutdown.
 
-Failure modes:
-  * Inject subprocess timeout — logged, swallowed. The wake handler
-    returns; the consumer acks; JetStream's ``max_deliver: 5`` does
-    NOT redeliver because the handler did not raise. Losing one wake
-    is the right tradeoff vs. wedging the consumer on a stuck chat.
-  * Inject nonzero exit — logged with truncated stderr, swallowed.
+Failure modes (two classes, deliberately distinguished here):
+  * Inject subprocess TIMEOUT — logged at WARNING, swallowed. The wake
+    handler returns; the consumer acks; JetStream's ``max_deliver: 5``
+    does NOT redeliver because nothing raised. Losing one wake is the
+    right tradeoff vs. wedging the consumer on a stuck chat — and a slow
+    LLM turn is transient, so redelivery would just re-hang.
+  * Inject fast deterministic NONZERO exit — a misconfiguration (e.g. a
+    missing/unhealthy wake session) that fails identically every wake.
+    This raises :class:`WakeInjectFailed` carrying the full subprocess
+    diagnostics (stdout INCLUDED — a quiet ``-Q`` CLI writes its error
+    there with an empty stderr). The wake handler turns it into a loud,
+    operator-visible ERROR alarm rather than silently ACKing it away.
+    Classification lives here (the only site holding both the
+    ``TimeoutExpired`` and the ``returncode`` signal); the alarm lives
+    in ``wake_handlers._inject`` (the only site holding the wake
+    correlation — ``kind``/``event_id``).
 """
 
 from __future__ import annotations
@@ -50,6 +63,45 @@ DEFAULT_INJECT_TIMEOUT_SECONDS = 120
 # is invisible during a demo and fast enough for a fresh container.
 DEFAULT_CREDS_POLL_SECONDS = 5
 
+# Dedicated, stable session every klodi wake runs in. Isolated from the
+# operator's chats by construction: no ``--continue``, a fixed
+# ``--session`` the bridge owns. Overridable via ``KLODI_WAKE_SESSION``
+# (resolved in ``bridge_main``). The wake pump's ``max_ack_pending: 1``
+# plus ``BridgeCtx._inject_lock`` serialize writes, so the single session
+# never has concurrent writers.
+KLODI_WAKE_SESSION = "klodi-wake"
+
+# Truncate captured subprocess streams to the same bound the legacy
+# WARNING used, so an alarm carrying a runaway traceback stays bounded.
+_DIAG_TAIL = 500
+
+
+class WakeInjectFailed(Exception):
+    """A wake-inject subprocess exited fast with a nonzero code.
+
+    A *deterministic* failure: the same misconfiguration (a missing or
+    unhealthy wake session, a bad flag, a missing model) fails identically
+    on every wake. Carries the full subprocess diagnostics so the wake
+    handler can raise a loud, explainable, operator-visible alarm —
+    ``stdout`` is included because a quiet (``-Q``) CLI routinely writes
+    its error there while leaving stderr empty (the field that was dropped
+    in the original bug).
+
+    Distinct from an inject *timeout*, which is transient and stays
+    swallowed-and-ACKed in :meth:`BridgeCtx.inject_message`.
+    """
+
+    __slots__ = ("returncode", "stdout", "stderr")
+
+    def __init__(self, *, returncode: int, stdout: str, stderr: str) -> None:
+        super().__init__(
+            f"wake inject exited {returncode}: "
+            f"stdout={stdout[-_DIAG_TAIL:]!r} stderr={stderr[-_DIAG_TAIL:]!r}"
+        )
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
 
 class BridgeCtx:
     """Process-scoped ctx the bridge passes to ``klodi_hermes.register``.
@@ -62,10 +114,12 @@ class BridgeCtx:
         a duplicate tool surface.
       * ``register_skill(name, path)`` — stub for the same reason.
       * ``inject_message(text, role)`` — production path. Shells out
-        to ``hermes chat -q <text> --continue -Q``; blocks until the
-        chat subprocess exits. The wake pump's ``max_ack_pending: 1``
-        already serializes deliveries, so blocking here is the right
-        shape for ordered wake processing.
+        to ``hermes chat -q <text> --session klodi-wake -Q``; blocks
+        until the chat subprocess exits. The wake pump's
+        ``max_ack_pending: 1`` already serializes deliveries, so
+        blocking here is the right shape for ordered wake processing.
+        A fast nonzero exit raises :class:`WakeInjectFailed`; a timeout
+        is logged and swallowed.
     """
 
     def __init__(
@@ -73,18 +127,20 @@ class BridgeCtx:
         *,
         hermes_bin: str,
         inject_timeout_seconds: int = DEFAULT_INJECT_TIMEOUT_SECONDS,
+        wake_session: str = KLODI_WAKE_SESSION,
         runner: Any = None,
     ) -> None:
         self._hermes_bin = hermes_bin
         self._inject_timeout_s = inject_timeout_seconds
+        self._wake_session = wake_session
         # Tests inject a stub runner. Production uses subprocess.run.
         self._run = runner if runner is not None else subprocess.run
         # Cross-consumer serialization: ``handle_notification`` and
         # ``handle_channel_message`` run on separate consumer loops, so
-        # both can fire concurrently. Hermes's ``--continue`` resumes
-        # the most-recent session by file mtime — two parallel chats
-        # against the same session would race on history. The lock
-        # holds the second inject until the first chat exits.
+        # both can fire concurrently. Every wake runs in the one shared
+        # ``klodi-wake`` session — two parallel chats against it would
+        # race on its history. The lock holds the second inject until the
+        # first chat exits.
         self._inject_lock = threading.Lock()
 
     def register_tool(self, **_kwargs: Any) -> None:
@@ -96,12 +152,19 @@ class BridgeCtx:
         return None
 
     def inject_message(self, text: str, role: str = "system") -> None:
+        """Run one isolated wake turn. Classifies the outcome:
+
+          * timeout → WARNING + return (transient; swallow stays)
+          * nonzero exit → raise :class:`WakeInjectFailed` (deterministic)
+          * exit 0 → ``wake_inject_complete`` INFO
+        """
         cmd = [
             self._hermes_bin,
             "chat",
             "-q",
             text,
-            "--continue",
+            "--session",
+            self._wake_session,
             "-Q",
         ]
         with self._inject_lock:
@@ -122,20 +185,19 @@ class BridgeCtx:
                 return
             returncode = getattr(result, "returncode", 0)
             stderr = getattr(result, "stderr", "") or ""
+            stdout = getattr(result, "stdout", "") or ""
             if returncode != 0:
-                log.warning(
-                    "wake_inject_nonzero role=%s exit=%d stderr=%r",
-                    role,
-                    returncode,
-                    stderr[-500:],
+                # Deterministic failure — surface it loudly upstream with
+                # BOTH streams (stdout closes the original silent-drop bug).
+                raise WakeInjectFailed(
+                    returncode=returncode, stdout=stdout, stderr=stderr
                 )
-            else:
-                log.info(
-                    "wake_inject_complete role=%s exit=%d len=%d",
-                    role,
-                    returncode,
-                    len(text),
-                )
+            log.info(
+                "wake_inject_complete role=%s exit=%d len=%d",
+                role,
+                returncode,
+                len(text),
+            )
 
 
 class Bridge:
@@ -147,6 +209,7 @@ class Bridge:
         klodi_home: Path,
         hermes_bin: str,
         inject_timeout_seconds: int = DEFAULT_INJECT_TIMEOUT_SECONDS,
+        wake_session: str = KLODI_WAKE_SESSION,
         creds_poll_seconds: int = DEFAULT_CREDS_POLL_SECONDS,
         ctx_factory: Any = None,
         klodi_loader: Any = None,
@@ -154,6 +217,7 @@ class Bridge:
         self._klodi_home = klodi_home
         self._hermes_bin = hermes_bin
         self._inject_timeout_s = inject_timeout_seconds
+        self._wake_session = wake_session
         self._creds_poll_s = creds_poll_seconds
         self._stop = threading.Event()
         # Test seams. Production injects sensible defaults below.
@@ -269,6 +333,7 @@ class Bridge:
         return BridgeCtx(
             hermes_bin=self._hermes_bin,
             inject_timeout_seconds=self._inject_timeout_s,
+            wake_session=self._wake_session,
         )
 
     def _default_klodi_loader(self) -> Any:
@@ -294,6 +359,8 @@ class Bridge:
 __all__ = [
     "DEFAULT_CREDS_POLL_SECONDS",
     "DEFAULT_INJECT_TIMEOUT_SECONDS",
+    "KLODI_WAKE_SESSION",
     "Bridge",
     "BridgeCtx",
+    "WakeInjectFailed",
 ]

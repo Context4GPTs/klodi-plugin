@@ -14,7 +14,7 @@ import signal
 import sys
 from pathlib import Path
 
-from klodi_hermes.bridge import Bridge
+from klodi_hermes.bridge import KLODI_WAKE_SESSION, Bridge
 
 log = logging.getLogger("klodi_hermes.bridge_main")
 
@@ -28,8 +28,13 @@ def main() -> int:
 
     klodi_home = _resolve_klodi_home()
     hermes_bin = _resolve_hermes_bin()
+    wake_session = _resolve_wake_session()
 
-    bridge = Bridge(klodi_home=klodi_home, hermes_bin=hermes_bin)
+    bridge = Bridge(
+        klodi_home=klodi_home,
+        hermes_bin=hermes_bin,
+        wake_session=wake_session,
+    )
 
     def _on_signal(signum: int, _frame: object) -> None:
         log.info("bridge_signal_received signum=%d", signum)
@@ -77,6 +82,21 @@ def _resolve_hermes_bin() -> str:
     if found:
         return found
     return "/opt/hermes/.venv/bin/hermes"
+
+
+def _resolve_wake_session() -> str:
+    """Resolve the dedicated session every wake turn runs in.
+
+    ``KLODI_WAKE_SESSION`` env override (operator-set) wins; otherwise the
+    ``klodi-wake`` constant. Mirrors ``_resolve_hermes_bin``'s shape so
+    the two operator knobs read the same way. An empty/whitespace value
+    is ignored so a blank export can never collapse the wake turn back
+    into the operator's session.
+    """
+    env = os.environ.get("KLODI_WAKE_SESSION")
+    if env and env.strip():
+        return env.strip()
+    return KLODI_WAKE_SESSION
 
 
 if __name__ == "__main__":

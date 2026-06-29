@@ -21,8 +21,10 @@ import pytest
 from klodi_hermes.bridge import (
     DEFAULT_CREDS_POLL_SECONDS,
     DEFAULT_INJECT_TIMEOUT_SECONDS,
+    KLODI_WAKE_SESSION,
     Bridge,
     BridgeCtx,
+    WakeInjectFailed,
 )
 
 
@@ -33,10 +35,15 @@ class _RecordingRunner:
     """Stub ``subprocess.run``; captures invocations + scripts results."""
 
     def __init__(self, *, returncode: int = 0, stderr: str = "",
+                 stdout: str = "",
                  raise_timeout: bool = False, sleep_s: float = 0.0) -> None:
         self.calls: list[dict[str, Any]] = []
         self.returncode = returncode
         self.stderr = stderr
+        # Configurable so failure tests can drive a quiet (-Q) CLI that
+        # writes its diagnostic to stdout with an empty stderr — the exact
+        # shape that made the bug invisible. (Was hardcoded to "".)
+        self.stdout = stdout
         self.raise_timeout = raise_timeout
         self.sleep_s = sleep_s
 
@@ -46,7 +53,9 @@ class _RecordingRunner:
             time.sleep(self.sleep_s)
         if self.raise_timeout:
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0))
-        return SimpleNamespace(returncode=self.returncode, stderr=self.stderr, stdout="")
+        return SimpleNamespace(
+            returncode=self.returncode, stderr=self.stderr, stdout=self.stdout
+        )
 
 
 def test_register_tool_and_skill_are_stubs() -> None:
@@ -57,21 +66,60 @@ def test_register_tool_and_skill_are_stubs() -> None:
     assert ctx.register_skill("klodi", Path("/tmp/SKILL.md")) is None
 
 
-def test_inject_spawns_chat_continue_with_text_and_role_logged(caplog: Any) -> None:
-    """inject_message must shell out to ``hermes chat -q <text> --continue -Q``."""
+def test_inject_spawns_isolated_wake_session_chat(caplog: Any) -> None:
+    """AC-4′ (isolation invariant): inject_message must run the wake turn
+    in a DEDICATED ``--session klodi-wake`` with NO ``--continue`` — so a
+    klodi wake never resumes (or pollutes) the operator's most-recent
+    session. The argv is the bridge's verifiable isolation mechanism."""
     runner = _RecordingRunner(returncode=0)
     ctx = BridgeCtx(hermes_bin="/opt/hermes/.venv/bin/hermes", runner=runner)
     with caplog.at_level("INFO", logger="klodi_hermes.bridge"):
         ctx.inject_message("hello wake", role="system")
     assert len(runner.calls) == 1
-    assert runner.calls[0]["cmd"] == [
+    cmd = runner.calls[0]["cmd"]
+    assert cmd == [
         "/opt/hermes/.venv/bin/hermes", "chat", "-q", "hello wake",
-        "--continue", "-Q",
+        "--session", "klodi-wake", "-Q",
     ]
+    # The isolation invariant, asserted both ways: a fixed dedicated
+    # session is present and the operator-session resume flag is absent.
+    assert "--session" in cmd and "klodi-wake" in cmd
+    assert "--continue" not in cmd
     # capture_output + text=True so we get strings back for logging.
     assert runner.calls[0]["capture_output"] is True
     assert runner.calls[0]["text"] is True
     assert any("wake_inject_complete" in r.message for r in caplog.records)
+
+
+def test_inject_uses_custom_wake_session_from_ctx() -> None:
+    """The wake session is ctx state (env-overridable) — a custom value
+    must flow into the argv, never a hardcoded literal."""
+    runner = _RecordingRunner(returncode=0)
+    ctx = BridgeCtx(
+        hermes_bin="/usr/bin/hermes", runner=runner,
+        wake_session="ops-wake",
+    )
+    ctx.inject_message("x")
+    cmd = runner.calls[0]["cmd"]
+    assert "--session" in cmd
+    assert cmd[cmd.index("--session") + 1] == "ops-wake"
+    assert "--continue" not in cmd
+
+
+def test_wake_session_constant_is_klodi_wake() -> None:
+    """No magic strings — the default wake session is a named constant."""
+    assert KLODI_WAKE_SESSION == "klodi-wake"
+
+
+def test_resolve_wake_session_honours_env_override(monkeypatch: Any) -> None:
+    """``bridge_main`` resolves the wake session from ``KLODI_WAKE_SESSION``
+    with the constant as the default — mirrors ``_resolve_hermes_bin``."""
+    from klodi_hermes.bridge_main import _resolve_wake_session
+
+    monkeypatch.delenv("KLODI_WAKE_SESSION", raising=False)
+    assert _resolve_wake_session() == KLODI_WAKE_SESSION
+    monkeypatch.setenv("KLODI_WAKE_SESSION", "ops-wake")
+    assert _resolve_wake_session() == "ops-wake"
 
 
 def test_inject_default_timeout_passed_to_runner() -> None:
@@ -102,13 +150,39 @@ def test_inject_timeout_swallowed_and_logged(caplog: Any) -> None:
     assert any("wake_inject_timeout" in r.message for r in caplog.records)
 
 
-def test_inject_nonzero_exit_logged_not_raised(caplog: Any) -> None:
-    runner = _RecordingRunner(returncode=2, stderr="hermes: missing model")
+def test_inject_nonzero_exit_raises_wake_inject_failed_with_stdout() -> None:
+    """AC-1 + AC-2 (bridge layer): a fast deterministic nonzero exit must
+    RAISE ``WakeInjectFailed`` carrying the full subprocess diagnostics —
+    crucially ``stdout``, where a quiet (-Q) CLI writes its error while
+    leaving stderr empty. This overturns the old swallow-to-WARNING
+    behaviour: a deterministic failure may not be silently dropped.
+
+    (Replaces ``test_inject_nonzero_exit_logged_not_raised`` — its very
+    name encoded the bug the fix removes.)"""
+    runner = _RecordingRunner(
+        returncode=2,
+        stdout="hermes: unknown session 'klodi-wake'",
+        stderr="",
+    )
     ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
-    with caplog.at_level("WARNING", logger="klodi_hermes.bridge"):
+    with pytest.raises(WakeInjectFailed) as ei:
         ctx.inject_message("x")
-    assert any("wake_inject_nonzero" in r.message for r in caplog.records)
-    assert any("hermes: missing model" in r.message for r in caplog.records)
+    assert ei.value.returncode == 2
+    assert "unknown session 'klodi-wake'" in ei.value.stdout
+    assert ei.value.stderr == ""
+
+
+def test_inject_nonzero_exit_carries_stderr_too() -> None:
+    """Both streams are preserved on the typed exception so the handler's
+    alarm is fully explainable regardless of where the CLI writes."""
+    runner = _RecordingRunner(
+        returncode=1, stdout="", stderr="hermes: missing model",
+    )
+    ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
+    with pytest.raises(WakeInjectFailed) as ei:
+        ctx.inject_message("x")
+    assert ei.value.returncode == 1
+    assert "missing model" in ei.value.stderr
 
 
 def test_inject_serializes_concurrent_calls() -> None:

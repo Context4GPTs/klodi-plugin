@@ -12,13 +12,17 @@ on the same loop still progresses while a slow inject is in flight.
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from klodi_hermes import wake_handlers
+from klodi_hermes.bridge import BridgeCtx, WakeInjectFailed
 
 
 @pytest.fixture(autouse=True)
@@ -150,6 +154,156 @@ async def test_inject_failure_is_caught_so_handler_returns_normally(
         )
 
     assert any("wake_inject_failed" in r.message for r in caplog.records)
+
+
+# ── Deterministic-failure alarm (Piece 1b / Piece 2) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_deterministic_failure_emits_correlated_error_alarm(
+    caplog: Any,
+) -> None:
+    """AC-1 + AC-2: when inject raises ``WakeInjectFailed`` (a fast
+    deterministic nonzero exit), the handler emits exactly ONE
+    operator-visible ERROR alarm — event ``wake_inject_deterministic_failure``
+    carrying the stdout diagnostic plus the wake's ``kind`` and
+    ``event_id`` — and returns normally (no exception propagates, so the
+    consumer still acks)."""
+
+    class _FailingCtx:
+        def inject_message(self, _text: str, role: str = "system") -> None:
+            raise WakeInjectFailed(
+                returncode=1,
+                stdout="hermes: unknown session 'klodi-wake'",
+                stderr="",
+            )
+
+    wake_handlers.bind_ctx(_FailingCtx())
+
+    with caplog.at_level("ERROR", logger="klodi_hermes.wake"):
+        await wake_handlers.handle_notification(
+            {"event_id": "evt-42", "kind": "offer.proposed",
+             "buyer_handle": "alice", "listing_id": "L1", "amount": 100},
+        )
+
+    alarms = [
+        r for r in caplog.records
+        if r.levelname == "ERROR"
+        and "wake_inject_deterministic_failure" in r.message
+    ]
+    assert len(alarms) == 1
+    msg = alarms[0].message
+    assert "unknown session 'klodi-wake'" in msg  # stdout reaches the alarm
+    assert "offer.proposed" in msg                # kind correlation
+    assert "evt-42" in msg                        # event_id correlation
+
+
+@pytest.mark.asyncio
+async def test_deterministic_failure_distinct_from_timeout_swallow(
+    caplog: Any,
+) -> None:
+    """AC-3: a timeout is swallowed in the bridge (inject_message returns
+    None after its own WARNING). The handler must NOT escalate that to the
+    deterministic-failure ERROR alarm — the two failure classes stay
+    distinct, which is the whole point of the timeout/deterministic
+    split."""
+
+    class _TimeoutSwallowCtx:
+        # Mirrors BridgeCtx on TimeoutExpired: it logs + returns None,
+        # so from the handler's view inject simply completed.
+        def inject_message(self, _text: str, role: str = "system") -> None:
+            return None
+
+    wake_handlers.bind_ctx(_TimeoutSwallowCtx())
+
+    with caplog.at_level("WARNING", logger="klodi_hermes.wake"):
+        await wake_handlers.handle_notification(
+            {"event_id": "e1", "kind": "channel.opened"},
+        )
+
+    assert not any(
+        "wake_inject_deterministic_failure" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_acks_deterministic_failure_and_never_naks(
+    caplog: Any,
+) -> None:
+    """AC-2 (integration): wiring the handler into the consumer's
+    ``_dispatch_message``, a deterministic inject failure must ACK
+    (surfaced-but-not-redelivered) and NEVER NAK. Re-delivering a
+    deterministic failure would just burn ``max_deliver`` and drop anyway
+    — the ERROR alarm is the operator surface, not redelivery.
+
+    Load-bearing guard: a future change re-raising into the NAK path the
+    product-owner explicitly rejected must fail here."""
+    from klodi_nats_client.consumers import _EventIdLru, _dispatch_message
+
+    class _FailingCtx:
+        def inject_message(self, _text: str, role: str = "system") -> None:
+            raise WakeInjectFailed(returncode=1, stdout="boom-diag", stderr="")
+
+    wake_handlers.bind_ctx(_FailingCtx())
+
+    payload = {"event_id": "e1", "kind": "offer.proposed"}
+    msg = MagicMock()
+    msg.data = json.dumps(payload).encode("utf-8")
+    msg.subject = "p2p.v1.notifications.u"
+    msg.ack = AsyncMock()
+    msg.nak = AsyncMock()
+
+    lru = _EventIdLru()
+    errors: list[BaseException] = []
+    with caplog.at_level("ERROR", logger="klodi_hermes.wake"):
+        await _dispatch_message(
+            msg, lru, wake_handlers.handle_notification, errors.append,
+        )
+
+    assert msg.ack.await_count == 1
+    assert msg.nak.await_count == 0
+    assert any(
+        "wake_inject_deterministic_failure" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_wake_session_unhealthy_surfaces_via_real_bridge_ctx(
+    caplog: Any,
+) -> None:
+    """AC-5: when the dedicated ``klodi-wake`` session can't be opened
+    (``hermes chat --session`` exits nonzero with the session named on
+    stdout), ``handle_notification`` surfaces the AC-2 ERROR alarm
+    carrying that stdout + the event_id — driven through a REAL
+    ``BridgeCtx`` so the bridge→handler stdout→alarm plumbing is
+    exercised end to end (not a hand-rolled raising stub)."""
+
+    class _Runner:
+        def __call__(self, _cmd: list[str], **_kwargs: Any) -> Any:
+            return SimpleNamespace(
+                returncode=1,
+                stdout="hermes: unknown session 'klodi-wake'",
+                stderr="",
+            )
+
+    ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=_Runner())
+    wake_handlers.bind_ctx(ctx)
+
+    with caplog.at_level("ERROR", logger="klodi_hermes.wake"):
+        await wake_handlers.handle_notification(
+            {"event_id": "evt-77", "kind": "offer.accepted",
+             "seller_handle": "bob", "listing_id": "L9"},
+        )
+
+    alarms = [
+        r for r in caplog.records
+        if "wake_inject_deterministic_failure" in r.message
+    ]
+    assert len(alarms) == 1
+    assert "unknown session 'klodi-wake'" in alarms[0].message
+    assert "evt-77" in alarms[0].message
 
 
 @pytest.mark.asyncio

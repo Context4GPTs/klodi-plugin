@@ -14,13 +14,20 @@ agents see the same shape regardless of host.
 Hermes's daemon is long-running; the connection lives for the
 daemon's lifetime, and consumer pull loops live on a dedicated
 asyncio thread (see ``client.py``). The bridge ctx's
-``inject_message`` blocks on a ``hermes chat --continue`` subprocess
-for the agent turn's duration, so the inject is dispatched off the
-loop via ``asyncio.to_thread``. Otherwise the running subprocess
-freezes the second consumer's pull-fetch and the nats-py WS
+``inject_message`` blocks on a ``hermes chat --session klodi-wake``
+subprocess for the agent turn's duration, so the inject is dispatched
+off the loop via ``asyncio.to_thread``. Otherwise the running
+subprocess freezes the second consumer's pull-fetch and the nats-py WS
 heartbeat, and the WS reconnect can't run until after the chat
 exits — at which point the consumer is dead and silently stops
 delivering wakes.
+
+Failure surface (the no-silent-drop contract): a fast deterministic
+inject failure raises :class:`klodi_hermes.bridge.WakeInjectFailed`,
+which ``_inject`` turns into a loud, correlated ERROR alarm
+(``wake_inject_deterministic_failure``) carrying the subprocess
+diagnostics plus ``kind``/``event_id``. A timeout stays a swallowed
+WARNING in the bridge. Anything else stays a best-effort WARNING here.
 """
 
 from __future__ import annotations
@@ -29,6 +36,8 @@ import asyncio
 import json
 import logging
 from typing import Any
+
+from klodi_hermes.bridge import WakeInjectFailed
 
 log = logging.getLogger("klodi_hermes.wake")
 
@@ -178,7 +187,7 @@ async def handle_notification(event: dict[str, Any]) -> None:
     event_id = str(event.get("event_id", ""))
     log.info("wake_received kind=%s event_id=%s", kind, event_id)
     text = format_notification_wake(event)
-    await _inject(text, kind=kind)
+    await _inject(text, kind=kind, event_id=event_id)
 
 
 async def handle_channel_message(event: dict[str, Any]) -> None:
@@ -188,10 +197,10 @@ async def handle_channel_message(event: dict[str, Any]) -> None:
         "wake_received kind=channel.message event_id=%s", event_id,
     )
     text = format_channel_wake(event)
-    await _inject(text, kind="channel.message")
+    await _inject(text, kind="channel.message", event_id=event_id)
 
 
-async def _inject(text: str, *, kind: str) -> None:
+async def _inject(text: str, *, kind: str, event_id: str) -> None:
     ctx = _CTX
     if ctx is None:
         log.info("wake_no_ctx kind=%s", kind)
@@ -202,15 +211,38 @@ async def _inject(text: str, *, kind: str) -> None:
         return
     try:
         # ``inject`` is sync and, in the bridge ctx, blocks on a
-        # ``hermes chat --continue`` subprocess for the agent turn's
-        # duration. Run it on a worker thread so the asyncio loop —
-        # shared by both consumer pull-fetches and the nats-py WS
-        # heartbeat — keeps ticking. Cross-inject serialization stays
-        # in ``BridgeCtx._inject_lock`` (threading.Lock), which is
-        # already correct for cross-thread callers.
+        # ``hermes chat --session klodi-wake`` subprocess for the agent
+        # turn's duration. Run it on a worker thread so the asyncio loop
+        # — shared by both consumer pull-fetches and the nats-py WS
+        # heartbeat — keeps ticking. Cross-inject serialization stays in
+        # ``BridgeCtx._inject_lock`` (threading.Lock), which is already
+        # correct for cross-thread callers.
         await asyncio.to_thread(inject, text, role="system")
+    except WakeInjectFailed as err:
+        # Deterministic failure (a misconfig that fails identically every
+        # wake): surface a LOUD, correlated, operator-visible ERROR alarm
+        # — distinct from the routine timeout WARNING that operators
+        # demonstrably did not watch. This arm is placed BEFORE the broad
+        # ``except`` so the typed failure is never downgraded to WARNING.
+        # We do NOT re-raise: the consumer still acks (re-delivering a
+        # deterministic failure would burn max_deliver and drop anyway);
+        # the alarm — not redelivery — is the surface. The wake's state
+        # stays re-queryable from the marketplace once the operator fixes
+        # the cause.
+        log.error(
+            "wake_inject_deterministic_failure kind=%s event_id=%s exit=%d"
+            " stdout=%r stderr=%r",
+            kind,
+            event_id,
+            err.returncode,
+            err.stdout[-500:],
+            err.stderr[-500:],
+        )
     except BaseException as err:  # noqa: BLE001 — wake is best-effort
-        log.warning("wake_inject_failed kind=%s error=%s", kind, err)
+        log.warning(
+            "wake_inject_failed kind=%s event_id=%s error=%s",
+            kind, event_id, err,
+        )
 
 
 __all__ = [
