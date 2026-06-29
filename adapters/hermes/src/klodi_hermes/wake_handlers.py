@@ -149,6 +149,13 @@ def _reject_traversal_entity_id(entity_id: str) -> str:
     store applies the stricter lowercase allow-list
     (``pending_decisions._validate_entity_id``) as the authoritative filename
     gate. Raises ``ValueError`` so a poisoned id never derives an entity.
+
+    Do NOT "tidy" this by tightening it to the store's lowercase pattern: the
+    two gates diverge on purpose. ``tests/test_wake_handlers.py`` feeds
+    uppercase shorthand ids (``C1`` / ``L1`` / ``L9``) through this inbound
+    boundary, and those ids never reach the store — unifying the patterns
+    would break those tests while pointlessly coupling path-safety to
+    id-formatting. The asymmetry is separation of concerns, not an oversight.
     """
     if (
         not entity_id
