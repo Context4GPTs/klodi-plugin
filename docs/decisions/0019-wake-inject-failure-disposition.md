@@ -3,7 +3,7 @@ id: 0019-wake-inject-failure-disposition
 title: Wake-inject failure disposition by class — timeout is swallowed-and-ACKed; a deterministic nonzero exit is a loud correlated alarm, never NAK/redeliver/dead-letter
 tags: [wake, error-handling, observability, alarm, consumer, ack, adapters, parity, hermes, nats]
 card: wake-inject-failures-silent-and-lost-hermes
-commit: e0c9a45
+commit: 89a08d5
 updated_at: 2026-06-29
 updated_by_card: wake-inject-failures-silent-and-lost-hermes
 ---
@@ -81,6 +81,41 @@ The invariants, held adapter-portable:
   verbatim per [[0016-wake-log-correlator-contract]] (never minted; may be `""` for a
   locally-originated wake).
 
+### Wake session model — per-conversation, `klodi:`-namespaced
+
+Every wake also runs in a **dedicated session keyed off the event** (no `--continue`, never the
+operator's session): marketplace reasoning never pollutes the human's live chat, and no single
+session grows unbounded for the daemon's lifetime. The key is derived in one typed function
+(`wake_handlers.derive_wake_session`), **prefix-keyed off the kind's domain** — not "first id
+present", because several kinds carry >1 id (`offer.accepted` has both `listing_id` **and**
+`transaction_id`; `channel.*`/`transaction.*` also carry `listing_id`):
+
+| Wake kind | `--session` key |
+|---|---|
+| `channel.opened` / `channel.message` / `channel.closed` | `klodi:<channel_id>` |
+| `offer.*` · `comment.created` · `listing.*` | `klodi:<listing_id>` |
+| `transaction.*` | `klodi:<transaction_id>` |
+| `search.match` | `klodi:<search_slug>` |
+| kind missing its key field | `klodi:wake-<event_id>` (or `klodi:wake-<uuid4>` if `event_id` is also absent) |
+
+**Why the `klodi:` namespace is load-bearing, not cosmetic.** The sibling outbound card
+`wake-outbound-roundtrip-message-and-correlation` (same epic) resolves the operator's active
+session from `runtime/active_sessions.json` and must **exclude the wake-session family** — but a
+bare entity id is syntactically indistinguishable from a session the human operator owns
+(sharpest: a `search_slug` like `vintage-camera`). The `klodi:` prefix is the only filter that
+separates the two; the colon also distinguishes it from the retired single shared `klodi-wake`
+(hyphen) session. `:` in a session id is **already established in this epic** — openclaw uses
+`agent:<id>:main` and this adapter namespaces its skill `klodi:klodi` — the prior art the
+merge-gate `:`-acceptance probe leans on.
+
+**This keying scheme is the frozen epic template.** The sibling audit card
+`audit-all-adapters-for-silent-wake-inject-failure` makes hermes the reference the 5 other
+adapters (openclaw, zeroclaw, nanobot, moltis, ironclaw) mirror — per-conversation,
+`klodi:`-namespaced sessions, never one shared session. A conversation's terminal event
+(`channel.closed`; `listing.sold/withdrawn/expired`; `transaction.completed/cancelled`) issues a
+best-effort, probe-gated `drain_session` on the same namespaced key (call site ships; hermes
+reclamation is merge-gated).
+
 ## Alternatives considered
 
 - **NAK → redeliver via `max_deliver: 5` — rejected.** A deterministic failure fails
@@ -95,22 +130,14 @@ The invariants, held adapter-portable:
   the *sole* copy of a datum.
 - **Treat all nonzero exits as transient (swallow) — rejected.** That is the original bug.
 - **Bridge asserts/creates a channel-bound session before inject — rejected and now moot.** It
-  would couple the bridge to hermes's session-storage and channel-binding internals it
-  explicitly disclaims owning (`bridge.py` module docstring). Piece 2 removes the dependency
-  entirely by running every wake in a dedicated session keyed off the event — **per
-  conversation**, not the operator's, and **namespaced under `klodi:`**: `klodi:<channel_id>`
-  for channel.*, `klodi:<listing_id>` for offer.*/comment.*/listing.*, `klodi:<transaction_id>`
-  for transaction.*, `klodi:<search_slug>` for search.match, and an ephemeral
-  `klodi:wake-<event_id>` fallback when the key field is absent — always without `--continue`.
-  The `klodi:` namespace is load-bearing: the sibling outbound card
-  (`wake-outbound-roundtrip-message-and-correlation`) resolves the operator's active session from
-  `active_sessions.json` and excludes the wake-session family by this prefix — a bare entity id
-  (esp. a `search_slug` like `vintage-camera`) is otherwise indistinguishable from an operator
-  session. (Superseding the earlier single shared `klodi-wake` session, which grew unbounded for
-  the daemon's lifetime; see `wake_handlers.derive_wake_session`. The colon namespace is distinct
-  from the retired `klodi-wake` hyphen literal. A conversation's terminal event triggers a
-  best-effort, probe-gated `drain_session` on the same namespaced key.) There is nothing on the
+  would couple the bridge to hermes's session-storage and channel-binding internals it explicitly
+  disclaims owning (`bridge.py` module docstring). The per-conversation session model (see *Wake
+  session model* above) removes the operator-session dependency entirely — there is nothing on the
   operator side to assert.
+- **One shared `klodi-wake` session for all wakes — rejected (was the first cut, superseded).** A
+  single session collapsed every marketplace conversation together and grew unbounded for the
+  daemon's lifetime (no cleanup), and a bare name is unfilterable by the outbound resolver. The
+  per-conversation `klodi:`-namespaced model replaces it; no back-compat shim was kept.
 - **Emit the alarm inside `bridge.inject_message` directly — rejected.** The bridge has
   `exit`/`stdout`/`stderr` but **not** `kind`/`event_id`, so it cannot emit one correlated line;
   one ERROR at the handler beats a bridge diag line + a handler correlation line.
@@ -142,12 +169,19 @@ line. A future change must not widen the alarm to echo a redacted field
   no re-raise). `event_id` threaded up from `handle_notification`/`handle_channel_message`;
   the alarm also carries the resolved per-conversation `session` key (so an operator can see
   which conversation's wake failed).
+- **Session keyer:** `adapters/hermes/src/klodi_hermes/wake_handlers.py` — `derive_wake_session`
+  (the single `klodi:`-prefixing site; `_WAKE_SESSION_NAMESPACE = "klodi:"` constant) and the
+  terminal-kind `drain_session` call at the dispatch seam (probe-gated, log-only).
 - **ACK seam:** `packages/nats-client-py/src/klodi_nats_client/consumers.py` —
   `_dispatch_message` ACKs on handler return, NAKs on raise. Unchanged: the disposition is chosen
   in the adapter, not the consumer.
 - **Correlator contract:** [[0016-wake-log-correlator-contract]] (`event_id` echo, never mint).
 - **Sibling audit card:** `audit-all-adapters-for-silent-wake-inject-failure`
-  (epic `wake-inject-swallow-2026-06`) — holds every adapter to INV-1/2/3.
+  (epic `wake-inject-swallow-2026-06`) — holds every adapter to INV-1/2/3 **and** mirrors the
+  per-conversation `klodi:`-namespaced session scheme (the frozen epic template).
+- **Sibling outbound card:** `wake-outbound-roundtrip-message-and-correlation`
+  (epic `wake-inject-swallow-2026-06`) — **consumes** the `klodi:` namespace: it excludes the
+  wake-session family from operator-session resolution in `active_sessions.json` by the prefix.
 - **Related:** [[0001-persistent-websocket-connection]] (transport),
   [[0011-adapter-exception-envelope]] (outbound tool-call error axis),
   [[0012-tool-request-payload-parity]] (payload rides the wake text).
