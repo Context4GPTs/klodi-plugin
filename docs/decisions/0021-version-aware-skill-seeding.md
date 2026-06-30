@@ -1,5 +1,5 @@
 ---
-id: 0020-version-aware-skill-seeding
+id: 0021-version-aware-skill-seeding
 title: Skill seeding is unconditionally version-aware (canonical bundle wins when newer); --no-reseed is demoted to accepted-but-inert and sequenced for cross-repo removal
 tags: [skill, bundle, seeding, versioning, reseed, deprecation, cross-repo, hermes, nanobot, installer, parity]
 card: make-skill-reseed-and-index-version-aware
@@ -8,7 +8,7 @@ updated_at: 2026-06-30
 updated_by_card: make-skill-reseed-and-index-version-aware
 ---
 
-# ADR-0020 — Version-aware skill seeding; `--no-reseed` demoted to inert
+# ADR-0021 — Version-aware skill seeding; `--no-reseed` demoted to inert
 
 ## Status
 

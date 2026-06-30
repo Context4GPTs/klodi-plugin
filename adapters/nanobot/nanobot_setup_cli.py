@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     # the canonical bundle always wins when newer, an equal/older bundle
     # is a no-op. The flag is still accepted (so a lagging boot script
     # does not crash) but no longer suppresses an upgrade — a wrong
-    # deploy flag must never strand a stale skill. See ADR-0020.
+    # deploy flag must never strand a stale skill. See ADR-0021.
     parser.add_argument(
         "--no-reseed",
         dest="reseed",

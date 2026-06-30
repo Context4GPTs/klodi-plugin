@@ -58,9 +58,9 @@ Marketplace events arrive on the durable JetStream consumers and are forwarded t
 
 ## Skill bundle
 
-`klodi-hermes-setup` writes the canonical skill bundle to `${KLODI_HOME}/skill/`. The same content also ships inside the wheel at `klodi_hermes/skills/klodi/`, so `_register_skills(ctx)` finds it without a filesystem lookup. Re-seed via `klodi_setup_reseed_skill`.
+`klodi-hermes-setup` writes the canonical skill bundle to `${KLODI_HOME}/skill/`. The same content also ships inside the wheel at `klodi_hermes/skills/klodi/`, so `_register_skills(ctx)` finds it without a filesystem lookup.
 
-`klodi-hermes-setup --no-reseed` skips the destructive copy if `${KLODI_HOME}/skill/` has been customised locally.
+Seeding is **version-aware**: the bundle re-seeds only when the wheel version is newer than the on-disk copy (tracked by a `.klodi-skill-version` marker), so a redeploy onto a warm volume never strands a stale skill and an up-to-date copy is left untouched (no every-boot churn). The user-editable siblings (`policies/`, `sell/`, `buy/`) are never touched. The `--no-reseed` flag is **deprecated and inert** — it no longer suppresses an upgrade (see ADR-0021). Force an unconditional re-seed with `klodi_setup_reseed_skill`.
 
 ---
 
