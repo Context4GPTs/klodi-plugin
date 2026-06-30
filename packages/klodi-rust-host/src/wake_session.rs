@@ -20,19 +20,6 @@
 //! `NotificationEvent` / `ChannelMessageEvent` enums (never dict `.get`), a new
 //! event variant forces a keying decision at compile time — fail-fast, never a
 //! silent fallthrough.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// qa-developer STUB — card/openclaw-zeroclaw-per-conversation-wake-keying (RED).
-//
-// This body is a deliberate `todo!()` so the crate still COMPILES (keeping the
-// forwarder severity tests + the rest of the crate's tests buildable and
-// runnable under the default feature set) while every keying unit test below
-// fails RED at runtime. The expert-developer REPLACES the function body with the
-// real exhaustive-match derivation; the `WAKE_SESSION_NAMESPACE` const and the
-// public signature `derive_wake_session(&WakeEvent) -> String` are the frozen
-// contract and must not change. Do NOT touch the `#[cfg(test)] mod tests` block
-// — those tests are the spec.
-// ─────────────────────────────────────────────────────────────────────────────
 
 use crate::forwarder::WakeEvent;
 use klodi_nats_client::NotificationEvent;
@@ -138,13 +125,12 @@ fn non_empty(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    //! card/openclaw-zeroclaw-per-conversation-wake-keying — RED (qa-developer).
+    //! card/openclaw-zeroclaw-per-conversation-wake-keying (Item 1, Rust port).
     //!
-    //! Spec for `derive_wake_session` (Item 1, Rust port). Mirrors the hermes
+    //! Spec for `derive_wake_session`. Mirrors the hermes
     //! `test_wake_session_keying` shapes against the frozen ADR-0019 scheme.
-    //! These fail RED against the `todo!()` stub (every call panics) and go
-    //! GREEN when the expert-developer lands the exhaustive-match body. NEVER
-    //! weaken an assertion to match a partial implementation.
+    //! These assertions ARE the spec — never weaken one to match a partial
+    //! implementation.
 
     use super::*;
     use crate::forwarder::WakeEvent;

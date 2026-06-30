@@ -17,18 +17,6 @@
  * The key carries the runtime-required `agent:<agentId>:` prefix (the heartbeat
  * runtime routes forced wakes by it — wake.ts invariant #4) with the entity
  * scoped inside the `klodi:` namespace (BR-5 separability): `agent:<agentId>:klodi:<entity_id>`.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * qa-developer STUB — card/openclaw-zeroclaw-per-conversation-wake-keying (RED).
- *
- * Returns a deliberately-wrong constant so the keying tests in
- * `__tests__/service/wake-session.test.ts` fail RED at runtime (distinctness /
- * domain-prefix / fallback) and the traversal-refusal test fails RED (no throw).
- * The expert-developer REPLACES the body with the real derivation; the
- * `WAKE_SESSION_NAMESPACE` const and the public signature
- * `deriveWakeSessionKey(agentId, event) -> string` are the frozen contract.
- * Do NOT edit the test file — those tests are the spec.
- * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import { randomUUID } from "node:crypto";

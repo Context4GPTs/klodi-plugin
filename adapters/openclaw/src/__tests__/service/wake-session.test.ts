@@ -1,6 +1,5 @@
 /**
  * card/openclaw-zeroclaw-per-conversation-wake-keying — Item 1 openclaw keying.
- * qa-developer RED.
  *
  * Spec for `deriveWakeSessionKey(agentId, event)` (the new
  * `service/wake-session.ts`). Mirrors the merged hermes `derive_wake_session`
@@ -10,9 +9,8 @@
  * `wake-<uuid4>` fallback, traversal refusal (BR-4), and the
  * `agent:<agentId>:klodi:<entity_id>` key shape (BR-5).
  *
- * These fail RED against the qa stub (a constant-returning placeholder) and go
- * GREEN when the expert-developer lands the real derivation. NEVER weaken an
- * assertion to match a partial implementation.
+ * These assertions ARE the spec — never weaken one to match a partial
+ * implementation.
  */
 import { describe, it, expect } from "vitest";
 import {

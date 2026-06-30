@@ -643,29 +643,25 @@ mod alarm_classification_red_tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// card/openclaw-zeroclaw-per-conversation-wake-keying — Item 1 zeroclaw [integration]
-// (qa-developer RED).
+// card/openclaw-zeroclaw-per-conversation-wake-keying — Item 1 zeroclaw [integration].
 //
-// The two `[integration]` ACs: under per-turn session selection the worker must
-// run a `Wake` on its derived per-entity session (`klodi:<entity_id>`) while an
+// The two `[integration]` ACs: under per-turn session selection the worker runs
+// a `Wake` on its derived per-entity session (`klodi:<entity_id>`) while an
 // operator-typed message stays on the operator's own session (BR-6) — and EVERY
 // reply still reaches the single operator `chat_id` (BR-6). The only observable
 // contract is the session_id the worker puts on the `/ws/chat` handshake and the
 // `chat_id` it forwards the reply to; both are captured at the transport boundary
 // (a scripted WS + a Telegram wiremock).
 //
-// These COMPILE today (the `WorkerCtx.operator_session_id` stub field is in place)
-// and fail RED at RUNTIME: `run_worker` still routes every event to the
-// ChatClient's fixed constructor session. The expert-developer turns them GREEN by
-// (a) moving the session id off the constructor into a per-turn
-// `ChatClient::send_and_wait(session_id, content)`, and (b) selecting in
-// `run_worker`: `Wake(w) => derive_wake_session(w)`, `OperatorMessage => ctx.operator_session_id`.
-// The ChatClient is constructed below with a SENTINEL constructor session that the
-// per-turn worker MUST ignore; if the refactor drops the constructor `session_id`
-// param, update these two constructions in lockstep — do NOT weaken the assertions.
+// `run_worker` selects the session per turn —
+// `Wake(w) => derive_wake_session(w)`, `OperatorMessage => ctx.operator_session_id`
+// — and runs it through `ChatClient::send_and_wait(session_id, content)`. The
+// ChatClient is constructed below with a SENTINEL constructor session the per-turn
+// worker MUST ignore: these tests LOCK that the constructor session is never used.
+// Do NOT weaken the assertions.
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
-mod per_turn_session_red_tests {
+mod per_turn_session_tests {
     use super::*;
 
     use crate::telegram::TelegramClient;

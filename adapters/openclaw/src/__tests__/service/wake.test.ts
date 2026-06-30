@@ -349,9 +349,9 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
     // `entry_exists`/`store_*` survive only as INFO fields on `wake_enqueued`.
     //
     // This INVERTS the #34 test (which asserted the alarm fires) per the card's
-    // confirmed requirement change. It fails RED while the ERROR block still
-    // fires; GREEN once the expert-developer removes it. Distillation MUST update
-    // ADR-0019's openclaw row + the deferred-follow-up note.
+    // confirmed requirement change: the `wake_dead_session` ERROR escalation is
+    // removed, so no operator-visible alarm fires on a first-contact session.
+    // Distillation updates ADR-0019's openclaw row + the deferred-follow-up note.
     it("does NOT fire a wake_dead_session ERROR on a first-contact no-entry session (OQ-2)", async () => {
       // Canonical wake target `agent:main:main` is ABSENT; the only live session
       // is an explicit TUI one. Under OQ-2 this is legitimate first-contact, NOT
@@ -836,14 +836,15 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // card/openclaw-zeroclaw-per-conversation-wake-keying — Item 2 (qa-developer RED).
+  // card/openclaw-zeroclaw-per-conversation-wake-keying — Item 2 (qa-developer).
   //
   // The two deterministic `wake_failed` alarms must carry the in-scope
   // `...correlator` (kind/event_id) so a failed wake is tie-able to its wire
   // event on dashboards — matching the adjacent `wake_enqueued` INFO line and the
   // ADR-0019 cross-adapter alarm contract. Today the enqueue ERROR (wake.ts:84)
   // and the heartbeat WARN (:120) omit it. `null` event_id is fine for a
-  // local-origin wake (BR-7). These fail RED until `...correlator` is spread in.
+  // local-origin wake (BR-7). Both alarms spread `...correlator` so a failed
+  // wake is tie-able to its wire event.
   // ─────────────────────────────────────────────────────────────────────────
   describe("wake_failed alarm correlator parity (Item 2)", () => {
     it("enqueue-stage ERROR carries the kind+event_id correlator when present", async () => {
