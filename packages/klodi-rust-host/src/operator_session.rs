@@ -16,6 +16,7 @@
 use crate::forwarder::WakeEvent;
 use crate::telegram::{TelegramClient, TelegramError};
 use crate::telegram_config;
+use crate::wake_session::derive_wake_session;
 use crate::zeroclaw_chat::{ChatClient, ChatError};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -76,6 +77,7 @@ pub struct OperatorSessionController {
 impl OperatorSessionController {
     pub fn spawn(
         chat_id: i64,
+        operator_session_id: String,
         chat: Arc<ChatClient>,
         telegram: Arc<TelegramClient>,
         klodi_home: PathBuf,
@@ -85,11 +87,7 @@ impl OperatorSessionController {
         let join = tokio::spawn(run_worker(
             WorkerCtx {
                 chat_id,
-                // qa STUB: the operator session today IS the ChatClient's bound
-                // session; the expert-developer threads the daemon-supplied
-                // operator_session_id through `spawn` (architect: "daemon threads
-                // operator_session_id into the controller/worker").
-                operator_session_id: chat.session_id().to_string(),
+                operator_session_id,
                 chat,
                 telegram,
                 klodi_home,
@@ -105,21 +103,25 @@ struct WorkerCtx {
     chat: Arc<ChatClient>,
     telegram: Arc<TelegramClient>,
     klodi_home: PathBuf,
-    // card/openclaw-zeroclaw-per-conversation-wake-keying — qa STUB field.
-    // The operator's own (non-wake) session. `run_worker` must select this for
-    // `OperatorMessage` events (BR-6) and `derive_wake_session(wake)` for `Wake`
-    // events, threading the chosen id into the per-turn `send_and_wait`. The
-    // expert-developer wires the selection + removes this `allow` once the field
-    // is read. Stubbed now so the crate compiles and the integration tests in
-    // `per_turn_session_red_tests` fail at RUNTIME, not at compile time.
-    #[allow(dead_code)]
+    /// The operator's own (non-wake) session — the daemon-resolved
+    /// `${KLODI_HOME}/zeroclaw.session`. `run_worker` runs `OperatorMessage`
+    /// turns on this (BR-6); `Wake` turns run on `derive_wake_session(wake)`.
     operator_session_id: String,
 }
 
 async fn run_worker(ctx: WorkerCtx, mut rx: mpsc::Receiver<InboundEvent>) {
     while let Some(event) = rx.recv().await {
+        // Per-turn session (ADR-0019): a wake runs on its own per-conversation
+        // `klodi:<entity_id>` key (`derive_wake_session`); an operator-typed
+        // message carries no entity and stays on the operator's session (BR-6).
+        // Either way the reply is forwarded to the single operator `chat_id`
+        // below, so the human keeps one unified Telegram view (BR-6).
+        let session_id = match &event {
+            InboundEvent::Wake(wake) => derive_wake_session(wake),
+            InboundEvent::OperatorMessage { .. } => ctx.operator_session_id.clone(),
+        };
         let prompt = format_prompt(&event);
-        let outcome = match ctx.chat.send_and_wait(&prompt).await {
+        let outcome = match ctx.chat.send_and_wait(&session_id, &prompt).await {
             Ok(o) => o,
             Err(err) => {
                 log_chat_turn_error(&event, &err);
@@ -547,7 +549,6 @@ mod alarm_classification_red_tests {
         let chat = Arc::new(ChatClient::new(
             format!("http://127.0.0.1:{port}"),
             "tok".into(),
-            "session-1".into(),
         ));
         // Never reached on the error path (the worker `continue`s before send).
         let telegram = Arc::new(TelegramClient::with_base(
@@ -605,7 +606,6 @@ mod alarm_classification_red_tests {
             ChatClient::new(
                 format!("http://127.0.0.1:{port}"),
                 "tok".into(),
-                "session-1".into(),
             )
             .with_turn_timeout(Duration::from_millis(150)),
         );
@@ -731,8 +731,6 @@ mod per_turn_session_red_tests {
         }
     }
 
-    const SENTINEL_SESSION: &str = "SENTINEL-IGNORED-CONSTRUCTOR-SESSION";
-
     /// `[integration]` BR-6 — an operator-typed Telegram message (no entity) runs
     /// on the OPERATOR's own session, NOT a per-entity wake session.
     #[tokio::test]
@@ -746,7 +744,6 @@ mod per_turn_session_red_tests {
         let chat = Arc::new(ChatClient::new(
             format!("http://127.0.0.1:{port}"),
             "tok".into(),
-            SENTINEL_SESSION.into(),
         ));
         let telegram = Arc::new(TelegramClient::with_base(
             "BOT".into(),
@@ -812,7 +809,6 @@ mod per_turn_session_red_tests {
         let chat = Arc::new(ChatClient::new(
             format!("http://127.0.0.1:{port}"),
             "tok".into(),
-            SENTINEL_SESSION.into(),
         ));
         let telegram = Arc::new(TelegramClient::with_base("BOT".into(), tg.uri()));
         let ctx = WorkerCtx {

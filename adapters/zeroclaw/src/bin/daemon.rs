@@ -123,11 +123,9 @@ async fn main() -> Result<()> {
     })?;
 
     let telegram = Arc::new(TelegramClient::new(telegram_cfg.bot_token.clone()));
-    let chat = Arc::new(ChatClient::new(
-        cli.zeroclaw_http_base.clone(),
-        bearer,
-        session_id.clone(),
-    ));
+    // One ChatClient per operator; the per-turn session_id is chosen by the
+    // worker (a wake's `klodi:<entity_id>` key, or the operator session below).
+    let chat = Arc::new(ChatClient::new(cli.zeroclaw_http_base.clone(), bearer));
 
     tracing::info!(
         handle = %identity.handle,
@@ -141,6 +139,7 @@ async fn main() -> Result<()> {
 
     let controller = OperatorSessionController::spawn(
         telegram_cfg.chat_id,
+        session_id.clone(),
         chat.clone(),
         telegram.clone(),
         klodi_home.clone(),
