@@ -26,7 +26,7 @@ this resolver *consumes* to exclude the bot's own sessions (see Decision).
 
 `klodi_message_user` is how a klodi agent actively reaches its human operator when a
 marketplace decision is policy-reserved (negotiation_style.md / a security.md hard rule).
-It runs **inside** the isolated `hermes chat --session klodi:<entity_id>` wake turn, so it
+It runs **inside** the isolated `hermes chat … --source klodi` wake turn, so it
 must reach the operator's *separate* live session **without running an agent turn there**
 (the Piece-3 no-hijack requirement).
 
@@ -49,10 +49,12 @@ disproved both guesses and surfaced two non-obvious facts that force the design:
    platform** (`telegram`/`signal`/`cli`/…). The assumed `active_sessions.json` never
    existed. Three sub-facts bite: (a) the SQL orders by `started_at DESC`, **not**
    `last_active`, so recency must be re-ranked by the **numeric** `last_active` in Python
-   (this also kills the prior lexical-`max`-over-a-string bug); (b) a `klodi:` wake session
-   **cannot** be excluded via `exclude_sources` — its `source` is the host CLI `source`
-   (default `cli`), and the `klodi:<entity_id>` marker lands on the session **id/title** —
-   so exclusion is an id/title-prefix guard; (c) the row carries **no `chat_id`** — the
+   (this also kills the prior lexical-`max`-over-a-string bug); (b) wake sessions are
+   excluded **by source** via `exclude_sources=["klodi"]` — each wake runs
+   `hermes chat --source klodi`, persisting `source=klodi` on the session row, so the query
+   filters the whole family server-side *(this **supersedes** the v0.3.6 design, which set no
+   source tag and so could only exclude by an id/title-prefix guard on `klodi:<entity_id>` —
+   see the 2026-06-30 amendment)*; (c) the row carries **no `chat_id`** — the
    deliverable `(platform, chat_id)` is recovered from
    `gateway.channel_directory.load_directory()["platforms"][source]`.
 
@@ -65,10 +67,11 @@ Bind both seams to the host's own primitives — the way Hermes's cron path itse
   over a `gateway.config.load_gateway_config()` platform config (must be `enabled`), driven
   via `_run_send` (the cron runner's `asyncio.run`-with-thread-fallback so a possibly-async
   tool caller never reenters a live loop). Platform-agnostic, needs no live gateway adapter.
-- **Operator resolution** — `resolve_operator_target()` over `SessionDB.list_sessions_rich`,
-  re-ranked newest-first by numeric `last_active`, the `klodi:` wake family excluded by
-  id/title prefix (`_is_wake_session`), the chosen session's `source` mapped to a deliverable
-  `chat_id` via `gateway.channel_directory`. First reachable session wins.
+- **Operator resolution** — `resolve_operator_target()` over
+  `SessionDB.list_sessions_rich(exclude_sources=["klodi"])`, re-ranked newest-first by numeric
+  `last_active`, the wake family excluded **by source** at the query (each wake runs
+  `--source klodi`), the chosen session's `source` mapped to a deliverable `chat_id` via
+  `gateway.channel_directory`. First reachable session wins.
 - **No default fallback channel** (founder decision). The target is *always* a resolved live
   operator; a genuinely-absent operator surfaces a loud `no_operator_target` envelope — never
   a silent drop, never a configured default. The retired `KLODI_FALLBACK_*` env contract and
@@ -91,8 +94,8 @@ exercises the real bindings.
   the registry is `SessionDB` (fact 2). The whole assumed-schema loader was deleted.
 - **A configured default channel (`KLODI_FALLBACK_*`)** — rejected by founder: the robust
   design resolves the live operator; a default would silently misdirect an escalation.
-- **`hermes chat --session … -Q`** (the verb the inbound bridge uses) — rejected: it runs an
-  agent turn in the target session — the opposite of the no-hijack requirement.
+- **`hermes chat … -Q --source klodi`** (the verb the inbound bridge uses) — rejected: it runs
+  an agent turn in the target session — the opposite of the no-hijack requirement.
 - **Telegram Bot API direct** (porting `klodi-rust-host/src/telegram.rs`) — rejected by
   founder: single-platform patchwork re-implementing transport the host already owns.
 
@@ -122,18 +125,45 @@ exercises the real bindings.
 ## Security implications
 
 No default channel means an escalation can never be misdirected to a statically-configured
-chat — the resolver only ever targets a *live* operator session, and the `klodi:` exclusion
-prevents self-addressing into the bot's own isolated wake transcript (the highest product
-risk: the human would never see the message). The adapter reads the host-owned `state.db` and
+chat — the resolver only ever targets a *live* operator session, and the source-based
+exclusion (`exclude_sources=["klodi"]`) prevents self-addressing into the bot's own isolated
+wake transcript (the highest product risk: the human would never see the message). The
+adapter reads the host-owned `state.db` and
 channel directory **read-only**; it owns neither. No marketplace payload rides the delivery
 metadata — only the operator-authored escalation `text`.
+
+## Amendment (2026-06-30) — card `fix-hermes-wake-inject-session-flag-argv`
+
+The inbound bridge's wake-inject argv was found to use a `session`-named flag that **no
+hermes version defines** — every wake `sys.exit(2)`'d with `unrecognized arguments`, so the
+relay had been fully down. The fix runs each wake as a fresh isolated session tagged
+`hermes chat … -Q --source klodi` (the inbound card's [[0019-wake-inject-failure-disposition]]
+amendment carries the rationale). Because a wake session is now created **with a `klodi` source
+tag**, the outbound exclusion this ADR depends on changed shape:
+
+- **Fact 2(b) is superseded.** It is no longer true that a wake session "cannot be excluded via
+  `exclude_sources`". It now **is** — `resolve_operator_target` filters the family at the store
+  query with `SessionDB.list_sessions_rich(exclude_sources=["klodi"])`, and the title-prefix
+  `_is_wake_session` guard was **deleted** (a fresh wake session is untitled, so the old guard
+  no longer matched it anyway). Source-based exclusion is strictly better: it also keeps the
+  `_SESSION_SCAN_LIMIT` recency window from filling with wake sessions and crowding out a
+  genuine operator.
+- **Self-addressing safety is preserved** (the highest product risk): the `klodi`-sourced wake
+  session is filtered at the query, and as defence in depth `klodi` is not a messaging platform
+  in `gateway.channel_directory`, so it resolves to no `chat_id` regardless.
+- **Pin caveat (residual).** `exclude_sources` and `--source` were confirmed on hermes v0.17.0
+  (`nousresearch/hermes-agent:v2026.6.19`); prod-alice pins v0.11.0 (`v2026.4.23`). On a host
+  that does not honour `exclude_sources`, `_list_operator_sessions` degrades to `[]` (the call
+  raises → the existing `except` → cold path), surfacing a loud `no_operator_target` rather than
+  self-addressing — safe-by-default. Re-confirm on the deployed pin or bump it (klodi-stage
+  Dockerfile-pin discipline).
 
 ## References
 
 - **Delivery seam:** `adapters/hermes/src/klodi_hermes/message.py` — `_deliver`, `_run_send`
   (mirrors `cron/scheduler.py::_deliver_result`).
-- **Resolver:** `message.py` — `resolve_operator_target`, `_list_operator_sessions`,
-  `_resolve_chat_id`, `_is_wake_session`, `_last_active`.
+- **Resolver:** `message.py` — `resolve_operator_target`, `_list_operator_sessions`
+  (sets `exclude_sources=["klodi"]`), `_resolve_chat_id`, `_last_active`.
 - **Spec:** `docs/specs/hosts/hermes.md` §4a (binding), §7 (`$HERMES_HOME` layout), §9 (env).
 - **Inbound sibling:** [[0019-wake-inject-failure-disposition]] (the `klodi:` wake-session
   model this resolver excludes; the inbound failure-disposition axis).

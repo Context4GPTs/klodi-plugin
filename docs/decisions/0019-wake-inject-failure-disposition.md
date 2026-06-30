@@ -81,16 +81,24 @@ The invariants, held adapter-portable:
   verbatim per [[0016-wake-log-correlator-contract]] (never minted; may be `""` for a
   locally-originated wake).
 
-### Wake session model — per-conversation, `klodi:`-namespaced
+### Wake session model — per-conversation key, fresh `--source klodi` session per wake
 
-Every wake also runs in a **dedicated session keyed off the event** (no `--continue`, never the
-operator's session): marketplace reasoning never pollutes the human's live chat, and no single
-session grows unbounded for the daemon's lifetime. The key is derived in one typed function
+> **Corrected 2026-06-30** (card `fix-hermes-wake-inject-session-flag-argv`): the original design
+> below shelled `hermes chat` with a `session`-named flag, but **no hermes version defines one**
+> and `hermes chat` cannot mint a session by name (`--continue <name>` errors on first contact).
+> Each wake now runs a **fresh isolated session** tagged `hermes chat … -Q --source klodi`. The
+> per-conversation key in the table is still derived — it keys the outbound pending-decision (via
+> the spawn env) and correlates the wake's log line — but it is **no longer a CLI argument**. See
+> the amendment at the foot of this ADR.
+
+Every wake also runs in a **dedicated, isolated session** (never the operator's session): marketplace
+reasoning never pollutes the human's live chat, and — because each wake is single-turn — no session
+grows unbounded for the daemon's lifetime. The per-conversation key is derived in one typed function
 (`wake_handlers.derive_wake_session`), **prefix-keyed off the kind's domain** — not "first id
 present", because several kinds carry >1 id (`offer.accepted` has both `listing_id` **and**
 `transaction_id`; `channel.*`/`transaction.*` also carry `listing_id`):
 
-| Wake kind | `--session` key |
+| Wake kind | wake-session key (env-keyed + log-correlated) |
 |---|---|
 | `channel.opened` / `channel.message` / `channel.closed` | `klodi:<channel_id>` |
 | `offer.*` · `comment.created` · `listing.*` | `klodi:<listing_id>` |
@@ -98,16 +106,16 @@ present", because several kinds carry >1 id (`offer.accepted` has both `listing_
 | `search.match` | `klodi:<search_slug>` |
 | kind missing its key field | `klodi:wake-<event_id>` (or `klodi:wake-<uuid4>` if `event_id` is also absent) |
 
-**Why the `klodi:` namespace is load-bearing, not cosmetic.** The sibling outbound card
-`wake-outbound-roundtrip-message-and-correlation` (same epic) resolves the operator's active
-session from the host's SQLite session store (`hermes_state.SessionDB`, per
-[[0020-operator-escalation-delivery-binding]]) and must **exclude the wake-session family** —
-but a bare entity id is syntactically indistinguishable from a session the human operator owns
-(sharpest: a `search_slug` like `vintage-camera`). The `klodi:` prefix is the only filter that
-separates the two; the colon also distinguishes it from the retired single shared `klodi-wake`
-(hyphen) session. `:` in a session id is **already established in this epic** — openclaw uses
-`agent:<id>:main` and this adapter namespaces its skill `klodi:klodi` — the prior art the
-merge-gate `:`-acceptance probe leans on.
+**Why the `klodi:` key namespace is load-bearing, not cosmetic.** The key namespaces every wake's
+outbound pending-decision id and its log/alarm correlation line under `klodi:`, keeping it
+distinguishable through the round-trip; the colon also distinguishes it from the retired single
+shared `klodi-wake` (hyphen) session, so the "no shared session" assertion stays meaningful.
+**Outbound exclusion no longer leans on this prefix** (corrected 2026-06-30, card
+`fix-hermes-wake-inject-session-flag-argv`): the sibling outbound resolver
+(`message.resolve_operator_target`, per [[0020-operator-escalation-delivery-binding]]) excludes the
+wake-session family **by source** — `SessionDB.list_sessions_rich(exclude_sources=["klodi"])`, since
+each wake now runs `--source klodi`. The earlier id/title-prefix guard (`_is_wake_session`) was
+**deleted**: a fresh `--source`-tagged wake session is untitled, so the prefix never lands on it.
 
 **This keying scheme is the frozen epic template.** The sibling audit card
 `audit-all-adapters-for-silent-wake-inject-failure` makes hermes the reference the 5 other
@@ -158,7 +166,7 @@ in card `openclaw-zeroclaw-per-conversation-wake-keying` (PR #35) — see the am
 
 - **The `wake-<event_id>` ephemeral fallback is not re-validated for traversal** — faithful to the
   frozen hermes "safe by construction" claim (`event_id` is host-minted; `wake_handlers.py:188-189`).
-  In the openclaw + zeroclaw sinks the residual risk is lower than hermes' CLI `--session` +
+  In the openclaw + zeroclaw sinks the residual risk is lower than hermes' wake-session-key +
   pending-filename sink (openclaw → `enqueueSystemEvent({sessionKey})`; rust →
   `percent_encode_session` onto a WS query param, where `/`→`%2F`), so it was deliberately NOT
   hardened in PR #35 (doing so would diverge from the frozen scheme that card was mandated to
@@ -187,6 +195,32 @@ rather than silently rewritten so the #34 → #35 sequence stays auditable.
    gate would only ever false-fire — paging on every new negotiation. `entry_exists`/`store_*` stay
    as INFO diagnostics on `wake_enqueued`. INV-1 (never *silently* lost) is unaffected: the enqueue
    failure ERROR (`wake_failed`) remains the loud surface for a genuine deterministic failure.
+
+### Amendment (2026-06-30) — card `fix-hermes-wake-inject-session-flag-argv`
+
+The hermes realization of the *Wake session model* above shelled `hermes chat` with a
+`session`-named flag (`hermes chat -q <text> <flag> <key> -Q`), but **no hermes version defines
+one**: every wake `sys.exit(2)`'d with
+`unrecognized arguments`, the bridge raised `WakeInjectFailed`, and (per INV-1 above) ACKed — so
+the relay had been silently down on prod alice. Confirmed three ways: the live error on both pins
+(`v2026.4.23`=v0.11.0, `v2026.6.19`=v0.17.0), the captured `hermes chat --help` argparse surface,
+and the in-image parser source (only `--resume`/`--continue` exist). The founder's `--continue
+klodi:<id>` candidate was **ruled out at source level**: hermes resolves `--continue <name>` against
+`SessionDB` and `sys.exit(1)`s on an unknown name (error-on-unknown-name, *not* create-on-first-use),
+so every first-contact wake — the common case — would fail; `--resume <id>` shares that resolver and
+also reintroduces per-entity session-id state.
+
+**The fix:** each wake runs a **fresh isolated session** via `hermes chat -q <text> -Q --source klodi`
+(`bridge.KLODI_WAKE_SOURCE`). The per-conversation key (table above) survives only as the
+env-keying + log-correlation id, not a CLI argument. The `--source klodi` tag also unblocked the
+cleaner outbound exclusion (`exclude_sources=["klodi"]`) — see
+[[0020-operator-escalation-delivery-binding]]'s 2026-06-30 amendment. **Scope is hermes-only:** this
+ADR's per-conversation keying *template* is unchanged, and openclaw/zeroclaw realize it through their
+own session APIs (not a hermes CLI), so they are unaffected by this defect. Residual: `--source` is
+re-confirmed on v0.17.0 but not on the prod-alice v0.11.0 pin — re-confirm or bump (klodi-stage
+Dockerfile-pin discipline). The `drain_session` probe-gate is now also resolvable
+(`hermes sessions delete <id>` is confirmed) but, since each wake is single-turn under this fix, is
+left as a separate simplification decision.
 
 ## Alternatives considered
 
