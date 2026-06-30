@@ -16,7 +16,7 @@
 use crate::forwarder::WakeEvent;
 use crate::telegram::{TelegramClient, TelegramError};
 use crate::telegram_config;
-use crate::zeroclaw_chat::ChatClient;
+use crate::zeroclaw_chat::{ChatClient, ChatError};
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
@@ -108,10 +108,7 @@ async fn run_worker(ctx: WorkerCtx, mut rx: mpsc::Receiver<InboundEvent>) {
         let outcome = match ctx.chat.send_and_wait(&prompt).await {
             Ok(o) => o,
             Err(err) => {
-                tracing::warn!(
-                    error = %err,
-                    "klodi_zeroclaw_chat_turn_failed"
-                );
+                log_chat_turn_error(&event, &err);
                 continue;
             }
         };
@@ -156,6 +153,55 @@ async fn run_worker(ctx: WorkerCtx, mut rx: mpsc::Receiver<InboundEvent>) {
         }
     }
     tracing::info!("klodi_zeroclaw_operator_session_inbox_drained");
+}
+
+/// Classify a failed `/ws/chat` turn and log it at the right severity.
+///
+/// zeroclaw ACKs the NATS message at *dispatch* time (`daemon.rs`), so this
+/// post-ACK worker is the ONLY place a relay failure can surface — redelivery
+/// is structurally impossible. A deterministic failure (a misconfig that fails
+/// identically every wake — a stale/GC'd session the gateway rejects with an
+/// error frame, a bad bearer, a malformed handshake/request/frame) therefore
+/// gets a DISTINCT, operator-alertable ERROR alarm carrying the cause plus the
+/// wake `kind`/`event_id` for correlation. A transient failure (timeout, a
+/// dropped/early-closed transport) keeps the routine WARN — redelivery can't
+/// help here but it is not a misconfig operators must page on. Generalises the
+/// `BadToken → tracing::error!` Telegram arm; mirrors the merged hermes
+/// `wake_inject_deterministic_failure` template (ADR-0019). The `ChatError`
+/// match is exhaustive on purpose: a new variant must be classified, never
+/// silently swept into a catch-all.
+fn log_chat_turn_error(event: &InboundEvent, err: &ChatError) {
+    let (kind, event_id) = chat_turn_correlation(event);
+    match err {
+        ChatError::Gateway { .. }
+        | ChatError::Handshake(_)
+        | ChatError::Request(_)
+        | ChatError::Encode(_) => tracing::error!(
+            error = %err,
+            kind = kind,
+            event_id = %event_id,
+            "klodi_zeroclaw_chat_turn_deterministic_failure"
+        ),
+        ChatError::Timeout(_) | ChatError::Transport(_) | ChatError::EarlyClose => {
+            tracing::warn!(
+                error = %err,
+                kind = kind,
+                event_id = %event_id,
+                "klodi_zeroclaw_chat_turn_failed"
+            )
+        }
+    }
+}
+
+/// The `(kind, event_id)` correlation pair carried on a chat-turn alarm.
+fn chat_turn_correlation(event: &InboundEvent) -> (&str, String) {
+    match event {
+        InboundEvent::Wake(wake) => (wake.kind(), wake.event_id().to_string()),
+        InboundEvent::OperatorMessage {
+            telegram_message_id,
+            ..
+        } => ("operator.message", format!("telegram:{telegram_message_id}")),
+    }
 }
 
 fn format_prompt(event: &InboundEvent) -> String {
