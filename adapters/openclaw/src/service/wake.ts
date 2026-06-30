@@ -75,7 +75,13 @@ export async function wakeAgent(
   try {
     await api.runtime.system.enqueueSystemEvent(text, { sessionKey });
   } catch (err) {
-    api.logger.warn("wake_failed", {
+    // An enqueue failure is DETERMINISTIC (a missing sessionKey, a malformed
+    // event — re-enqueue re-fails), so ACK stays correct: we return without
+    // rethrowing and never fire the heartbeat (it would flush an empty queue).
+    // But the failure is raised to ERROR, not WARN — operators demonstrably
+    // do not watch WARN (the hermes Bug-2 shape). The alarm, not redelivery,
+    // is the surface. Mirrors hermes's wake_inject_deterministic_failure.
+    api.logger.error("wake_failed", {
       reason,
       stage: "enqueue",
       sessionKey,
@@ -83,12 +89,27 @@ export async function wakeAgent(
     });
     return;
   }
+  const snapshot = inspectSessionStore(api, sessionKey);
   api.logger.info("wake_enqueued", {
     reason,
     sessionKey,
     ...correlator,
-    ...inspectSessionStore(api, sessionKey),
+    ...snapshot,
   });
+  // Bug 3 (silent-success): the enqueue SUCCEEDED, but the resolved session
+  // has no entry in the store — the wake lands on a dead session the user
+  // never reads (e.g. canonical `agent:<id>:main` while the only live session
+  // is an explicit TUI one). That is not buried as an INFO field: a confirmed
+  // dead target raises a distinct operator-visible ERROR alarm. Gated on
+  // `store_read === "ok"` so a missing/unreadable store (best-effort snapshot,
+  // genuinely unknown) does not page a false alarm — see the snapshot docstring.
+  if (snapshot.store_read === "ok" && snapshot.entry_exists === false) {
+    api.logger.error("wake_dead_session", {
+      reason,
+      sessionKey,
+      ...snapshot,
+    });
+  }
   const heartbeatReason = `hook:klodi:${reason}`;
   try {
     api.runtime.system.requestHeartbeatNow({

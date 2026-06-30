@@ -3,9 +3,9 @@ id: 0019-wake-inject-failure-disposition
 title: Wake-inject failure disposition by class — timeout is swallowed-and-ACKed; a deterministic nonzero exit is a loud correlated alarm, never NAK/redeliver/dead-letter
 tags: [wake, error-handling, observability, alarm, consumer, ack, adapters, parity, hermes, nats]
 card: wake-inject-failures-silent-and-lost-hermes
-commit: 89a08d5
-updated_at: 2026-06-29
-updated_by_card: wake-inject-failures-silent-and-lost-hermes
+commit: 611750d
+updated_at: 2026-06-30
+updated_by_card: audit-all-adapters-for-silent-wake-inject-failure
 ---
 
 # ADR-0019 — Wake-inject failure disposition by failure class
@@ -115,6 +115,43 @@ adapters (openclaw, zeroclaw, nanobot, moltis, ironclaw) mirror — per-conversa
 (`channel.closed`; `listing.sold/withdrawn/expired`; `transaction.completed/cancelled`) issues a
 best-effort, probe-gated `drain_session` on the same namespaced key (call site ships; hermes
 reclamation is merge-gated).
+
+## Cross-adapter realization (audit `audit-all-adapters-for-silent-wake-inject-failure`)
+
+The audit confirmed this disposition is the **family contract**, not a hermes quirk, and
+applied it across the five non-hermes adapters in three languages. The split is identical
+everywhere: a *deterministic* relay failure (one that fails identically on redelivery) emits
+**one distinct ERROR** carrying the diagnostic in a field **not** in `REDACTED_FIELD_NAMES`
+plus `kind`+`event_id`, and ACKs (redelivery can't help — the alarm is the surface); a
+*transient* failure stays WARN and keeps its existing redeliver/NAK disposition. Each
+adapter's event name lives in its own `klodi_*` / `*_publish_*` / `wake_*` family so
+dashboards stay per-host legible, but the shape is the same.
+
+| Adapter (site) | Deterministic ERROR event | Non-redacted diagnostic field | Disposition |
+|---|---|---|---|
+| zeroclaw `packages/klodi-rust-host/src/operator_session.rs` | `klodi_zeroclaw_chat_turn_deterministic_failure` | `error` (+`kind`/`event_id`) | **post-ACK alarm only** — NATS ACKs at *dispatch* (`adapters/zeroclaw/src/bin/daemon.rs`), so redelivery is structurally impossible and the ERROR is the only surface. Moving the ACK post-turn is the **ruled-out anti-fix** (breaks the daemon's <50ms ack contract). |
+| moltis + ironclaw (shared `packages/klodi-rust-host/src/forwarder.rs`, const `WAKE_FORWARD_DETERMINISTIC_FAILURE`) | `klodi_wake_forward_deterministic_failure` | `response_body` (NOT `body` — `body` ∈ `REDACTED_FIELD_NAMES`) | 4xx → ERROR + **ACK** (`Ok`, stop futile redeliver-then-drop); 5xx / transport / timeout → WARN + **NAK** (`Err`). One edit fixes both adapters. |
+| nanobot `adapters/nanobot/nanobot_daemon.py` (const `_DETERMINISTIC_ALARM`) | `nanobot_publish_deterministic_failure` | `stdout`+`stderr` (logging `stdout` closes the Bug-1 diagnostic-loss gap) | deterministic → ERROR + ACK (typed `PublishOutcome`, no raise); transient (timeout) → raise → NAK. |
+| openclaw `adapters/openclaw/src/service/wake.ts` | `wake_failed` (ERROR, `stage:"enqueue"`) and `wake_dead_session` (ERROR) | `sessionKey` + best-effort store snapshot | enqueue deterministic → ERROR + **ACK** (early `return`, no heartbeat); dead-session → ERROR **additive** to the INFO `wake_enqueued` line. |
+
+**Known deviation (one).** openclaw's two ERROR alarms (`wake_failed` `wake.ts:84`,
+`wake_dead_session` `wake.ts:107`) **omit** the `kind`/`event_id` correlator the other four
+deterministic alarms carry — even though the adjacent `wake_enqueued` INFO line already spreads
+it via `...correlator` (`wake.ts:96`). The alarms still fire loudly at ERROR with `sessionKey`
+plus the diagnostic; only the cross-adapter correlation field is missing. Spread `...correlator`
+into both payloads with the follow-up below (`null` for a local-origin wake is fine).
+
+**Deferred follow-ups (epic `wake-inject-swallow-2026-06`).**
+
+- **Bug-3 per-conversation session keying** (openclaw `resolveAgentSessionKey`, zeroclaw session
+  resume). The audit shipped only the *alarm surfacing* — an alarm fires when a wake resolves to a
+  confirmed-dead session — which is keying-independent. The FINAL fix must mirror the merged hermes
+  per-conversation keying (the *Wake session model* table above), now **unblocked** since hermes
+  Piece-2 (`derive_wake_session`) merged on `main`.
+- **rust-http ERROR-severity test.** `HttpStructuredHandler::with_sink` (default `StdSink`) now
+  exists, so the deferred 4xx→one-ERROR-on-`response_body` vs 5xx/transport→WARN-only severity
+  assertion is writable. The load-bearing `Ok`/`Err` disposition is already tested; zeroclaw +
+  nanobot already assert ERROR severity on sibling seams.
 
 ## Alternatives considered
 

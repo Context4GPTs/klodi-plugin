@@ -16,7 +16,7 @@
 //! never silently drops a wake.
 
 use anyhow::{Context, Result};
-use klodi_logger::KlodiLogger;
+use klodi_logger::{KlodiLogger, LoggerSink};
 use klodi_nats_client::{
     ChannelMessageEvent, KlodiClient, KlodiError, NotificationEvent,
 };
@@ -226,6 +226,12 @@ async fn dispatch(state: &SharedState, event: WakeEvent) -> Result<(), KlodiErro
 
 // --- Structured-HTTP handler (Moltis / IronClaw) -----------------------------
 
+/// Distinct, operator-alertable ERROR event for a deterministic (4xx)
+/// wake-forward failure. Reconciled with the merged hermes
+/// `wake_inject_deterministic_failure` template (ADR-0019); named in the
+/// existing `klodi_wake_forward_*` family so dashboards stay legible.
+const WAKE_FORWARD_DETERMINISTIC_FAILURE: &str = "klodi_wake_forward_deterministic_failure";
+
 /// Wake handler that POSTs each event as JSON to a local host wake URL.
 /// The host acks on receipt and runs the agent in the background, so
 /// per-attempt timeouts are bounded short — a stalled host surfaces
@@ -262,6 +268,57 @@ impl HttpStructuredHandler {
             logger,
         })
     }
+
+    /// Redirect this handler's logger to an injected sink. Production wires
+    /// the default `StdSink` (via `new`); tests pass a `CaptureSink` so the
+    /// alarm SEVERITY (4xx ERROR vs 5xx/transport WARN) is assertable — the
+    /// log stream is otherwise uncapturable from a unit test.
+    pub fn with_sink(mut self, sink: Arc<dyn LoggerSink>) -> Self {
+        self.logger = KlodiLogger::new(format!(
+            "klodi-rust-host.{}.forwarder",
+            self.log_event_prefix
+        ))
+        .with_sink(sink);
+        self
+    }
+
+    /// Classify a non-2xx wake-forward response and pick the disposition.
+    ///
+    /// A **4xx** is deterministic (bad URL / bad token / malformed payload —
+    /// it fails identically on every redelivery): emit the distinct ERROR
+    /// alarm and ACK (`Ok`) so JetStream stops the futile redeliver-then-drop;
+    /// the alarm, not redelivery, is the operator surface. Anything else
+    /// non-success (5xx, and any other non-2xx) is treated as transient: keep
+    /// the WARN and NAK (`Err`) so JetStream redelivers. The diagnostic rides
+    /// on `response_body` (NOT in `REDACTED_FIELD_NAMES`, unlike `body`) so the
+    /// alarm stays explainable. Mirrors the hermes deterministic/transient split.
+    fn classify_non_success(
+        &self,
+        event: &WakeEvent,
+        status: reqwest::StatusCode,
+        body: String,
+    ) -> Result<(), KlodiError> {
+        if status.is_client_error() {
+            let mut fields: HashMap<String, Value> = HashMap::new();
+            fields.insert("kind".into(), json!(event.kind()));
+            fields.insert("event_id".into(), json!(event.event_id()));
+            fields.insert("status".into(), json!(status.as_u16()));
+            fields.insert("response_body".into(), json!(body));
+            fields.insert("prefix".into(), json!(self.log_event_prefix));
+            self.logger
+                .error_msg(WAKE_FORWARD_DETERMINISTIC_FAILURE, Some(fields));
+            return Ok(());
+        }
+        let mut fields: HashMap<String, Value> = HashMap::new();
+        fields.insert("kind".into(), json!(event.kind()));
+        fields.insert("status".into(), json!(status.as_u16()));
+        fields.insert("body".into(), json!(body));
+        fields.insert("prefix".into(), json!(self.log_event_prefix));
+        self.logger.warn("klodi_wake_forward_non_2xx", Some(fields));
+        Err(KlodiError::NatsPublish(format!(
+            "wake POST returned {status}"
+        )))
+    }
 }
 
 impl WakeHandler for HttpStructuredHandler {
@@ -280,17 +337,11 @@ impl WakeHandler for HttpStructuredHandler {
                 Ok(resp) => {
                     let status = resp.status();
                     let txt = resp.text().await.unwrap_or_default();
-                    let mut fields: HashMap<String, Value> = HashMap::new();
-                    fields.insert("kind".into(), json!(event.kind()));
-                    fields.insert("status".into(), json!(status.as_u16()));
-                    fields.insert("body".into(), json!(txt));
-                    fields.insert("prefix".into(), json!(self.log_event_prefix));
-                    self.logger.warn("klodi_wake_forward_non_2xx", Some(fields));
-                    Err(KlodiError::NatsPublish(format!(
-                        "wake POST returned {status}"
-                    )))
+                    self.classify_non_success(event, status, txt)
                 }
                 Err(err) => {
+                    // Transport / timeout = transient → NAK so JetStream
+                    // redelivers (a stalled or unreachable host may recover).
                     let mut fields: HashMap<String, Value> = HashMap::new();
                     fields.insert("kind".into(), json!(event.kind()));
                     fields.insert("error".into(), json!(err.to_string()));
@@ -354,5 +405,123 @@ mod tests {
         assert_eq!(json["kind"], "channel.message");
         assert_eq!(json["event_id"], "e2");
         assert_eq!(json["payload"]["sequence"], 42);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // card/audit-all-adapters-for-silent-wake-inject-failure — RED (qa-developer)
+    //
+    // Seam 2 — shared rust-http forwarder (moltis + ironclaw) (ACs 2, 3, 4).
+    //
+    // `HttpStructuredHandler::handle` (:267-307) today maps EVERY non-2xx AND
+    // every transport error to WARN + `Err`, which `dispatch` propagates into a
+    // JetStream NAK / redeliver-then-drop. There is NO 4xx-deterministic vs
+    // 5xx/transient distinction, so a deterministic 4xx (bad URL / bad token /
+    // bad payload) redelivers pointlessly and then drops silently after
+    // `max_deliver` — never alarmed, never terminal. The fix (per ADR-0019's
+    // deterministic→ACK call, mirrored per language) classifies the HTTP status:
+    //
+    //   - 4xx  = deterministic → `logger.error(…_deterministic_failure)` + ACK
+    //            (return `Ok(())`) — stop the futile redeliver-then-drop;
+    //   - 5xx / transport / timeout = transient → keep WARN + `Err` (NAK).
+    //
+    // These tests assert the load-bearing, observable-today DISPOSITION
+    // (`Ok` = ACK vs `Err` = NAK). The 4xx test fails RED (handler returns `Err`
+    // today); the 5xx + transport tests are GUARDS (already `Err`, must stay
+    // `Err`).
+    //
+    // NOTE — the DISTINCT ERROR-severity alarm (ACs 2/3) is NOT asserted here:
+    // `HttpStructuredHandler::new` builds its `KlodiLogger` internally on
+    // `StdSink`, with no injection point, so the log stream is uncapturable from
+    // a unit test. GREEN must add a `LoggerSink`/`KlodiLogger` injection on the
+    // handler (the `klodi-logger` crate already ships `CaptureSink` + `with_sink`);
+    // qa adds the severity assertion (4xx → one ERROR alarm carrying status+body;
+    // 5xx/transport → WARN only) once that seam exists. See the GREEN handoff.
+    use wiremock::matchers::method as wm_method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn wake_for_test() -> WakeEvent {
+        let evt = NotificationEvent::ListingCreated {
+            event_id: "e-http-1".into(),
+            listing_id: "l1".into(),
+            title: Some("vintage chair".into()),
+        };
+        WakeEvent::Notification {
+            kind: evt.kind().to_string(),
+            event_id: evt.event_id().to_string(),
+            user_id: "u1".into(),
+            payload: evt,
+        }
+    }
+
+    fn handler_for(wake_url: String) -> HttpStructuredHandler {
+        HttpStructuredHandler::new(
+            wake_url,
+            Some("tok".into()),
+            "klodi-test/0".into(),
+            "klodi_test".into(),
+            std::time::Duration::from_secs(5),
+        )
+        .expect("building HttpStructuredHandler")
+    }
+
+    /// AC 4 (+ AC 2) — a deterministic 4xx must ACK (`Ok`) so the wake is not
+    /// redelivered-then-silently-dropped; the alarm, not redelivery, is the
+    /// surface. Fails RED: the handler returns `Err` on every non-2xx today.
+    #[tokio::test]
+    async fn handle_4xx_acks_with_ok_to_stop_futile_redelivery() {
+        let server = MockServer::start().await;
+        Mock::given(wm_method("POST"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad token"))
+            .mount(&server)
+            .await;
+
+        let handler = handler_for(server.uri());
+        let event = wake_for_test();
+        let result = handler.handle(&event).await;
+
+        assert!(
+            result.is_ok(),
+            "a deterministic 4xx must ACK (Ok) — redelivering it just burns \
+             max_deliver and drops silently; got {result:?}",
+        );
+    }
+
+    /// AC 3 — a 5xx is transient: keep the NAK (`Err`) so JetStream redelivers.
+    /// GUARD: passes today, must keep passing after the 4xx/5xx split lands.
+    #[tokio::test]
+    async fn handle_5xx_naks_with_err_to_redeliver_transient() {
+        let server = MockServer::start().await;
+        Mock::given(wm_method("POST"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+            .mount(&server)
+            .await;
+
+        let handler = handler_for(server.uri());
+        let event = wake_for_test();
+        let result = handler.handle(&event).await;
+
+        assert!(
+            result.is_err(),
+            "a transient 5xx must NAK (Err) so JetStream redelivers; got {result:?}",
+        );
+    }
+
+    /// AC 3 — a transport error (connection refused) is transient: keep the NAK
+    /// (`Err`). GUARD: passes today, must keep passing.
+    #[tokio::test]
+    async fn handle_transport_error_naks_with_err() {
+        // Bind then drop to get a definitely-closed port → connection refused.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let handler = handler_for(format!("http://127.0.0.1:{port}/"));
+        let event = wake_for_test();
+        let result = handler.handle(&event).await;
+
+        assert!(
+            result.is_err(),
+            "a transport error must NAK (Err) so JetStream redelivers; got {result:?}",
+        );
     }
 }
