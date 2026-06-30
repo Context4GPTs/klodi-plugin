@@ -32,6 +32,12 @@ from typing import Any, Optional
 
 from klodi_nats_client import KLODI_DEFAULT_API_URL, default_klodi_home
 
+from .hermes_installer import copy_skill_tree, resolve_skill_version
+
+# The distribution whose wheel version is the canonical bundle version
+# stamped into the freshness marker on a force-reseed.
+_DISTRIBUTION = "klodi-hermes"
+
 
 log = logging.getLogger("klodi_hermes.local_tools")
 
@@ -353,8 +359,11 @@ def _handle_setup_reseed_skill(
 ) -> str:
     # Per Decision 2 of the 0012 first-pass review: re-run the canonical
     # skill bundle copy from ${plugin_dir}/skills/klodi/ into
-    # ${klodi_home}/skill/. Force-overwrite (the bundle is the source of
-    # truth; user-editable files live under policies/ + sell/ + buy/).
+    # ${klodi_home}/skill/. This is the explicit FORCE escape hatch — it
+    # is UNCONDITIONAL (the bundle is the source of truth; user-editable
+    # files live under policies/ + sell/ + buy/). It routes through the
+    # shared copy+stamp primitive so the force leaves a correct freshness
+    # marker, keeping the install-time version-aware path consistent.
     source = _bundled_skill_dir()
     target = _klodi_home() / "skill"
     if not source.is_dir():
@@ -363,12 +372,10 @@ def _handle_setup_reseed_skill(
             "skill_seeded": False,
             "error": f"bundled skill source missing at {source}",
         })
-    _klodi_home().mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        shutil.rmtree(target)
-    shutil.copytree(source, target)
-    log.info("skill_reseeded source=%s target=%s", source, target)
-    return _json({"skill_seeded": True, "target": str(target)})
+    version = resolve_skill_version(_DISTRIBUTION)
+    copy_skill_tree(source, target, version)
+    log.info("skill_reseeded source=%s target=%s version=%s", source, target, version)
+    return _json({"skill_seeded": True, "target": str(target), "version": version})
 
 
 def _handle_setup_reseed_policies(
