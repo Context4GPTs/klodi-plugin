@@ -16,7 +16,7 @@
 //! never silently drops a wake.
 
 use anyhow::{Context, Result};
-use klodi_logger::KlodiLogger;
+use klodi_logger::{KlodiLogger, LoggerSink};
 use klodi_nats_client::{
     ChannelMessageEvent, KlodiClient, KlodiError, NotificationEvent,
 };
@@ -226,6 +226,12 @@ async fn dispatch(state: &SharedState, event: WakeEvent) -> Result<(), KlodiErro
 
 // --- Structured-HTTP handler (Moltis / IronClaw) -----------------------------
 
+/// Distinct, operator-alertable ERROR event for a deterministic (4xx)
+/// wake-forward failure. Reconciled with the merged hermes
+/// `wake_inject_deterministic_failure` template (ADR-0019); named in the
+/// existing `klodi_wake_forward_*` family so dashboards stay legible.
+const WAKE_FORWARD_DETERMINISTIC_FAILURE: &str = "klodi_wake_forward_deterministic_failure";
+
 /// Wake handler that POSTs each event as JSON to a local host wake URL.
 /// The host acks on receipt and runs the agent in the background, so
 /// per-attempt timeouts are bounded short — a stalled host surfaces
@@ -262,6 +268,57 @@ impl HttpStructuredHandler {
             logger,
         })
     }
+
+    /// Redirect this handler's logger to an injected sink. Production wires
+    /// the default `StdSink` (via `new`); tests pass a `CaptureSink` so the
+    /// alarm SEVERITY (4xx ERROR vs 5xx/transport WARN) is assertable — the
+    /// log stream is otherwise uncapturable from a unit test.
+    pub fn with_sink(mut self, sink: Arc<dyn LoggerSink>) -> Self {
+        self.logger = KlodiLogger::new(format!(
+            "klodi-rust-host.{}.forwarder",
+            self.log_event_prefix
+        ))
+        .with_sink(sink);
+        self
+    }
+
+    /// Classify a non-2xx wake-forward response and pick the disposition.
+    ///
+    /// A **4xx** is deterministic (bad URL / bad token / malformed payload —
+    /// it fails identically on every redelivery): emit the distinct ERROR
+    /// alarm and ACK (`Ok`) so JetStream stops the futile redeliver-then-drop;
+    /// the alarm, not redelivery, is the operator surface. Anything else
+    /// non-success (5xx, and any other non-2xx) is treated as transient: keep
+    /// the WARN and NAK (`Err`) so JetStream redelivers. The diagnostic rides
+    /// on `response_body` (NOT in `REDACTED_FIELD_NAMES`, unlike `body`) so the
+    /// alarm stays explainable. Mirrors the hermes deterministic/transient split.
+    fn classify_non_success(
+        &self,
+        event: &WakeEvent,
+        status: reqwest::StatusCode,
+        body: String,
+    ) -> Result<(), KlodiError> {
+        if status.is_client_error() {
+            let mut fields: HashMap<String, Value> = HashMap::new();
+            fields.insert("kind".into(), json!(event.kind()));
+            fields.insert("event_id".into(), json!(event.event_id()));
+            fields.insert("status".into(), json!(status.as_u16()));
+            fields.insert("response_body".into(), json!(body));
+            fields.insert("prefix".into(), json!(self.log_event_prefix));
+            self.logger
+                .error_msg(WAKE_FORWARD_DETERMINISTIC_FAILURE, Some(fields));
+            return Ok(());
+        }
+        let mut fields: HashMap<String, Value> = HashMap::new();
+        fields.insert("kind".into(), json!(event.kind()));
+        fields.insert("status".into(), json!(status.as_u16()));
+        fields.insert("body".into(), json!(body));
+        fields.insert("prefix".into(), json!(self.log_event_prefix));
+        self.logger.warn("klodi_wake_forward_non_2xx", Some(fields));
+        Err(KlodiError::NatsPublish(format!(
+            "wake POST returned {status}"
+        )))
+    }
 }
 
 impl WakeHandler for HttpStructuredHandler {
@@ -280,17 +337,11 @@ impl WakeHandler for HttpStructuredHandler {
                 Ok(resp) => {
                     let status = resp.status();
                     let txt = resp.text().await.unwrap_or_default();
-                    let mut fields: HashMap<String, Value> = HashMap::new();
-                    fields.insert("kind".into(), json!(event.kind()));
-                    fields.insert("status".into(), json!(status.as_u16()));
-                    fields.insert("body".into(), json!(txt));
-                    fields.insert("prefix".into(), json!(self.log_event_prefix));
-                    self.logger.warn("klodi_wake_forward_non_2xx", Some(fields));
-                    Err(KlodiError::NatsPublish(format!(
-                        "wake POST returned {status}"
-                    )))
+                    self.classify_non_success(event, status, txt)
                 }
                 Err(err) => {
+                    // Transport / timeout = transient → NAK so JetStream
+                    // redelivers (a stalled or unreachable host may recover).
                     let mut fields: HashMap<String, Value> = HashMap::new();
                     fields.insert("kind".into(), json!(event.kind()));
                     fields.insert("error".into(), json!(err.to_string()));
