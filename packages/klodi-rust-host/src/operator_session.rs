@@ -29,7 +29,10 @@ const INBOX_CAPACITY: usize = 64;
 #[derive(Debug, Clone)]
 pub enum InboundEvent {
     /// Marketplace wake from NATS (offer, channel message, transaction…).
-    Wake(WakeEvent),
+    /// Boxed: `WakeEvent` dwarfs the other variant (272 vs 32 bytes), so an
+    /// unboxed enum would bloat every queued `InboundEvent` in the inbox
+    /// channel (clippy `large_enum_variant`).
+    Wake(Box<WakeEvent>),
     /// Operator-typed message from Telegram.
     OperatorMessage {
         text: String,
@@ -304,7 +307,7 @@ mod tests {
 
     #[test]
     fn format_prompt_wake_includes_kind_and_payload() {
-        let prompt = format_prompt(&InboundEvent::Wake(wake_for_test()));
+        let prompt = format_prompt(&InboundEvent::Wake(Box::new(wake_for_test())));
         assert!(prompt.starts_with("[wake] kind=listing.created event_id=e1"));
         assert!(prompt.contains("\"channel\""));
         assert!(prompt.contains("\"kind\": \"listing.created\""));
@@ -487,6 +490,9 @@ mod alarm_classification_red_tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         port_tx.send(listener.local_addr().unwrap().port()).unwrap();
         let (stream, _) = listener.accept().await.unwrap();
+        // tungstenite's accept_hdr callback must return `Result<_, ErrorResponse>`;
+        // the large Err type is the external API's, not ours.
+        #[allow(clippy::result_large_err)]
         let callback = |_req: &HsRequest, response: HsResponse| Ok(response);
         let ws = tokio_tungstenite::accept_hdr_async(stream, callback)
             .await
@@ -564,7 +570,7 @@ mod alarm_classification_red_tests {
         };
 
         let (etx, erx) = mpsc::channel::<InboundEvent>(4);
-        etx.send(InboundEvent::Wake(wake_for_test())).await.unwrap();
+        etx.send(InboundEvent::Wake(Box::new(wake_for_test()))).await.unwrap();
         drop(etx); // close the inbox so the worker drains one event then exits
 
         run_worker(ctx, erx).await;
@@ -622,7 +628,7 @@ mod alarm_classification_red_tests {
         };
 
         let (etx, erx) = mpsc::channel::<InboundEvent>(4);
-        etx.send(InboundEvent::Wake(wake_for_test())).await.unwrap();
+        etx.send(InboundEvent::Wake(Box::new(wake_for_test()))).await.unwrap();
         drop(etx);
 
         run_worker(ctx, erx).await;
@@ -690,6 +696,9 @@ mod per_turn_session_tests {
         port_tx.send(listener.local_addr().unwrap().port()).unwrap();
         let (stream, _) = listener.accept().await.unwrap();
         let slot = captured_uri.clone();
+        // tungstenite's accept_hdr callback must return `Result<_, ErrorResponse>`;
+        // the large Err type is the external API's, not ours.
+        #[allow(clippy::result_large_err)]
         let callback = move |req: &HsRequest, response: HsResponse| {
             *slot.lock().unwrap() = Some(req.uri().to_string());
             Ok(response)
@@ -816,7 +825,7 @@ mod per_turn_session_tests {
         };
 
         let (etx, erx) = mpsc::channel::<InboundEvent>(4);
-        etx.send(InboundEvent::Wake(wake_offer_l1())).await.unwrap();
+        etx.send(InboundEvent::Wake(Box::new(wake_offer_l1()))).await.unwrap();
         drop(etx);
         run_worker(ctx, erx).await;
         let _ = server.await;

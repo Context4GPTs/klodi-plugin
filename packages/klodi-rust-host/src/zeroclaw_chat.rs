@@ -361,6 +361,9 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         port_tx.send(listener.local_addr().unwrap().port()).unwrap();
         let (stream, _) = listener.accept().await.unwrap();
+        // tungstenite's accept_hdr callback must return `Result<_, ErrorResponse>`;
+        // the large Err type is the external API's, not ours.
+        #[allow(clippy::result_large_err)]
         let callback = |_req: &Request, response: Response| Ok(response);
         let ws = tokio_tungstenite::accept_hdr_async(stream, callback)
             .await
@@ -521,6 +524,10 @@ mod tests {
                     if n > cur_max {
                         max_seen.store(n, Ordering::SeqCst);
                     }
+                    // tungstenite's accept_hdr callback must return
+                    // `Result<_, ErrorResponse>`; the large Err type is the
+                    // external API's, not ours.
+                    #[allow(clippy::result_large_err)]
                     let cb = |_req: &Request, response: Response| Ok(response);
                     let mut ws = tokio_tungstenite::accept_hdr_async(stream, cb).await.unwrap();
                     ws.send(ServerMessage::Text(

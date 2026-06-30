@@ -305,7 +305,7 @@ struct InboxWakeHandler {
 impl WakeHandler for InboxWakeHandler {
     fn handle<'a>(&'a self, event: &'a WakeEvent) -> WakeHandlerFuture<'a> {
         Box::pin(async move {
-            match self.inbox.dispatch(InboundEvent::Wake(event.clone())) {
+            match self.inbox.dispatch(InboundEvent::Wake(Box::new(event.clone()))) {
                 Ok(()) => {
                     tracing::info!(
                         kind = %event.kind(),
