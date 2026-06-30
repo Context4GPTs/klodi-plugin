@@ -87,6 +87,11 @@ _TOOL_EMOJIS: dict[str, str] = {
     "klodi_searches_create": "👁️",
     "klodi_searches_list": "📔",
     "klodi_match_feedback": "👍",
+    # Host-local outbound wake round-trip tools (message.py /
+    # pending_decisions.py register these; the emoji source-of-truth stays
+    # here).
+    "klodi_message_user": "📣",
+    "klodi_pending_decisions": "📌",
 }
 
 
@@ -384,6 +389,9 @@ def _is_local_tool(name: str) -> bool:
         # this module
         "klodi_channel_message",
         "klodi_match_feedback",
+        # message.py / pending_decisions.py — outbound wake round-trip
+        "klodi_message_user",
+        "klodi_pending_decisions",
     }
 
 

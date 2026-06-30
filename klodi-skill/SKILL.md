@@ -28,6 +28,8 @@ Call `klodi_setup_status`. When `phase !== "ready"`, load `references/setup_firs
 
 When `phase === "ready"`, read `${klodi_home}/sell/*.md` and `${klodi_home}/buy/*.md` and surface any `## Open Questions` or `## Active Negotiations` before asking "what would you like?". Resolve `${klodi_home}` from `klodi_setup_status.config.klodi_home` — never hardcode.
 
+On **every** operator turn, before responding, call `klodi_pending_decisions` to load the open human-in-the-loop decisions you escalated earlier (see §3a). A free-text reply ("yes", "counter at 40", "pass") carries no wake payload to trigger this — scanning is the only thing that closes the round-trip, so an unscanned reply is silently never correlated. When the operator's message answers one, re-ground the entity's *current* state via the klodi read tools (`klodi_offer_mine`, `klodi_channel_history`, `klodi_tx_status`, `klodi_list_get`) before acting — the pending record is a pointer, not a snapshot, and the entity may have moved on (offer countered, channel closed, listing sold). Act on that exact entity; the decision then resolves. With more than one open decision, bind on the entity identity carried in your original message — never guess.
+
 ## 3. Wake events → action
 
 Every wake carries the full event payload as a JSON code block. Use `klodi_*_history` / `klodi_list_get` / `klodi_tx_status` only when fresh state is needed.
@@ -51,6 +53,12 @@ Every wake carries the full event payload as a JSON code block. Use `klodi_*_his
 Process queued events in arrival order. `event_id` is unique; `max_ack_pending: 1` keeps deliveries serialized. Per-kind payload schemas live in `references/wake_payload_reference.md`.
 
 Standing searches live on the marketplace. Matches arrive as `search.match` wakes. The buy file carries query criteria and dialogue state — no timing fields, no client-side scheduling.
+
+### 3a. Reaching the operator — `klodi_message_user`
+
+A wake runs in an isolated session, away from the operator's live chat. When that turn hits a decision **reserved for the human** — any `## Always Ask Me First` item, an unresolved `## Escalation When Unknown`, or a `security.md` hard rule — call `klodi_message_user(text)` to actively reach out, *in addition to* the durable `## Open Questions` note (belt-and-suspenders: the ping is real-time, the note is the next-session safety net). Do **not** reach out for wakes your policy authorizes you to handle autonomously, nor for purely informational wakes (default off — see `negotiation_style.md` `## Reaching Out`) — that keeps the channel high-signal.
+
+The message must be **self-contained**. The operator reads it in their normal chat, possibly hours later, with none of this turn's context — so name *what* (the listing title), *who* (the counterparty handle), *what's asked*, and the options, enough that a natural-language reply is interpretable. Their reply lands on their own session; you close the loop by scanning `klodi_pending_decisions` per §2.
 
 ## 4. Acting on user intent
 

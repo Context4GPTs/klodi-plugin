@@ -32,6 +32,8 @@ from typing import Any
 
 from .client import close_client
 from .local_tools import register_local_tools
+from .message import register_message_tools
+from .pending_decisions import register_pending_tools
 from .register import register_register_tools
 from .tools import register_request_tools
 from .wake_handlers import bind_ctx
@@ -71,6 +73,10 @@ def register(ctx: Any) -> None:
     local_tools = register_local_tools(ctx)
     local_tools += register_register_tools(ctx)
     local_tools += register_watch_tools(ctx, None)
+    # Outbound wake round-trip (host-local, not catalog tools): the
+    # escalation tool and the reply-correlation read tool.
+    local_tools += register_message_tools(ctx)
+    local_tools += register_pending_tools(ctx)
 
     # Open the connection and wire wake handlers. This must happen
     # AFTER tool registration so the agent sees the toolset even if

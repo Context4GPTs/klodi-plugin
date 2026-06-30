@@ -53,12 +53,24 @@ Failure modes (two classes, deliberately distinguished here — see ADR-0019):
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("klodi_hermes.bridge")
+
+# Spawn-env keystone (Piece-3/4 of the outbound round-trip). The bridge —
+# the only site that already computes a wake's per-entity key for
+# ``--session`` — also threads that entity identity to the in-subprocess
+# ``klodi_message_user`` tool via these env vars, so the outbound
+# pending-decision is keyed by the SAME id the wake turn runs under,
+# deterministically (bridge-computed, never LLM-supplied). The bare entity
+# id here equals the ``--session`` key minus its ``klodi:`` namespace.
+KLODI_WAKE_ENTITY_ID_ENV = "KLODI_WAKE_ENTITY_ID"
+KLODI_WAKE_ENTITY_TYPE_ENV = "KLODI_WAKE_ENTITY_TYPE"
+KLODI_WAKE_EVENT_ID_ENV = "KLODI_WAKE_EVENT_ID"
 
 # How long to give ``hermes chat -q --continue`` to process a single
 # wake. The command blocks on the LLM; 120s leaves room for a normal
@@ -161,7 +173,14 @@ class BridgeCtx:
         return None
 
     def inject_message(
-        self, text: str, role: str = "system", *, session: str
+        self,
+        text: str,
+        role: str = "system",
+        *,
+        session: str,
+        entity_type: str = "",
+        entity_id: str = "",
+        event_id: str = "",
     ) -> None:
         """Run one wake turn in its conversation's session. Classifies:
 
@@ -173,6 +192,14 @@ class BridgeCtx:
         ``wake_handlers.derive_wake_session`` and threaded down — a wake
         never resumes the operator's session (no ``--continue``) and never
         shares one global session across conversations.
+
+        ``entity_type`` / ``entity_id`` / ``event_id`` are the wake's
+        marketplace identity (``wake_handlers.derive_wake_entity``); they
+        ride on the spawn env (``KLODI_WAKE_*``) so the in-subprocess
+        ``klodi_message_user`` tool keys its pending-decision by the same
+        id the turn runs under. The env MUST be the merged ``{**os.environ,
+        ...}`` — a bare dict carrying only the wake vars would strip
+        ``PATH`` and break the spawn.
         """
         cmd = [
             self._hermes_bin,
@@ -183,6 +210,12 @@ class BridgeCtx:
             session,
             "-Q",
         ]
+        env = {
+            **os.environ,
+            KLODI_WAKE_ENTITY_ID_ENV: entity_id,
+            KLODI_WAKE_ENTITY_TYPE_ENV: entity_type,
+            KLODI_WAKE_EVENT_ID_ENV: event_id,
+        }
         with self._inject_lock:
             try:
                 result = self._run(
@@ -191,6 +224,7 @@ class BridgeCtx:
                     capture_output=True,
                     text=True,
                     timeout=self._inject_timeout_s,
+                    env=env,
                 )
             except subprocess.TimeoutExpired:
                 log.warning(
@@ -396,6 +430,9 @@ class Bridge:
 __all__ = [
     "DEFAULT_CREDS_POLL_SECONDS",
     "DEFAULT_INJECT_TIMEOUT_SECONDS",
+    "KLODI_WAKE_ENTITY_ID_ENV",
+    "KLODI_WAKE_ENTITY_TYPE_ENV",
+    "KLODI_WAKE_EVENT_ID_ENV",
     "Bridge",
     "BridgeCtx",
     "WakeInjectFailed",
