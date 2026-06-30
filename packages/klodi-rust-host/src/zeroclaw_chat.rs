@@ -65,7 +65,11 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Tolerance window for the post-handshake `session_start` frame.
 const SESSION_START_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Single-flight WS chat client. One instance per operator session id.
+/// Single-flight WS chat client. One instance per operator; the target
+/// `session_id` is chosen PER TURN (`send_and_wait`), not bound at
+/// construction — the zeroclaw worker keys each wake to its own
+/// per-conversation session (`klodi:<entity_id>`, ADR-0019) while operator
+/// messages stay on the operator's session.
 ///
 /// `send_and_wait` serialises concurrent callers via the in-flight
 /// mutex; that's the contract the gateway requires (only one in-flight
@@ -73,7 +77,6 @@ const SESSION_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct ChatClient {
     http_base: String,
     bearer: String,
-    session_id: String,
     turn_timeout: Duration,
     in_flight: tokio::sync::Mutex<()>,
 }
@@ -118,14 +121,13 @@ struct OutboundMessage<'a> {
 
 impl ChatClient {
     /// Build a new client. `http_base` is `http(s)://host:port` (no path).
-    /// The session_id must already exist on the gateway — typically minted
-    /// by `klodi-zeroclaw-register` and persisted at
-    /// `${KLODI_HOME}/zeroclaw.session`.
-    pub fn new(http_base: String, bearer: String, session_id: String) -> Self {
+    /// The target `session_id` is supplied per turn to `send_and_wait`, not
+    /// here — each turn resumes (or, on first contact, mints on the gateway)
+    /// the conversation's own session.
+    pub fn new(http_base: String, bearer: String) -> Self {
         Self {
             http_base: http_base.trim_end_matches('/').to_string(),
             bearer,
-            session_id,
             turn_timeout: DEFAULT_TURN_TIMEOUT,
             in_flight: tokio::sync::Mutex::new(()),
         }
@@ -139,17 +141,18 @@ impl ChatClient {
         self
     }
 
-    /// Persistent session id this client is bound to.
-    pub fn session_id(&self) -> &str {
-        &self.session_id
-    }
-
-    /// Send `content` as a `message` frame and wait for the matching
-    /// `done.full_response`. Serial per ChatClient instance.
-    pub async fn send_and_wait(&self, content: &str) -> Result<TurnOutcome, ChatError> {
+    /// Send `content` as a `message` frame on `session_id` and wait for the
+    /// matching `done.full_response`. Serial per ChatClient instance. The
+    /// caller picks `session_id` per turn (a wake's per-conversation
+    /// `klodi:<entity_id>` key, or the operator's own session).
+    pub async fn send_and_wait(
+        &self,
+        session_id: &str,
+        content: &str,
+    ) -> Result<TurnOutcome, ChatError> {
         let _turn = self.in_flight.lock().await;
         let started = Instant::now();
-        let ws_url = self.build_ws_url()?;
+        let ws_url = self.build_ws_url(session_id)?;
         let req = build_ws_request(&ws_url, &self.bearer)?;
 
         let (mut ws, _resp) = match timeout(HANDSHAKE_TIMEOUT, connect_async(req)).await {
@@ -244,11 +247,11 @@ impl ChatClient {
         }
     }
 
-    fn build_ws_url(&self) -> Result<String, ChatError> {
+    fn build_ws_url(&self, session_id: &str) -> Result<String, ChatError> {
         let ws_base = http_base_to_ws(&self.http_base)?;
         Ok(format!(
             "{ws_base}/ws/chat?session_id={}",
-            percent_encode_session(&self.session_id),
+            percent_encode_session(session_id),
         ))
     }
 }
@@ -358,6 +361,9 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         port_tx.send(listener.local_addr().unwrap().port()).unwrap();
         let (stream, _) = listener.accept().await.unwrap();
+        // tungstenite's accept_hdr callback must return `Result<_, ErrorResponse>`;
+        // the large Err type is the external API's, not ours.
+        #[allow(clippy::result_large_err)]
         let callback = |_req: &Request, response: Response| Ok(response);
         let ws = tokio_tungstenite::accept_hdr_async(stream, callback)
             .await
@@ -369,7 +375,6 @@ mod tests {
         ChatClient::new(
             format!("http://127.0.0.1:{port}"),
             "zc_test_bearer".to_string(),
-            "session-1".to_string(),
         )
     }
 
@@ -409,7 +414,7 @@ mod tests {
         }));
         let port = rx.await.unwrap();
         let client = make_client(port).await;
-        let outcome = client.send_and_wait("hi").await.unwrap();
+        let outcome = client.send_and_wait("session-1", "hi").await.unwrap();
         assert_eq!(outcome.full_response, "hello world");
         server.await.unwrap();
     }
@@ -446,7 +451,7 @@ mod tests {
         }));
         let port = rx.await.unwrap();
         let client = make_client(port).await;
-        let outcome = client.send_and_wait("hi").await.unwrap();
+        let outcome = client.send_and_wait("session-1", "hi").await.unwrap();
         assert_eq!(outcome.full_response, "final");
         server.await.unwrap();
     }
@@ -466,7 +471,7 @@ mod tests {
         }));
         let port = rx.await.unwrap();
         let client = make_client(port).await;
-        let err = client.send_and_wait("hi").await.unwrap_err();
+        let err = client.send_and_wait("session-1", "hi").await.unwrap_err();
         assert!(matches!(err, ChatError::EarlyClose), "got {err:?}");
         server.await.unwrap();
     }
@@ -489,7 +494,7 @@ mod tests {
         let client = make_client(port)
             .await
             .with_turn_timeout(Duration::from_millis(150));
-        let err = client.send_and_wait("hi").await.unwrap_err();
+        let err = client.send_and_wait("session-1", "hi").await.unwrap_err();
         match err {
             ChatError::Timeout(d) => assert!(d >= Duration::from_millis(100)),
             other => panic!("expected Timeout, got {other:?}"),
@@ -519,6 +524,10 @@ mod tests {
                     if n > cur_max {
                         max_seen.store(n, Ordering::SeqCst);
                     }
+                    // tungstenite's accept_hdr callback must return
+                    // `Result<_, ErrorResponse>`; the large Err type is the
+                    // external API's, not ours.
+                    #[allow(clippy::result_large_err)]
                     let cb = |_req: &Request, response: Response| Ok(response);
                     let mut ws = tokio_tungstenite::accept_hdr_async(stream, cb).await.unwrap();
                     ws.send(ServerMessage::Text(
@@ -544,8 +553,8 @@ mod tests {
         let client = Arc::new(make_client(port).await);
         let c1 = client.clone();
         let c2 = client.clone();
-        let h1 = tokio::spawn(async move { c1.send_and_wait("a").await.unwrap() });
-        let h2 = tokio::spawn(async move { c2.send_and_wait("b").await.unwrap() });
+        let h1 = tokio::spawn(async move { c1.send_and_wait("session-1", "a").await.unwrap() });
+        let h2 = tokio::spawn(async move { c2.send_and_wait("session-1", "b").await.unwrap() });
         let (o1, o2) = tokio::join!(h1, h2);
         assert_eq!(o1.unwrap().full_response, "ok");
         assert_eq!(o2.unwrap().full_response, "ok");

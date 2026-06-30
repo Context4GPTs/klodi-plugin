@@ -429,13 +429,14 @@ mod tests {
     // today); the 5xx + transport tests are GUARDS (already `Err`, must stay
     // `Err`).
     //
-    // NOTE — the DISTINCT ERROR-severity alarm (ACs 2/3) is NOT asserted here:
-    // `HttpStructuredHandler::new` builds its `KlodiLogger` internally on
-    // `StdSink`, with no injection point, so the log stream is uncapturable from
-    // a unit test. GREEN must add a `LoggerSink`/`KlodiLogger` injection on the
-    // handler (the `klodi-logger` crate already ships `CaptureSink` + `with_sink`);
-    // qa adds the severity assertion (4xx → one ERROR alarm carrying status+body;
-    // 5xx/transport → WARN only) once that seam exists. See the GREEN handoff.
+    // SEVERITY (card/openclaw-zeroclaw-per-conversation-wake-keying, Item 3) —
+    // the `with_sink`/`CaptureSink` seam landed (#34), so the deferred ERROR-vs-WARN
+    // severity assertion is now writable and lives in `severity_red_tests` below.
+    // Because both ERROR and WARN route to `CaptureSink::stderr` (logger-rs:284),
+    // the helper parses each captured line's `level` field rather than relying on
+    // stream split. These severity tests are GREEN on landing (production
+    // `classify_non_success` already routes 4xx→error_msg, 5xx/transport→warn):
+    // they LOCK the contract — no production change is part of Item 3.
     use wiremock::matchers::method as wm_method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -522,6 +523,165 @@ mod tests {
         assert!(
             result.is_err(),
             "a transport error must NAK (Err) so JetStream redelivers; got {result:?}",
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// card/openclaw-zeroclaw-per-conversation-wake-keying — Item 3 (qa-developer).
+//
+// rust-http forwarder SEVERITY assertions, wired through `with_sink(CaptureSink)`.
+// The `Ok`/`Err` DISPOSITION is already covered by `mod tests` above; this module
+// asserts the LOG SEVERITY contract from ADR-0019's cross-adapter table:
+//
+//   - 4xx → exactly ONE ERROR `klodi_wake_forward_deterministic_failure` carrying
+//           the diagnostic in the non-redacted `response_body` field plus
+//           `kind`/`event_id`/`status`; no second ERROR.
+//   - 5xx → a WARN `klodi_wake_forward_non_2xx` and ZERO ERROR events.
+//   - transport error → a WARN `klodi_wake_forward_transport_error` and ZERO ERROR.
+//
+// Pure test-landing: production `classify_non_success` already routes correctly,
+// so these are GREEN on landing and LOCK the contract against regression. NEVER
+// weaken an assertion to match a future change — fix the production routing.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod severity_red_tests {
+    use super::*;
+    use klodi_logger::CaptureSink;
+    use serde_json::Value;
+    use std::sync::Arc;
+    use wiremock::matchers::method as wm_method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn wake_for_test() -> WakeEvent {
+        let evt = NotificationEvent::ListingCreated {
+            event_id: "e-http-1".into(),
+            listing_id: "l1".into(),
+            title: Some("vintage chair".into()),
+        };
+        WakeEvent::Notification {
+            kind: evt.kind().to_string(),
+            event_id: evt.event_id().to_string(),
+            user_id: "u1".into(),
+            payload: evt,
+        }
+    }
+
+    fn handler_with(wake_url: String, sink: Arc<CaptureSink>) -> HttpStructuredHandler {
+        HttpStructuredHandler::new(
+            wake_url,
+            Some("tok".into()),
+            "klodi-test/0".into(),
+            "klodi_test".into(),
+            std::time::Duration::from_secs(5),
+        )
+        .expect("building HttpStructuredHandler")
+        .with_sink(sink)
+    }
+
+    /// Both WARN and ERROR route to `CaptureSink::stderr` (logger-rs), so parse
+    /// every captured line as JSON and filter by the `level` field — NOT by
+    /// stream. Returns `(level, msg, fields)` triples.
+    fn parsed_stderr(sink: &CaptureSink) -> Vec<(String, String, Value)> {
+        sink.stderr_lines()
+            .iter()
+            .map(|raw| {
+                let v: Value = serde_json::from_str(raw).expect("logger emitted invalid JSON");
+                (
+                    v["level"].as_str().unwrap_or_default().to_string(),
+                    v["msg"].as_str().unwrap_or_default().to_string(),
+                    v["fields"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// AC — a deterministic 4xx records EXACTLY ONE ERROR alarm named
+    /// `klodi_wake_forward_deterministic_failure` carrying the diagnostic in the
+    /// non-redacted `response_body` field plus `kind`/`event_id`/`status`, and no
+    /// second ERROR.
+    #[tokio::test]
+    async fn handle_4xx_emits_single_error_alarm_with_diagnostic_on_response_body() {
+        let server = MockServer::start().await;
+        Mock::given(wm_method("POST"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad token"))
+            .mount(&server)
+            .await;
+
+        let sink = Arc::new(CaptureSink::new());
+        let handler = handler_with(server.uri(), sink.clone());
+        let _ = handler.handle(&wake_for_test()).await;
+
+        let lines = parsed_stderr(&sink);
+        let errors: Vec<_> = lines.iter().filter(|(lvl, ..)| lvl == "ERROR").collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "a 4xx must emit exactly ONE ERROR (no second); got: {lines:?}",
+        );
+        let (_, msg, fields) = errors[0];
+        assert_eq!(msg, "klodi_wake_forward_deterministic_failure");
+        // The diagnostic body MUST ride `response_body` (not `body`, which is in
+        // REDACTED_FIELD_NAMES) so the alarm stays explainable.
+        assert_eq!(
+            fields["response_body"].as_str(),
+            Some("bad token"),
+            "diagnostic must survive on the non-redacted response_body field: {fields:?}",
+        );
+        assert_eq!(fields["kind"].as_str(), Some("listing.created"));
+        assert_eq!(fields["event_id"].as_str(), Some("e-http-1"));
+        assert_eq!(fields["status"].as_u64(), Some(400));
+    }
+
+    /// AC — a 5xx records a WARN `klodi_wake_forward_non_2xx` and ZERO ERROR.
+    #[tokio::test]
+    async fn handle_5xx_emits_warn_and_zero_errors() {
+        let server = MockServer::start().await;
+        Mock::given(wm_method("POST"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+            .mount(&server)
+            .await;
+
+        let sink = Arc::new(CaptureSink::new());
+        let handler = handler_with(server.uri(), sink.clone());
+        let _ = handler.handle(&wake_for_test()).await;
+
+        let lines = parsed_stderr(&sink);
+        assert!(
+            lines.iter().any(|(lvl, msg, _)| lvl == "WARN"
+                && msg == "klodi_wake_forward_non_2xx"),
+            "a 5xx must emit a WARN klodi_wake_forward_non_2xx; got: {lines:?}",
+        );
+        assert_eq!(
+            lines.iter().filter(|(lvl, ..)| lvl == "ERROR").count(),
+            0,
+            "a transient 5xx must NOT raise an ERROR alarm; got: {lines:?}",
+        );
+    }
+
+    /// AC — a transport error records a WARN `klodi_wake_forward_transport_error`
+    /// and ZERO ERROR.
+    #[tokio::test]
+    async fn handle_transport_error_emits_warn_and_zero_errors() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let sink = Arc::new(CaptureSink::new());
+        let handler = handler_with(format!("http://127.0.0.1:{port}/"), sink.clone());
+        let _ = handler.handle(&wake_for_test()).await;
+
+        let lines = parsed_stderr(&sink);
+        assert!(
+            lines.iter().any(|(lvl, msg, _)| lvl == "WARN"
+                && msg == "klodi_wake_forward_transport_error"),
+            "a transport error must emit a WARN klodi_wake_forward_transport_error; \
+             got: {lines:?}",
+        );
+        assert_eq!(
+            lines.iter().filter(|(lvl, ..)| lvl == "ERROR").count(),
+            0,
+            "a transient transport error must NOT raise an ERROR alarm; got: {lines:?}",
         );
     }
 }

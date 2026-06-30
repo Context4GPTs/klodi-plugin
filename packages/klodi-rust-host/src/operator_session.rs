@@ -16,6 +16,7 @@
 use crate::forwarder::WakeEvent;
 use crate::telegram::{TelegramClient, TelegramError};
 use crate::telegram_config;
+use crate::wake_session::derive_wake_session;
 use crate::zeroclaw_chat::{ChatClient, ChatError};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,7 +29,10 @@ const INBOX_CAPACITY: usize = 64;
 #[derive(Debug, Clone)]
 pub enum InboundEvent {
     /// Marketplace wake from NATS (offer, channel message, transaction…).
-    Wake(WakeEvent),
+    /// Boxed: `WakeEvent` dwarfs the other variant (272 vs 32 bytes), so an
+    /// unboxed enum would bloat every queued `InboundEvent` in the inbox
+    /// channel (clippy `large_enum_variant`).
+    Wake(Box<WakeEvent>),
     /// Operator-typed message from Telegram.
     OperatorMessage {
         text: String,
@@ -76,6 +80,7 @@ pub struct OperatorSessionController {
 impl OperatorSessionController {
     pub fn spawn(
         chat_id: i64,
+        operator_session_id: String,
         chat: Arc<ChatClient>,
         telegram: Arc<TelegramClient>,
         klodi_home: PathBuf,
@@ -85,6 +90,7 @@ impl OperatorSessionController {
         let join = tokio::spawn(run_worker(
             WorkerCtx {
                 chat_id,
+                operator_session_id,
                 chat,
                 telegram,
                 klodi_home,
@@ -100,12 +106,25 @@ struct WorkerCtx {
     chat: Arc<ChatClient>,
     telegram: Arc<TelegramClient>,
     klodi_home: PathBuf,
+    /// The operator's own (non-wake) session — the daemon-resolved
+    /// `${KLODI_HOME}/zeroclaw.session`. `run_worker` runs `OperatorMessage`
+    /// turns on this (BR-6); `Wake` turns run on `derive_wake_session(wake)`.
+    operator_session_id: String,
 }
 
 async fn run_worker(ctx: WorkerCtx, mut rx: mpsc::Receiver<InboundEvent>) {
     while let Some(event) = rx.recv().await {
+        // Per-turn session (ADR-0019): a wake runs on its own per-conversation
+        // `klodi:<entity_id>` key (`derive_wake_session`); an operator-typed
+        // message carries no entity and stays on the operator's session (BR-6).
+        // Either way the reply is forwarded to the single operator `chat_id`
+        // below, so the human keeps one unified Telegram view (BR-6).
+        let session_id = match &event {
+            InboundEvent::Wake(wake) => derive_wake_session(wake),
+            InboundEvent::OperatorMessage { .. } => ctx.operator_session_id.clone(),
+        };
         let prompt = format_prompt(&event);
-        let outcome = match ctx.chat.send_and_wait(&prompt).await {
+        let outcome = match ctx.chat.send_and_wait(&session_id, &prompt).await {
             Ok(o) => o,
             Err(err) => {
                 log_chat_turn_error(&event, &err);
@@ -288,7 +307,7 @@ mod tests {
 
     #[test]
     fn format_prompt_wake_includes_kind_and_payload() {
-        let prompt = format_prompt(&InboundEvent::Wake(wake_for_test()));
+        let prompt = format_prompt(&InboundEvent::Wake(Box::new(wake_for_test())));
         assert!(prompt.starts_with("[wake] kind=listing.created event_id=e1"));
         assert!(prompt.contains("\"channel\""));
         assert!(prompt.contains("\"kind\": \"listing.created\""));
@@ -471,6 +490,9 @@ mod alarm_classification_red_tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         port_tx.send(listener.local_addr().unwrap().port()).unwrap();
         let (stream, _) = listener.accept().await.unwrap();
+        // tungstenite's accept_hdr callback must return `Result<_, ErrorResponse>`;
+        // the large Err type is the external API's, not ours.
+        #[allow(clippy::result_large_err)]
         let callback = |_req: &HsRequest, response: HsResponse| Ok(response);
         let ws = tokio_tungstenite::accept_hdr_async(stream, callback)
             .await
@@ -533,7 +555,6 @@ mod alarm_classification_red_tests {
         let chat = Arc::new(ChatClient::new(
             format!("http://127.0.0.1:{port}"),
             "tok".into(),
-            "session-1".into(),
         ));
         // Never reached on the error path (the worker `continue`s before send).
         let telegram = Arc::new(TelegramClient::with_base(
@@ -545,10 +566,11 @@ mod alarm_classification_red_tests {
             chat,
             telegram,
             klodi_home: PathBuf::from("/nonexistent-klodi-home"),
+            operator_session_id: "session-1".into(),
         };
 
         let (etx, erx) = mpsc::channel::<InboundEvent>(4);
-        etx.send(InboundEvent::Wake(wake_for_test())).await.unwrap();
+        etx.send(InboundEvent::Wake(Box::new(wake_for_test()))).await.unwrap();
         drop(etx); // close the inbox so the worker drains one event then exits
 
         run_worker(ctx, erx).await;
@@ -590,7 +612,6 @@ mod alarm_classification_red_tests {
             ChatClient::new(
                 format!("http://127.0.0.1:{port}"),
                 "tok".into(),
-                "session-1".into(),
             )
             .with_turn_timeout(Duration::from_millis(150)),
         );
@@ -603,10 +624,11 @@ mod alarm_classification_red_tests {
             chat,
             telegram,
             klodi_home: PathBuf::from("/nonexistent-klodi-home"),
+            operator_session_id: "session-1".into(),
         };
 
         let (etx, erx) = mpsc::channel::<InboundEvent>(4);
-        etx.send(InboundEvent::Wake(wake_for_test())).await.unwrap();
+        etx.send(InboundEvent::Wake(Box::new(wake_for_test()))).await.unwrap();
         drop(etx);
 
         run_worker(ctx, erx).await;
@@ -622,6 +644,219 @@ mod alarm_classification_red_tests {
             recorder.any_warn(),
             "expected the transient timeout to still log a WARN; recorded: {}",
             recorder.dump(),
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// card/openclaw-zeroclaw-per-conversation-wake-keying — Item 1 zeroclaw [integration].
+//
+// The two `[integration]` ACs: under per-turn session selection the worker runs
+// a `Wake` on its derived per-entity session (`klodi:<entity_id>`) while an
+// operator-typed message stays on the operator's own session (BR-6) — and EVERY
+// reply still reaches the single operator `chat_id` (BR-6). The only observable
+// contract is the session_id the worker puts on the `/ws/chat` handshake and the
+// `chat_id` it forwards the reply to; both are captured at the transport boundary
+// (a scripted WS + a Telegram wiremock).
+//
+// `run_worker` selects the session per turn —
+// `Wake(w) => derive_wake_session(w)`, `OperatorMessage => ctx.operator_session_id`
+// — and runs it through `ChatClient::send_and_wait(session_id, content)`. The
+// ChatClient is constructed below with a SENTINEL constructor session the per-turn
+// worker MUST ignore: these tests LOCK that the constructor session is never used.
+// Do NOT weaken the assertions.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod per_turn_session_tests {
+    use super::*;
+
+    use crate::telegram::TelegramClient;
+    use crate::zeroclaw_chat::ChatClient;
+    use futures_util::{SinkExt, StreamExt};
+    use klodi_nats_client::NotificationEvent;
+    use std::sync::Mutex;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::handshake::server::{
+        Request as HsRequest, Response as HsResponse,
+    };
+    use wiremock::matchers::{method as wm_method, path as wm_path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Single-connection scripted WS that records the handshake request URI
+    /// (carrying `?session_id=…`) into `captured_uri`, then runs one happy turn
+    /// (session_start → consume the client's `message` frame → `done(reply)`).
+    async fn run_uri_capturing_ws(
+        port_tx: oneshot::Sender<u16>,
+        captured_uri: Arc<Mutex<Option<String>>>,
+        reply: String,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        port_tx.send(listener.local_addr().unwrap().port()).unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let slot = captured_uri.clone();
+        // tungstenite's accept_hdr callback must return `Result<_, ErrorResponse>`;
+        // the large Err type is the external API's, not ours.
+        #[allow(clippy::result_large_err)]
+        let callback = move |req: &HsRequest, response: HsResponse| {
+            *slot.lock().unwrap() = Some(req.uri().to_string());
+            Ok(response)
+        };
+        let mut ws = tokio_tungstenite::accept_hdr_async(stream, callback)
+            .await
+            .unwrap();
+        ws.send(Message::Text(
+            serde_json::json!({"type": "session_start", "resumed": false}).to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = ws.next().await; // consume the client's outbound `message` frame
+        ws.send(Message::Text(
+            serde_json::json!({"type": "done", "full_response": reply}).to_string(),
+        ))
+        .await
+        .unwrap();
+    }
+
+    fn wake_offer_l1() -> WakeEvent {
+        let evt = NotificationEvent::OfferProposed {
+            event_id: "e-offer-l1".into(),
+            offer_id: "off-1".into(),
+            listing_id: "l1".into(),
+            buyer_handle: "buyer".into(),
+            amount: 1000,
+            terms: None,
+        };
+        WakeEvent::Notification {
+            kind: evt.kind().to_string(),
+            event_id: evt.event_id().to_string(),
+            user_id: "u1".into(),
+            payload: evt,
+        }
+    }
+
+    /// `[integration]` BR-6 — an operator-typed Telegram message (no entity) runs
+    /// on the OPERATOR's own session, NOT a per-entity wake session.
+    #[tokio::test]
+    async fn operator_message_targets_operator_session_not_entity_key() {
+        let captured = Arc::new(Mutex::new(None));
+        let (port_tx, port_rx) = oneshot::channel();
+        // Empty reply → worker skips the Telegram send (no telegram dep needed).
+        let server = tokio::spawn(run_uri_capturing_ws(port_tx, captured.clone(), String::new()));
+        let port = port_rx.await.unwrap();
+
+        let chat = Arc::new(ChatClient::new(
+            format!("http://127.0.0.1:{port}"),
+            "tok".into(),
+        ));
+        let telegram = Arc::new(TelegramClient::with_base(
+            "BOT".into(),
+            "http://127.0.0.1:1".into(),
+        ));
+        let ctx = WorkerCtx {
+            chat_id: 99,
+            chat,
+            telegram,
+            klodi_home: PathBuf::from("/nonexistent-klodi-home"),
+            operator_session_id: "operator-session-xyz".into(),
+        };
+
+        let (etx, erx) = mpsc::channel::<InboundEvent>(4);
+        etx.send(InboundEvent::OperatorMessage {
+            text: "yes, accept".into(),
+            telegram_message_id: 7,
+        })
+        .await
+        .unwrap();
+        drop(etx);
+        run_worker(ctx, erx).await;
+        let _ = server.await;
+
+        let uri = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("WS handshake never reached the scripted gateway");
+        assert!(
+            uri.contains("session_id=operator-session-xyz"),
+            "an operator-typed message must run on the OPERATOR session (BR-6), not \
+             the fixed constructor session and never an entity key; WS handshake URI: {uri}",
+        );
+        assert!(
+            !uri.contains("klodi"),
+            "an operator message carries no entity and must NEVER be klodi:-keyed: {uri}",
+        );
+    }
+
+    /// `[integration]` BR-6 — a wake runs on its derived per-entity session
+    /// (`klodi:<listing_id>`) AND its reply is forwarded to the single operator
+    /// `chat_id` (the human keeps one unified Telegram view).
+    #[tokio::test]
+    async fn wake_runs_on_per_entity_session_and_reply_reaches_operator_chat() {
+        let captured = Arc::new(Mutex::new(None));
+        let (port_tx, port_rx) = oneshot::channel();
+        let server =
+            tokio::spawn(run_uri_capturing_ws(port_tx, captured.clone(), "agent reply".into()));
+        let port = port_rx.await.unwrap();
+
+        // Telegram wiremock to capture the chat_id the reply is sent to.
+        let tg = MockServer::start().await;
+        Mock::given(wm_method("POST"))
+            .and(wm_path("/botBOT/sendMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": { "message_id": 1, "date": 0, "chat": {"id": 99, "type": "private"} }
+            })))
+            .mount(&tg)
+            .await;
+
+        let chat = Arc::new(ChatClient::new(
+            format!("http://127.0.0.1:{port}"),
+            "tok".into(),
+        ));
+        let telegram = Arc::new(TelegramClient::with_base("BOT".into(), tg.uri()));
+        let ctx = WorkerCtx {
+            chat_id: 99,
+            chat,
+            telegram,
+            klodi_home: PathBuf::from("/nonexistent-klodi-home"),
+            operator_session_id: "operator-session-xyz".into(),
+        };
+
+        let (etx, erx) = mpsc::channel::<InboundEvent>(4);
+        etx.send(InboundEvent::Wake(Box::new(wake_offer_l1()))).await.unwrap();
+        drop(etx);
+        run_worker(ctx, erx).await;
+        let _ = server.await;
+
+        let uri = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("WS handshake never reached the scripted gateway");
+        // offer.proposed on listing "l1" → key klodi:l1 → percent-encoded klodi%3Al1.
+        assert!(
+            uri.contains("klodi%3Al1"),
+            "a wake must run on its per-entity session (klodi:<listing_id>), not the \
+             fixed operator/constructor session; WS handshake URI: {uri}",
+        );
+
+        // BR-6 — the reply still reaches the ONE operator chat_id (99).
+        let requests = tg
+            .received_requests()
+            .await
+            .expect("wiremock did not record requests");
+        let send = requests
+            .iter()
+            .find(|r| r.url.path() == "/botBOT/sendMessage")
+            .expect("the agent reply was never forwarded to Telegram");
+        let body: serde_json::Value =
+            serde_json::from_slice(&send.body).expect("sendMessage body must be JSON");
+        assert_eq!(
+            body["chat_id"].as_i64(),
+            Some(99),
+            "a per-entity wake's reply must still reach the single operator chat_id (BR-6)",
         );
     }
 }

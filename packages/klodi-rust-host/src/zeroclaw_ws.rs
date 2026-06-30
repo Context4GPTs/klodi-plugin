@@ -174,14 +174,14 @@ where
                 Err(err) => bail!("WS read error after send: {err}"),
             };
             if let Message::Text(text) = msg {
-                if let Ok(parsed) = serde_json::from_str::<InboundFrame>(&text) {
-                    if let InboundFrame::Error { code, message } = parsed {
-                        bail!(
-                            "gateway error frame after send: code={} message={}",
-                            code.unwrap_or_default(),
-                            message.unwrap_or_default(),
-                        );
-                    }
+                if let Ok(InboundFrame::Error { code, message }) =
+                    serde_json::from_str::<InboundFrame>(&text)
+                {
+                    bail!(
+                        "gateway error frame after send: code={} message={}",
+                        code.unwrap_or_default(),
+                        message.unwrap_or_default(),
+                    );
                 }
             }
         }

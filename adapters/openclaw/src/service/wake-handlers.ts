@@ -16,7 +16,8 @@ import type {
   NotificationEvent,
 } from "@klodi/tool-catalog";
 import type { PluginAPILike } from "../lib/plugin-api-types.js";
-import { wakeAgent } from "./wake.js";
+import { resolveAgentId, wakeAgent } from "./wake.js";
+import { deriveWakeSessionKey } from "./wake-session.js";
 import {
   onListingWithdrawn,
   onTransactionTerminal,
@@ -177,10 +178,15 @@ export function makeNotificationHandler(api: PluginAPILike) {
   return async (event: NotificationEvent): Promise<void> => {
     applyTerminalCleanup(event);
     const text = formatNotificationWake(event);
+    // Per-conversation key derived from the typed event (ADR-0019): the wake
+    // enqueues + heartbeats on the conversation's own session, not the shared
+    // `agent:<id>:main`. See `deriveWakeSessionKey` / hermes
+    // `_SESSION_KEY_FIELD_BY_DOMAIN`.
+    const sessionKey = deriveWakeSessionKey(resolveAgentId(api), event);
     await wakeAgent(api, text, event.kind, {
       kind: event.kind,
       event_id: event.event_id,
-    });
+    }, sessionKey);
   };
 }
 
@@ -188,9 +194,10 @@ export function makeNotificationHandler(api: PluginAPILike) {
 export function makeChannelHandler(api: PluginAPILike) {
   return async (event: ChannelMessageEvent): Promise<void> => {
     const text = formatChannelWake(event);
+    const sessionKey = deriveWakeSessionKey(resolveAgentId(api), event);
     await wakeAgent(api, text, event.kind, {
       kind: event.kind,
       event_id: event.event_id,
-    });
+    }, sessionKey);
   };
 }

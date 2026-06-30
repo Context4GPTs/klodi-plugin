@@ -51,6 +51,10 @@ pub mod health;
 pub mod paths;
 pub mod register;
 pub mod setup_status;
+// Per-conversation wake-session keying (ADR-0019). Not feature-gated: it keys
+// off `forwarder::WakeEvent` (always compiled) and the zeroclaw worker consumes
+// it. See `wake_session::derive_wake_session`.
+pub mod wake_session;
 
 #[cfg(feature = "mcp")]
 pub mod host_mcp_config;
@@ -76,6 +80,7 @@ pub mod zeroclaw_ws;
 
 pub use forwarder::{ForwarderConfig, run_forwarder};
 pub use register::{RegisterArgs, run_register};
+pub use wake_session::{WAKE_SESSION_NAMESPACE, derive_wake_session};
 pub use setup_status::{
     IssueSeverity, NextAction, SetupIssue, SetupPhase, SetupStatus, SetupStatusOptions,
     klodi_setup_status, klodi_setup_status_with_options,

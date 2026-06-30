@@ -371,7 +371,7 @@ mod tests {
             .await;
         // 5000-char text with newlines every 1000 chars → splits into two.
         let line = "x".repeat(999);
-        let text = std::iter::repeat(line).take(5).collect::<Vec<_>>().join("\n");
+        let text = std::iter::repeat_n(line, 5).collect::<Vec<_>>().join("\n");
         let client = client_for(&server);
         client.send(123, &text).await.unwrap();
     }

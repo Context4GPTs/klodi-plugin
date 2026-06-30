@@ -70,8 +70,15 @@ export async function wakeAgent(
   text: string,
   reason: string,
   correlator?: WakeCorrelator,
+  sessionKeyOverride?: string,
 ): Promise<void> {
-  const sessionKey = resolveAgentSessionKey(api);
+  // Per-conversation key (ADR-0019): the marketplace handlers derive the
+  // wake's `agent:<id>:klodi:<entity_id>` key from the typed event (see
+  // `deriveWakeSessionKey` / hermes `_SESSION_KEY_FIELD_BY_DOMAIN`) and pass
+  // it here. Entity-less local-origin wakes (register-poller) pass nothing and
+  // fall back to the operator's own `agent:<id>:main` session — intentional:
+  // those are operator-facing registration notices, not conversations.
+  const sessionKey = sessionKeyOverride ?? resolveAgentSessionKey(api);
   try {
     await api.runtime.system.enqueueSystemEvent(text, { sessionKey });
   } catch (err) {
@@ -80,36 +87,30 @@ export async function wakeAgent(
     // rethrowing and never fire the heartbeat (it would flush an empty queue).
     // But the failure is raised to ERROR, not WARN — operators demonstrably
     // do not watch WARN (the hermes Bug-2 shape). The alarm, not redelivery,
-    // is the surface. Mirrors hermes's wake_inject_deterministic_failure.
+    // is the surface. `...correlator` ties it back to the wire event (ADR-0019
+    // cross-adapter alarm contract); `null` event_id is fine for local-origin.
     api.logger.error("wake_failed", {
       reason,
       stage: "enqueue",
       sessionKey,
+      ...correlator,
       ...describeError(err),
     });
     return;
   }
   const snapshot = inspectSessionStore(api, sessionKey);
+  // `entry_exists`/`store_*` are now INFO-only diagnostics. The #34
+  // `wake_dead_session` ERROR escalation was REMOVED (OQ-2, ADR-0019): under
+  // per-conversation keying a no-entry session is ALWAYS legitimate
+  // first-contact (the heartbeat runtime creates it on enqueue), so any
+  // enqueue-time gate would only ever false-fire. The "wrong shared session"
+  // failure mode it surfaced is structurally eliminated by keying.
   api.logger.info("wake_enqueued", {
     reason,
     sessionKey,
     ...correlator,
     ...snapshot,
   });
-  // Bug 3 (silent-success): the enqueue SUCCEEDED, but the resolved session
-  // has no entry in the store — the wake lands on a dead session the user
-  // never reads (e.g. canonical `agent:<id>:main` while the only live session
-  // is an explicit TUI one). That is not buried as an INFO field: a confirmed
-  // dead target raises a distinct operator-visible ERROR alarm. Gated on
-  // `store_read === "ok"` so a missing/unreadable store (best-effort snapshot,
-  // genuinely unknown) does not page a false alarm — see the snapshot docstring.
-  if (snapshot.store_read === "ok" && snapshot.entry_exists === false) {
-    api.logger.error("wake_dead_session", {
-      reason,
-      sessionKey,
-      ...snapshot,
-    });
-  }
   const heartbeatReason = `hook:klodi:${reason}`;
   try {
     api.runtime.system.requestHeartbeatNow({
@@ -121,6 +122,7 @@ export async function wakeAgent(
       reason,
       stage: "heartbeat",
       sessionKey,
+      ...correlator,
       ...describeError(err),
     });
     throw err;
@@ -147,14 +149,24 @@ type RuntimeConfigShape = {
  */
 export function resolveAgentSessionKey(api: PluginAPILike): string {
   const cfg = api.config as RuntimeConfigShape | undefined;
-  const agents = cfg?.agents?.list ?? [];
-  const defaultAgent = agents.find(isDefaultAgent);
-  const firstWithId = agents.find(hasAgentId);
-  const agentId = asTrimmed(defaultAgent?.id)
-    ?? asTrimmed(firstWithId?.id)
-    ?? "main";
   const mainKey = asTrimmed(cfg?.session?.mainKey) ?? "main";
-  return `agent:${agentId}:${mainKey}`;
+  return `agent:${resolveAgentId(api)}:${mainKey}`;
+}
+
+/**
+ * Resolve the default agent id from `api.config` — the `<agentId>` segment of
+ * every wake session key. Default-marked agent wins, else the first agent
+ * with an id, else `"main"` (OpenClaw's `FALLBACK_DEFAULT_AGENT_ID`). Shared
+ * by `resolveAgentSessionKey` (entity-less default key) and the marketplace
+ * handlers' `deriveWakeSessionKey(resolveAgentId(api), event)` so both halves
+ * of `agent:<id>:…` always agree on the id.
+ */
+export function resolveAgentId(api: PluginAPILike): string {
+  const cfg = api.config as RuntimeConfigShape | undefined;
+  const agents = cfg?.agents?.list ?? [];
+  return asTrimmed(agents.find(isDefaultAgent)?.id)
+    ?? asTrimmed(agents.find(hasAgentId)?.id)
+    ?? "main";
 }
 
 function isDefaultAgent(
@@ -219,7 +231,7 @@ function inspectSessionStore(
   sessionKey: string,
 ): SessionStoreDiagnostic {
   try {
-    const agentId = resolveAgentIdForStore(api);
+    const agentId = resolveAgentId(api);
     const storePath = resolveSessionStorePath(api, agentId);
     return readStoreSnapshot(storePath, sessionKey);
   } catch {
@@ -233,14 +245,6 @@ function inspectSessionStore(
       most_recent_matches_resolved: null,
     };
   }
-}
-
-function resolveAgentIdForStore(api: PluginAPILike): string {
-  const cfg = api.config as RuntimeConfigShape | undefined;
-  const agents = cfg?.agents?.list ?? [];
-  return asTrimmed(agents.find(isDefaultAgent)?.id)
-    ?? asTrimmed(agents.find(hasAgentId)?.id)
-    ?? "main";
 }
 
 function resolveSessionStorePath(

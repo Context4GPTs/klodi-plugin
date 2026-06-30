@@ -336,25 +336,26 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
       expect(ctx["most_recent_matches_resolved"]).toBe(false);
     });
 
-    // card/audit-all-adapters-for-silent-wake-inject-failure — RED (qa-developer)
+    // card/openclaw-zeroclaw-per-conversation-wake-keying — OQ-2 (qa-developer RED).
     //
-    // Seam 4b — openclaw Bug 3 (silent-success / dead-session) (AC 5).
+    // OQ-2 RESOLUTION (supersedes the #34 `wake_dead_session` ERROR alarm): under
+    // per-conversation keying a conversation's FIRST wake legitimately lands on a
+    // not-yet-created session (`entry_exists === false`); the heartbeat runtime
+    // creates it on enqueue. The "wrong shared session" failure the alarm
+    // surfaced is structurally eliminated by keying, and no single enqueue-time
+    // store snapshot can tell a brand-new per-entity session from a reaped one —
+    // any surviving gate would only ever false-fire. So the `wake_dead_session`
+    // ERROR escalation (wake.ts:99-112) is REMOVED (a clean delete, no shim);
+    // `entry_exists`/`store_*` survive only as INFO fields on `wake_enqueued`.
     //
-    // The most insidious bug: a wake to a resolved session with NO entry does
-    // not *fail* — enqueueSystemEvent succeeds, wake_enqueued logs at INFO with
-    // `entry_exists: false`, the consumer ACKs, and the wake lands on a dead
-    // session the user never reads. The diagnostic was added to OBSERVE this,
-    // but "a diagnostic nobody alarms on is not a surface" — it is buried as a
-    // field on an INFO success line. The fix: when the resolved key has no
-    // entry (`entry_exists === false`), emit a distinct OPERATOR-VISIBLE ERROR
-    // alarm. This test fails RED while the only signal is the INFO field.
-    //
-    // Framed on the SURFACING behavior (an alarm fires when the resolved
-    // session is dead), independent of HOW the key is derived — so it stays
-    // valid under the epic's pending per-conversation session-keying redesign.
-    it("fires an operator-visible ERROR alarm when the resolved session has no store entry", async () => {
-      // Canonical wake target `agent:main:main` is ABSENT; the only live
-      // session is an explicit TUI one → the wake lands in a void.
+    // This INVERTS the #34 test (which asserted the alarm fires) per the card's
+    // confirmed requirement change: the `wake_dead_session` ERROR escalation is
+    // removed, so no operator-visible alarm fires on a first-contact session.
+    // Distillation updates ADR-0019's openclaw row + the deferred-follow-up note.
+    it("does NOT fire a wake_dead_session ERROR on a first-contact no-entry session (OQ-2)", async () => {
+      // Canonical wake target `agent:main:main` is ABSENT; the only live session
+      // is an explicit TUI one. Under OQ-2 this is legitimate first-contact, NOT
+      // a dead session — no operator-visible ERROR must fire.
       writeFileSync(
         storePath,
         JSON.stringify({
@@ -364,21 +365,23 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
           },
         }),
       );
-      const { api, errorEvents } = createFakeApi({
+      const { api, errorEvents, infoEvents, calls } = createFakeApi({
         config: { session: { store: storePath } },
       });
 
       await wakeAgent(api, "x", "y");
 
-      const alarm = errorEvents.find((e) => e.event === "wake_dead_session");
       expect(
-        alarm,
-        "a wake to a no-entry session must raise an operator-visible ERROR"
-          + " alarm — not be buried as entry_exists:false on the INFO line;"
-          + " got error events: " + JSON.stringify(errorEvents),
-      ).toBeTruthy();
-      expect(alarm?.ctx["sessionKey"]).toBe("agent:main:main");
-      expect(alarm?.ctx["entry_exists"]).toBe(false);
+        errorEvents.find((e) => e.event === "wake_dead_session"),
+        "OQ-2: a first-contact no-entry session must NOT raise wake_dead_session"
+          + " — that ERROR escalation is removed; got error events: "
+          + JSON.stringify(errorEvents),
+      ).toBeUndefined();
+      // The wake still proceeds, and entry_exists survives as an INFO diagnostic.
+      const ctx = findEnqueued(infoEvents);
+      expect(ctx["store_read"]).toBe("ok");
+      expect(ctx["entry_exists"]).toBe(false);
+      expect(calls.map((c) => c.fn)).toEqual(["enqueue", "heartbeat"]);
     });
 
     it("excludes :subagent: and :heartbeat keys from most_recent_key even when they have higher updatedAt", async () => {
@@ -815,9 +818,11 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
       await makeNotificationHandler(api)(event);
 
       const ctx = findEnqueued(infoEvents);
-      // Pre-existing fields untouched.
+      // Pre-existing fields untouched (reason stays the kind). sessionKey is now
+      // the per-entity key (Item 1): offer.accepted keys off the LISTING (lst-8),
+      // NOT the shared agent:main:main — updated per the card's keying change.
       expect(ctx["reason"]).toBe("offer.accepted");
-      expect(ctx["sessionKey"]).toBe("agent:main:main");
+      expect(ctx["sessionKey"]).toBe("agent:main:klodi:lst-8");
       // Session-store diagnostic block still emitted.
       expect("store_read" in ctx).toBe(true);
       expect("store_entries" in ctx).toBe(true);
@@ -829,7 +834,198 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
       expect(ctx["event_id"]).toBe(event.event_id);
     });
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // card/openclaw-zeroclaw-per-conversation-wake-keying — Item 2 (qa-developer).
+  //
+  // The two deterministic `wake_failed` alarms must carry the in-scope
+  // `...correlator` (kind/event_id) so a failed wake is tie-able to its wire
+  // event on dashboards — matching the adjacent `wake_enqueued` INFO line and the
+  // ADR-0019 cross-adapter alarm contract. Today the enqueue ERROR (wake.ts:84)
+  // and the heartbeat WARN (:120) omit it. `null` event_id is fine for a
+  // local-origin wake (BR-7). Both alarms spread `...correlator` so a failed
+  // wake is tie-able to its wire event.
+  // ─────────────────────────────────────────────────────────────────────────
+  describe("wake_failed alarm correlator parity (Item 2)", () => {
+    it("enqueue-stage ERROR carries the kind+event_id correlator when present", async () => {
+      const { api, errorEvents } = createFakeApi({
+        enqueueImpl: async () => { throw new Error("queue is full"); },
+      });
+
+      await wakeAgent(api, "text", "offer.proposed", {
+        kind: "offer.proposed",
+        event_id: "evt-42",
+      });
+
+      const failed = errorEvents.find(
+        (e) => e.event === "wake_failed" && e.ctx["stage"] === "enqueue",
+      );
+      expect(
+        failed,
+        "expected an enqueue-stage wake_failed ERROR; got: "
+          + JSON.stringify(errorEvents),
+      ).toBeTruthy();
+      expect(failed?.ctx["kind"]).toBe("offer.proposed");
+      expect(failed?.ctx["event_id"]).toBe("evt-42");
+      // Existing diagnostic fields stay alongside (additive spread).
+      expect(failed?.ctx["sessionKey"]).toBe("agent:main:main");
+      expect(failed?.ctx["message"]).toBe("queue is full");
+    });
+
+    it("enqueue-stage ERROR is null-safe for a local-origin wake (event_id null)", async () => {
+      const { api, errorEvents } = createFakeApi({
+        enqueueImpl: async () => { throw new Error("boom"); },
+      });
+
+      // register-poller passes { kind: <origin>, event_id: null }.
+      await wakeAgent(api, "synthetic", "klodi-register-timeout", {
+        kind: "klodi-register-timeout",
+        event_id: null,
+      });
+
+      const failed = errorEvents.find(
+        (e) => e.event === "wake_failed" && e.ctx["stage"] === "enqueue",
+      );
+      expect(
+        failed,
+        "the ERROR must still fire for a local-origin wake (BR-7)",
+      ).toBeTruthy();
+      expect(failed?.ctx["kind"]).toBe("klodi-register-timeout");
+      // The key is present with an explicit null — never undefined.
+      expect("event_id" in (failed?.ctx ?? {})).toBe(true);
+      expect(failed?.ctx["event_id"]).toBeNull();
+      expect(failed?.ctx["sessionKey"]).toBe("agent:main:main");
+    });
+
+    it("heartbeat-stage WARN carries the kind+event_id correlator when present", async () => {
+      const { api, warnEvents } = createFakeApi({
+        heartbeatImpl: () => { throw new Error("heartbeat down"); },
+      });
+
+      await wakeAgent(api, "text", "transaction.completed", {
+        kind: "transaction.completed",
+        event_id: "evt-77",
+      }).catch(() => undefined);
+
+      const failed = warnEvents.find(
+        (e) => e.event === "wake_failed" && e.ctx["stage"] === "heartbeat",
+      );
+      expect(failed, "expected a heartbeat-stage wake_failed WARN").toBeTruthy();
+      expect(failed?.ctx["kind"]).toBe("transaction.completed");
+      expect(failed?.ctx["event_id"]).toBe("evt-77");
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // card/openclaw-zeroclaw-per-conversation-wake-keying — Item 1 wiring (qa-developer RED).
+  //
+  // The relay-level proof: makeNotificationHandler/makeChannelHandler must derive
+  // the per-entity key from the typed event and pass it into wakeAgent so the
+  // wake enqueues — AND heartbeats (invariant #4) — on the CONVERSATION's own key
+  // (`agent:<id>:klodi:<entity_id>`), not the shared agent:main:main. Mirrors the
+  // hermes relay tests. RED while the handlers still relay to agent:main:main.
+  // ─────────────────────────────────────────────────────────────────────────
+  describe("per-conversation key wiring through the handlers (Item 1)", () => {
+    function sessionKeysOf(
+      calls: RecordedCall[],
+    ): { enqueue?: string; heartbeat?: string } {
+      const enqueue = calls.find((c) => c.fn === "enqueue");
+      const heartbeat = calls.find((c) => c.fn === "heartbeat");
+      return {
+        enqueue: (enqueue?.args[1] as { sessionKey?: string } | undefined)
+          ?.sessionKey,
+        heartbeat: (heartbeat?.args[0] as { sessionKey?: string } | undefined)
+          ?.sessionKey,
+      };
+    }
+
+    function offerProposed(
+      listing_id: string,
+      event_id: string,
+    ): NotificationEvent {
+      return {
+        kind: "offer.proposed",
+        event_id,
+        offer_id: "off-1",
+        listing_id,
+        buyer_handle: "buyer",
+        amount: 1000,
+        terms: null,
+      };
+    }
+
+    it("relays two distinct listings to two distinct per-entity session keys", async () => {
+      const a = createFakeApi();
+      await makeNotificationHandler(a.api)(offerProposed("lst-7", "e1"));
+      const b = createFakeApi();
+      await makeNotificationHandler(b.api)(offerProposed("lst-8", "e2"));
+
+      expect(sessionKeysOf(a.calls).enqueue).toBe("agent:main:klodi:lst-7");
+      expect(sessionKeysOf(b.calls).enqueue).toBe("agent:main:klodi:lst-8");
+      expect(sessionKeysOf(a.calls).enqueue).not.toBe("agent:main:main");
+      expect(sessionKeysOf(b.calls).enqueue).not.toBe("agent:main:main");
+    });
+
+    it("relays repeat wakes for one listing to one continuous session key", async () => {
+      const { api, calls } = createFakeApi();
+      const handler = makeNotificationHandler(api);
+      await handler(offerProposed("lst-7", "e1"));
+      await handler(offerProposed("lst-7", "e2"));
+
+      const enqueues = calls
+        .filter((c) => c.fn === "enqueue")
+        .map((c) => (c.args[1] as { sessionKey?: string }).sessionKey);
+      expect(enqueues).toEqual([
+        "agent:main:klodi:lst-7",
+        "agent:main:klodi:lst-7",
+      ]);
+    });
+
+    it("keys offer.accepted off the listing prefix, not the transaction (BR-2)", async () => {
+      const { api, calls } = createFakeApi();
+      const event: NotificationEvent = {
+        kind: "offer.accepted",
+        event_id: "evt-acc",
+        offer_id: "off-2",
+        listing_id: "lst-8",
+        seller_handle: "seller",
+        amount: 1000,
+        transaction_id: "txn-1",
+      };
+      await makeNotificationHandler(api)(event);
+      const key = sessionKeysOf(calls).enqueue;
+      expect(key).toBe("agent:main:klodi:lst-8");
+      expect(key).not.toContain("txn-1");
+    });
+
+    it("relays a channel message to a per-channel session key", async () => {
+      const { api, calls } = createFakeApi();
+      const event: ChannelMessageEvent = {
+        kind: "channel.message",
+        event_id: "evt-chan",
+        channel_id: "chn-9",
+        message_id: "msg-1",
+        sequence: 1,
+        sender_user_id: "usr-1",
+        sender_handle: "sender",
+        content: "hello",
+        created_at: "2026-06-30T00:00:00Z",
+      };
+      await makeChannelHandler(api)(event);
+      expect(sessionKeysOf(calls).enqueue).toBe("agent:main:klodi:chn-9");
+    });
+
+    it("enqueues AND heartbeats on the SAME per-entity key (invariant #4)", async () => {
+      const { api, calls } = createFakeApi();
+      await makeNotificationHandler(api)(offerProposed("lst-7", "e1"));
+      const keys = sessionKeysOf(calls);
+      expect(keys.enqueue).toBe("agent:main:klodi:lst-7");
+      expect(keys.heartbeat).toBe("agent:main:klodi:lst-7");
+      expect(keys.enqueue).toBe(keys.heartbeat);
+    });
+  });
 });
 
 // qa-developer: 0012-gap-fixes-decision-13
 // qa-developer: card/add-event-correlator-to-wake-enqueued-log — RED kind/event_id correlator
+// qa-developer: card/openclaw-zeroclaw-per-conversation-wake-keying — RED keying + Item 2 correlator + OQ-2
