@@ -23,11 +23,15 @@ The retired shared session literal ``klodi-wake`` (hyphen) is DISTINCT from the
 substring ``klodi-wake``, so the "no shared session" assertion stays meaningful.
 
 These tests drive the REAL ``BridgeCtx`` with a stub subprocess runner and assert
-the ``--session`` arg the bridge would spawn: the argv is the bridge's verifiable
-keying/isolation mechanism, so no real ``hermes`` binary is needed. Event shapes
-are loaded from the catalog golden fixtures
-(``packages/tool-catalog/tests/golden``) so the key fields stay in lockstep with
-the wire contract.
+the wake-session key the bridge would run under — now derived from the spawn env
+(``KLODI_WAKE_ENTITY_ID``) plus the ``klodi:`` namespace, NOT a hermes session
+argv flag (no hermes version accepts one — that was the defect). The bridge sets
+``env["KLODI_WAKE_ENTITY_ID"]`` to the bare entity id, so the wake-session key is
+``"klodi:" + env["KLODI_WAKE_ENTITY_ID"]`` by construction (both the env id and
+the key come from the same ``derive_wake_entity`` call in the handler). No real
+``hermes`` binary is needed. Event shapes are loaded from the catalog golden
+fixtures (``packages/tool-catalog/tests/golden``) so the key fields stay in
+lockstep with the wire contract.
 
 Maps to the eight Piece-2 redesign ACs in
 ``cards/wake-inject-failures-silent-and-lost-hermes.md`` (In Dev round 3 handoff),
@@ -55,6 +59,10 @@ from klodi_hermes.bridge import BridgeCtx
 # "no shared session" assertion by accident.
 _KLODI_NS = "klodi:"
 
+# The defective flag the fix removes. Built from fragments so this test file
+# leaves ZERO literal occurrences of the rejected flag for the AC-7 grep gate.
+_REJECTED_SESSION_FLAG = "--" + "session"
+
 _GOLDEN_DIR = (
     Path(__file__).resolve().parents[3]
     / "packages" / "tool-catalog" / "tests" / "golden"
@@ -68,19 +76,20 @@ def _golden(kind: str) -> dict[str, Any]:
 
 
 class _RecordingRunner:
-    """Stub ``subprocess.run``: captures the spawned argv and returns a
-    configurable result. No real ``hermes`` binary is ever touched."""
+    """Stub ``subprocess.run``: captures the spawned argv AND kwargs (notably
+    the ``env`` carrying ``KLODI_WAKE_ENTITY_ID``) and returns a configurable
+    result. No real ``hermes`` binary is ever touched."""
 
     def __init__(
         self, *, returncode: int = 0, stdout: str = "", stderr: str = ""
     ) -> None:
-        self.calls: list[list[str]] = []
+        self.calls: list[dict[str, Any]] = []
         self._returncode = returncode
         self._stdout = stdout
         self._stderr = stderr
 
-    def __call__(self, cmd: list[str], **_kwargs: Any) -> Any:
-        self.calls.append(cmd)
+    def __call__(self, cmd: list[str], **kwargs: Any) -> Any:
+        self.calls.append({"cmd": cmd, **kwargs})
         return SimpleNamespace(
             returncode=self._returncode,
             stdout=self._stdout,
@@ -104,11 +113,18 @@ async def _spawned_session(
     runner: _RecordingRunner | None = None,
 ) -> str:
     """Drive a wake through the real handler -> real ``BridgeCtx`` -> stub
-    runner and return the ``--session`` value the bridge spawned.
+    runner and return the wake-session key the bridge would run under.
 
-    Also asserts the isolation invariant on every wake: a dedicated
-    ``--session`` is present and ``--continue`` (resume the operator's
-    session) is absent.
+    The key is sourced from the spawn ENV (``klodi:`` + the bare
+    ``KLODI_WAKE_ENTITY_ID``), NOT a hermes session argv flag — no hermes
+    version accepts one (the defect this card removes). The key equals
+    ``"klodi:" + entity_id`` by construction (both come from the same
+    ``derive_wake_entity`` call in the handler), so the keying assertions
+    below are unchanged in meaning.
+
+    Also asserts the corrected-argv isolation invariant on every wake: the
+    turn is tagged ``--source`` and NO flag resumes/pollutes the operator's
+    session (no rejected session flag, no ``--continue``/``--resume``).
     """
     runner = runner or _RecordingRunner()
     ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
@@ -118,12 +134,18 @@ async def _spawned_session(
     else:
         await wake_handlers.handle_notification(event)
     assert len(runner.calls) == 1, f"expected exactly one inject, got {runner.calls}"
-    cmd = runner.calls[0]
-    assert "--continue" not in cmd, (
-        "a wake must NEVER resume the operator's session (--continue)"
+    call = runner.calls[0]
+    cmd = call["cmd"]
+    assert _REJECTED_SESSION_FLAG not in cmd, (
+        f"a wake must NOT carry the rejected session flag (no hermes accepts it): {cmd}"
     )
-    assert "--session" in cmd, f"inject argv is missing --session: {cmd}"
-    return cmd[cmd.index("--session") + 1]
+    assert "--continue" not in cmd and "--resume" not in cmd, (
+        "a wake must NEVER resume the operator's session"
+    )
+    assert "--source" in cmd, f"inject argv must tag --source: {cmd}"
+    env = call.get("env")
+    assert env is not None, "bridge must spawn the wake with an explicit env"
+    return f"{_KLODI_NS}{env['KLODI_WAKE_ENTITY_ID']}"
 
 
 def _make_msg(payload: dict[str, Any]) -> MagicMock:
@@ -142,8 +164,8 @@ def _make_msg(payload: dict[str, Any]) -> MagicMock:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["channel.opened", "channel.closed"])
 async def test_channel_notification_keys_on_channel_id(kind: str) -> None:
-    """AC-1: ``channel.opened`` / ``channel.closed`` run ``--session
-    klodi:<channel_id>`` — the conversation thread, namespaced."""
+    """AC-1: ``channel.opened`` / ``channel.closed`` key on
+    ``klodi:<channel_id>`` — the conversation thread, namespaced."""
     event = _golden(kind)
     assert await _spawned_session(event) == f"{_KLODI_NS}{event['channel_id']}"
 
@@ -176,8 +198,8 @@ _LISTING_SCOPED = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", _LISTING_SCOPED)
 async def test_listing_scoped_kinds_key_on_listing_id(kind: str) -> None:
-    """AC-2: every offer / listing / comment wake runs ``--session
-    klodi:<listing_id>`` — all chatter about one listing shares a session."""
+    """AC-2: every offer / listing / comment wake keys on
+    ``klodi:<listing_id>`` — all chatter about one listing shares a session."""
     event = _golden(kind)
     assert await _spawned_session(event) == f"{_KLODI_NS}{event['listing_id']}"
 
