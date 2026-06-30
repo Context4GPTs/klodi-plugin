@@ -17,25 +17,25 @@ Why this exists (and why ``ctx.register_skill`` alone is not enough):
   it appears in both surfaces. ``install_hermes_skill_index`` is
   ``klodi-hermes-setup``'s implementation of that legacy copy.
 
-Filesystem contract (the contract these tests pin):
+Filesystem contract (the **version-aware** contract these tests pin):
 
 * Source directory must exist and be a directory; otherwise the
   function logs a warning and returns ``None`` — a missing source is
-  a degraded install, not a fatal one (matches ``seed_skill_dir``'s
-  posture so a curl-pipe installer keeps working when the bundle is
-  shipped via a separate channel).
-* When ``${hermes_home}/skills/klodi/`` already exists and
-  ``reseed=False``, the existing tree must be left untouched (a user
-  may have customised SKILL.md) and the function returns ``None``
-  with an error log. Mirrors P3-19 Option A applied to
-  ``seed_skill_dir``.
-* When the target exists and ``reseed=True`` (default), the prior
-  tree is removed and a fresh copy lands.
+  a degraded install, not a fatal one. ``${hermes_home}/skills/`` must
+  NOT be created in that branch.
+* The install is governed UNCONDITIONALLY by the on-disk-vs-bundle
+  version (a dotfile ``.klodi-skill-version`` marker), NOT by the
+  ``reseed`` flag. A stale or unmarked index is rebuilt even when
+  ``reseed=False`` — a wrong deploy flag must never strand a stale
+  index (the bug this card closes). The marker is stamped LAST, after
+  a successful copytree.
+* An index already at the same-or-newer version is left untouched and
+  the existing path is returned (idempotent — no every-boot churn, no
+  version regression).
 * The function MUST create ``${hermes_home}/skills/`` if missing —
   Hermes only mints that directory lazily on the first
   ``skill_manage`` call, so a fresh ``HERMES_HOME`` typically has
-  no ``skills/`` subdirectory yet. Without this guard the install
-  silently no-ops on first-run setups.
+  no ``skills/`` subdirectory yet.
 
 Import style mirrors ``test_skill_install.py`` / ``test_register.py``:
 ``setup_cli`` uses relative imports, so it must be loaded as a
@@ -77,6 +77,10 @@ if _NATS_CLIENT_SRC.is_dir() and str(_NATS_CLIENT_SRC) not in sys.path:
 _setup_cli_mod = importlib.import_module("klodi_hermes.setup_cli")
 install_hermes_skill_index = _setup_cli_mod.install_hermes_skill_index
 
+_MARKER = ".klodi-skill-version"
+_BUNDLE_VERSION = "0.3.5"
+_BUNDLE_SKILL_MD = "# klodi — agent playbook\n\nFresh bundle.\n"
+
 
 def _seed_bundle(source: Path) -> None:
     """Lay down a representative klodi skill bundle on disk.
@@ -87,12 +91,13 @@ def _seed_bundle(source: Path) -> None:
     realistic guards against a regression that copies SKILL.md but
     drops the references/ tree (the agent loads from references/ at
     every tool call, so a missing tree is silent UX rot).
+
+    The shipped bundle carries NO version marker — the bundle version
+    is the wheel version, supplied by the caller. The install stamps
+    the target's ``.klodi-skill-version`` marker itself.
     """
     source.mkdir(parents=True)
-    (source / "SKILL.md").write_text(
-        "# klodi — agent playbook\n\nFresh bundle.\n",
-        encoding="utf-8",
-    )
+    (source / "SKILL.md").write_text(_BUNDLE_SKILL_MD, encoding="utf-8")
     refs = source / "references"
     refs.mkdir()
     (refs / "tool_inventory.md").write_text(
@@ -113,10 +118,22 @@ def _seed_bundle(source: Path) -> None:
     )
 
 
+def _seed_existing_index(target: Path, version: str | None) -> None:
+    """Create a warm ``${hermes_home}/skills/klodi/`` from a prior
+    install, optionally stamped at ``version`` (``None`` = legacy
+    unmarked tree). Carries a distinct SKILL.md + a STALE.md so a
+    rebuild (rmtree) vs a copy-over can be told apart."""
+    target.mkdir(parents=True)
+    (target / "SKILL.md").write_text("# klodi — stale on-disk\n", encoding="utf-8")
+    (target / "STALE.md").write_text("# stale\n", encoding="utf-8")
+    if version is not None:
+        (target / _MARKER).write_text(f"{version}\n", encoding="utf-8")
+
+
 class TestInstallHermesSkillIndex(unittest.TestCase):
     def test_copies_full_bundle_into_hermes_skills_dir(self) -> None:
-        """Happy path: source -> ${hermes_home}/skills/klodi/ with the
-        full subtree (SKILL.md + references/) intact."""
+        """Happy path (absent target): source -> ${hermes_home}/skills/
+        klodi/ with the full subtree intact AND a stamped marker."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             hermes_home = root / "hermes_home"
@@ -124,18 +141,23 @@ class TestInstallHermesSkillIndex(unittest.TestCase):
             source = root / "bundle"
             _seed_bundle(source)
 
-            target = install_hermes_skill_index(hermes_home, source)
+            target = install_hermes_skill_index(
+                hermes_home, source, version=_BUNDLE_VERSION
+            )
 
             expected = hermes_home / "skills" / "klodi"
             self.assertEqual(target, expected)
             self.assertTrue(expected.is_dir())
-            # SKILL.md content is byte-identical with the source.
             self.assertEqual(
                 (expected / "SKILL.md").read_text(encoding="utf-8"),
-                "# klodi — agent playbook\n\nFresh bundle.\n",
+                _BUNDLE_SKILL_MD,
             )
-            # The full reference subtree comes along — not just SKILL.md.
             self.assertTrue((expected / "references" / "tool_inventory.md").is_file())
+            # The freshness marker is stamped, as a dotfile.
+            self.assertEqual(
+                (expected / _MARKER).read_text(encoding="utf-8"),
+                f"{_BUNDLE_VERSION}\n",
+            )
 
     def test_returns_none_when_source_missing(self) -> None:
         """A missing source path is a soft failure: log a warning and
@@ -148,76 +170,140 @@ class TestInstallHermesSkillIndex(unittest.TestCase):
             hermes_home.mkdir()
             source = root / "missing"  # never created
 
-            target = install_hermes_skill_index(hermes_home, source)
+            target = install_hermes_skill_index(
+                hermes_home, source, version=_BUNDLE_VERSION
+            )
 
             self.assertIsNone(target)
             self.assertFalse((hermes_home / "skills").exists())
 
-    def test_no_reseed_refuses_to_overwrite(self) -> None:
-        """``reseed=False`` must preserve a user-customised
-        ${hermes_home}/skills/klodi/SKILL.md. Returning None lets the
-        installer surface a clear error to the operator."""
+    def test_no_reseed_still_upgrades_when_bundle_newer(self) -> None:
+        """Rewritten contract: ``reseed=False`` no longer refuses. When
+        the bundle is newer than the on-disk index, the index is
+        rebuilt even under ``--no-reseed`` — a wrong deploy flag must
+        never strand a stale index in ``<available_skills>``."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             hermes_home = root / "hermes_home"
             existing = hermes_home / "skills" / "klodi"
-            existing.mkdir(parents=True)
-            user_md = existing / "SKILL.md"
-            user_customised = (
-                "# klodi — operator-customised\n\nDo not overwrite me.\n"
-            )
-            user_md.write_text(user_customised, encoding="utf-8")
+            _seed_existing_index(existing, "0.3.4")  # older than bundle
 
             source = root / "bundle"
             _seed_bundle(source)
 
             target = install_hermes_skill_index(
-                hermes_home, source, reseed=False
+                hermes_home, source, version=_BUNDLE_VERSION, reseed=False
             )
 
-            self.assertIsNone(target)
-            # The customised file is byte-for-byte unchanged.
+            self.assertEqual(target, existing)
+            # The stale index was replaced with the fresh bundle.
             self.assertEqual(
-                user_md.read_text(encoding="utf-8"),
-                user_customised,
+                (existing / "SKILL.md").read_text(encoding="utf-8"),
+                _BUNDLE_SKILL_MD,
             )
-            # And no fresh subtree was sneaked in either.
-            self.assertFalse((existing / "references").exists())
+            self.assertFalse((existing / "STALE.md").exists())
+            self.assertEqual(
+                (existing / _MARKER).read_text(encoding="utf-8"),
+                f"{_BUNDLE_VERSION}\n",
+            )
 
-    def test_reseed_true_replaces_existing(self) -> None:
-        """``reseed=True`` (default) must remove the prior tree and
-        copy the source fresh. Pinning the *removal* matters: if the
-        implementation only copies-over without rmtree, stale files
-        from the old install (e.g. a renamed reference) would linger
-        and the agent would read inconsistent state."""
+    def test_stale_marked_index_is_rebuilt(self) -> None:
+        """A marked-but-older index is removed and copied fresh.
+        Pinning the *removal* matters: a copy-over without rmtree would
+        leave stale files (e.g. a renamed reference) lingering and the
+        agent would read inconsistent state."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             hermes_home = root / "hermes_home"
             existing = hermes_home / "skills" / "klodi"
-            existing.mkdir(parents=True)
-            stale = existing / "STALE.md"
-            stale.write_text("# stale\n", encoding="utf-8")
-            (existing / "SKILL.md").write_text(
-                "# old version\n",
-                encoding="utf-8",
-            )
+            _seed_existing_index(existing, "0.3.4")
 
             source = root / "bundle"
             _seed_bundle(source)
 
-            target = install_hermes_skill_index(hermes_home, source)
+            target = install_hermes_skill_index(
+                hermes_home, source, version=_BUNDLE_VERSION
+            )
 
             self.assertEqual(target, existing)
-            # Stale file removed.
-            self.assertFalse(stale.exists())
-            # SKILL.md is the new content from the source bundle.
+            self.assertFalse((existing / "STALE.md").exists())
             self.assertEqual(
                 (existing / "SKILL.md").read_text(encoding="utf-8"),
-                "# klodi — agent playbook\n\nFresh bundle.\n",
+                _BUNDLE_SKILL_MD,
             )
-            # The full references/ subtree is present.
             self.assertTrue(
                 (existing / "references" / "tool_inventory.md").is_file()
+            )
+
+    def test_unmarked_index_is_rebuilt(self) -> None:
+        """A legacy warm volume (index seeded before markers existed)
+        has no marker — it must be treated as older-than-any-bundle and
+        rebuilt (fail-safe toward reseed)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hermes_home = root / "hermes_home"
+            existing = hermes_home / "skills" / "klodi"
+            _seed_existing_index(existing, None)  # no marker
+
+            source = root / "bundle"
+            _seed_bundle(source)
+
+            target = install_hermes_skill_index(
+                hermes_home, source, version=_BUNDLE_VERSION, reseed=False
+            )
+
+            self.assertEqual(target, existing)
+            self.assertFalse((existing / "STALE.md").exists())
+            self.assertEqual(
+                (existing / _MARKER).read_text(encoding="utf-8"),
+                f"{_BUNDLE_VERSION}\n",
+            )
+
+    def test_same_version_index_left_untouched(self) -> None:
+        """An index already at the bundle version is a no-op: the
+        existing path is returned and the tree is not re-copied."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hermes_home = root / "hermes_home"
+            existing = hermes_home / "skills" / "klodi"
+            _seed_existing_index(existing, _BUNDLE_VERSION)
+
+            source = root / "bundle"
+            _seed_bundle(source)
+
+            before = (existing / "SKILL.md").stat().st_mtime_ns
+            target = install_hermes_skill_index(
+                hermes_home, source, version=_BUNDLE_VERSION
+            )
+
+            self.assertEqual(target, existing)
+            # Untouched: the distinct on-disk content survives.
+            self.assertEqual(
+                (existing / "SKILL.md").read_text(encoding="utf-8"),
+                "# klodi — stale on-disk\n",
+            )
+            self.assertTrue((existing / "STALE.md").exists())
+            self.assertEqual((existing / "SKILL.md").stat().st_mtime_ns, before)
+
+    def test_newer_ondisk_index_not_regressed(self) -> None:
+        """An index newer than the bundle (rollback) is left untouched."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hermes_home = root / "hermes_home"
+            existing = hermes_home / "skills" / "klodi"
+            _seed_existing_index(existing, "9.9.9")
+
+            source = root / "bundle"
+            _seed_bundle(source)
+
+            target = install_hermes_skill_index(
+                hermes_home, source, version=_BUNDLE_VERSION
+            )
+
+            self.assertEqual(target, existing)
+            self.assertEqual(
+                (existing / "SKILL.md").read_text(encoding="utf-8"),
+                "# klodi — stale on-disk\n",
             )
 
     def test_creates_skills_parent_dir_when_missing(self) -> None:
@@ -235,7 +321,9 @@ class TestInstallHermesSkillIndex(unittest.TestCase):
             source = root / "bundle"
             _seed_bundle(source)
 
-            target = install_hermes_skill_index(hermes_home, source)
+            target = install_hermes_skill_index(
+                hermes_home, source, version=_BUNDLE_VERSION
+            )
 
             self.assertEqual(target, hermes_home / "skills" / "klodi")
             self.assertTrue((hermes_home / "skills").is_dir())

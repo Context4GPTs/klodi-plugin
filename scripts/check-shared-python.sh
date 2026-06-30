@@ -12,7 +12,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HERMES="$ROOT/adapters/hermes/hermes_installer.py"
+HERMES="$ROOT/adapters/hermes/src/klodi_hermes/hermes_installer.py"
 NANOBOT="$ROOT/adapters/nanobot/nanobot_installer.py"
 
 if [[ ! -f "$HERMES" || ! -f "$NANOBOT" ]]; then

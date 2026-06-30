@@ -56,11 +56,21 @@ from pathlib import Path
 from .hermes_installer import (
     EXIT_OK,
     EXIT_USAGE,
+    SeedOutcome,
+    copy_skill_tree,
     default_klodi_home,
     ensure_klodi_home,
+    read_skill_version,
+    resolve_skill_version,
     seed_skill_dir,
     validate_host_slug,
+    version_is_newer,
 )
+
+# The distribution whose wheel version is the canonical bundle version.
+# The bundle ships inside this wheel, so wheel version == bundle version
+# (zero drift). Resolved at runtime via importlib.metadata.
+_DISTRIBUTION = "klodi-hermes"
 
 
 log = logging.getLogger("klodi_hermes.setup")
@@ -104,6 +114,7 @@ def install_hermes_skill_index(
     hermes_home: Path,
     source: Path,
     *,
+    version: str,
     reseed: bool = True,
 ) -> Path | None:
     """Copy the bundled klodi skill into ``${HERMES_HOME}/skills/klodi/``.
@@ -122,14 +133,22 @@ def install_hermes_skill_index(
     pattern as the way to surface a plugin skill in both the system
     prompt's index and the user-facing list.
 
-    Reseed semantics mirror :func:`hermes_installer.seed_skill_dir`
-    (P3-19 Option A): ``reseed=True`` (default) overwrites with a
-    warning, ``reseed=False`` refuses to clobber and returns ``None``
-    so the caller can surface a user-facing error.
+    Version-aware, mirroring :func:`hermes_installer.seed_skill_dir`:
+    the install is governed UNCONDITIONALLY by the on-disk-vs-bundle
+    version (the ``.klodi-skill-version`` marker). A stale or unmarked
+    index is rebuilt — even under ``--no-reseed`` — so a wrong deploy
+    flag can never strand a stale index in ``<available_skills>``. An
+    index already at the same-or-newer version is left untouched. The
+    ``reseed`` flag is accepted but inert (see :func:`seed_skill_dir`).
 
-    Returns the install target on success, ``None`` when the source is
-    missing or reseed was refused.
+    Returns the install target when the index is present and current
+    (freshly rebuilt OR already at/after the bundle version), ``None``
+    only when the bundled source is missing (a degraded install). The
+    rebuild refreshes mtime/size, which auto-invalidates the
+    prompt-builder's ``<available_skills>`` cache; a no-op correctly
+    leaves it valid.
     """
+    del reseed  # accepted-but-inert: the version decision is unconditional.
     if not source.is_dir():
         log.warning(
             "klodi_skill_source_missing path=%s — Hermes skill index"
@@ -139,23 +158,20 @@ def install_hermes_skill_index(
         )
         return None
     target = hermes_home / "skills" / _PLUGIN_NAME
-    if target.exists():
-        if not reseed:
-            log.error(
-                "[reseed] target exists at %s — pass --reseed (default) to"
-                " overwrite, or remove the directory manually. Skill index"
-                " left untouched.",
-                target,
-            )
-            return None
-        log.warning(
-            "[reseed] removing prior %s (use --no-reseed to keep existing)",
+    if target.exists() and not version_is_newer(version, read_skill_version(target)):
+        log.info(
+            "klodi_hermes_skill_index_current target=%s version=%s —"
+            " already current, not rebuilding.",
             target,
+            version,
         )
-        shutil.rmtree(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, target)
-    log.info("klodi_hermes_skill_index_installed target=%s", target)
+        return target
+    copy_skill_tree(source, target, version)
+    log.info(
+        "klodi_hermes_skill_index_installed target=%s version=%s",
+        target,
+        version,
+    )
     return target
 
 
@@ -307,27 +323,63 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.set_defaults(hermes_skill_index=True)
+    # --no-reseed is accepted-but-inert during a sequenced cross-repo
+    # deprecation (klodi-stage drops it from boot scripts; a follow-up
+    # card deletes it once that image ships). See ADR-0020.
     parser.add_argument(
         "--no-reseed",
         dest="reseed",
         action="store_false",
         help=(
-            "Refuse to overwrite either ${KLODI_HOME}/skill/ or"
-            " ${HERMES_HOME}/skills/klodi/ if they already exist."
-            " Use when SKILL.md has been customised and must not be reset."
-            " Without this flag, the installer warns then overwrites."
+            "DEPRECATED and inert. Seeding is now version-aware: the"
+            " canonical bundle always wins when it is newer than the"
+            " on-disk copy, and an equal/older bundle is always a no-op."
+            " This flag is accepted (so a lagging boot script does not"
+            " crash) but no longer suppresses an upgrade — it will be"
+            " removed in a future release. Remove it from boot scripts."
         ),
     )
     parser.set_defaults(reseed=True)
     return parser
 
 
+def _skill_bundle_line(outcome: SeedOutcome, version: str) -> str:
+    """One truthful, version-carrying line for the ${KLODI_HOME}/skill/
+    seed — the three outcomes stay distinct (BR-6)."""
+    if outcome == "reseeded":
+        return f"  skill bundle           : reseeded to v{version}\n"
+    if outcome == "already-current":
+        return f"  skill bundle           : already current at v{version}\n"
+    return "  skill bundle           : FAILED — bundled skill source missing\n"
+
+
+def _skill_index_line(
+    index: Path | None, *, requested: bool, version: str
+) -> str:
+    """One line for the ${HERMES_HOME}/skills/klodi/ index. A flag-off
+    skip and a source-missing FAILURE are reported distinctly — neither
+    is conflated with a successful install (BR-6)."""
+    if not requested:
+        return (
+            "  HERMES_HOME skill index: (skipped — --no-hermes-skill-index;"
+            " agent will not see klodi in <available_skills>)\n"
+        )
+    if index is None:
+        return (
+            "  HERMES_HOME skill index: FAILED — bundled skill source"
+            " missing (agent will not see klodi in <available_skills>)\n"
+        )
+    return f"  HERMES_HOME skill index: {index}  (v{version})\n"
+
+
 def _print_summary(
     *,
     plugin_dir: Path | None,
     hermes_skill_index: Path | None,
+    index_requested: bool,
     klodi_home: Path,
-    skill_seeded: bool,
+    skill_outcome: SeedOutcome,
+    version: str,
 ) -> None:
     """Render the operator-facing post-install summary on stdout."""
     plugin_dir_line = (
@@ -335,18 +387,12 @@ def _print_summary(
         if plugin_dir is not None
         else "  HERMES_HOME plugin dir : (skipped — entry-point discovery)\n"
     )
-    skill_index_line = (
-        f"  HERMES_HOME skill index: {hermes_skill_index}\n"
-        if hermes_skill_index is not None
-        else "  HERMES_HOME skill index: (skipped — agent will not see"
-        " klodi in <available_skills>)\n"
-    )
     sys.stdout.write(
         "klodi Hermes adapter setup complete.\n"
         f"{plugin_dir_line}"
-        f"{skill_index_line}"
+        f"{_skill_index_line(hermes_skill_index, requested=index_requested, version=version)}"
         f"  KLODI_HOME             : {klodi_home}\n"
-        f"  skill bundle seeded    : {skill_seeded}\n"
+        f"{_skill_bundle_line(skill_outcome, version)}"
         "\nNext steps:\n"
         "  1. hermes plugins enable klodi          # load the adapter\n"
         "  2. ask the agent to run klodi_register  # browser-based\n"
@@ -383,30 +429,45 @@ def main(argv: list[str] | None = None) -> int:
     )
     ensure_klodi_home(klodi_home)
 
+    if not args.reseed:
+        log.warning(
+            "klodi_no_reseed_deprecated --no-reseed is accepted but inert;"
+            " seeding is version-aware and the canonical bundle always wins"
+            " when newer. Remove it from boot scripts."
+        )
+
+    version = resolve_skill_version(_DISTRIBUTION)
     skill_source = (
         Path(args.skill_source) if args.skill_source else _BUNDLED_SKILL_DIR
     )
-    skill_seeded = seed_skill_dir(klodi_home, skill_source, reseed=args.reseed)
+    skill_outcome = seed_skill_dir(
+        klodi_home, skill_source, version=version, reseed=args.reseed
+    )
 
     hermes_skill_index = (
-        install_hermes_skill_index(hermes_home, skill_source, reseed=args.reseed)
+        install_hermes_skill_index(
+            hermes_home, skill_source, version=version, reseed=args.reseed
+        )
         if args.hermes_skill_index
         else None
     )
 
     log.info(
-        "klodi_setup_complete plugin_dir=%s klodi_home=%s skill_seeded=%s"
-        " hermes_skill_index=%s",
+        "klodi_setup_complete plugin_dir=%s klodi_home=%s version=%s"
+        " skill_outcome=%s hermes_skill_index=%s",
         plugin_dir,
         klodi_home,
-        skill_seeded,
+        version,
+        skill_outcome,
         hermes_skill_index,
     )
     _print_summary(
         plugin_dir=plugin_dir,
         hermes_skill_index=hermes_skill_index,
+        index_requested=args.hermes_skill_index,
         klodi_home=klodi_home,
-        skill_seeded=skill_seeded,
+        skill_outcome=skill_outcome,
+        version=version,
     )
     return EXIT_OK
 
