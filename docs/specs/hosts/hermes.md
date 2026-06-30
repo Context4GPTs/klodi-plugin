@@ -34,6 +34,16 @@ host_shape: in_agent
 - **Failure semantics:** handler exception → `klodi-nats-client` consumer naks → JetStream redelivers per `max_deliver: 5` / `ack_wait: 30s`. Per-consumer LRU dedup on `event_id` absorbs duplicates.
 - **Per-host wake-routing config:** none required. Hermes's event bus delivers in-process; there is no cross-session routing question.
 
+## 4a. Outbound escalation (`klodi_message_user`)
+
+The outbound half of the wake round-trip — how a klodi agent reaches its human operator when a marketplace decision is policy-reserved — is bound to Hermes's own host primitives (`message.py`). It runs inside the isolated `hermes chat --session klodi:<entity_id>` wake turn and must reach the operator's *separate* live session **without running an agent turn there** (the no-hijack requirement).
+
+- **Turn-less delivery binding:** `_deliver(platform, chat_id, text)` pushes via `tools.send_message_tool._send_to_platform(Platform(platform), pconfig, chat_id, text)` over a `gateway.config.load_gateway_config()` platform config. This is the **same one-shot standalone sender Hermes's cron runner uses** when the gateway process is elsewhere (`cron/scheduler.py::_deliver_result`, the gateway-not-running branch) — platform-agnostic (Telegram, Discord, Signal, …) and needing no live gateway adapter. The in-gateway `gateway.delivery.DeliveryRouter` is deliberately **not** used: it requires the gateway's live platform-adapter instances, which a `hermes chat` wake subprocess does not hold. An unknown/disabled platform or a non-empty sender error raises `DeliveryError` → a surfaced `delivery_failed` (never a silent drop).
+- **Operator resolution:** `resolve_operator_target()` reads Hermes's SQLite session store `hermes_state.SessionDB($HERMES_HOME/state.db).list_sessions_rich()` and picks the **most-recently-active** session (ranked by the numeric `last_active`, since the host query orders by `started_at`) whose `source` is a reachable messaging platform, then recovers a deliverable `chat_id` from `gateway.channel_directory.load_directory()`. The whole `klodi:` wake-session family is excluded (a wake session's `source` is the host CLI `source` and its id/title is namespaced `klodi:<entity_id>`) so an escalation is never self-addressed into the bot's own transcript.
+- **No default fallback channel** (founder decision): the target is always a resolved live operator. A genuinely-absent operator (no reachable session) surfaces a loud `no_operator_target` envelope — never a silent drop, never a configured default. (The retired `KLODI_FALLBACK_*` / assumed `active_sessions.json` path is gone.)
+- **Deliver-then-persist (BR-9):** the pending-decision (`pending_decisions.py`) is recorded **only after** a successful deliver, so a failed send never leaves a dangling decision the operator never saw.
+- **Host-module availability:** `hermes_state`, `gateway.*`, and `tools.send_message_tool` ship only inside the Hermes runtime image, never in the `klodi-hermes` wheel's own environment. Every host import is therefore **lazy** (inside the function that needs it) — importing the adapter never requires Hermes to be installed. The unit suite drives the two host boundaries (`_list_operator_sessions` / `_resolve_chat_id` and `_deliver`) as seams; the live stage exercises the real bindings.
+
 ## 5. Setup particulars
 
 - **Phases:** all five canonical phases (`unregistered | corrupt | degraded | needs_policy | ready`) — same surface as OpenClaw.
@@ -65,7 +75,8 @@ ${klodi_home}/                       # mode 0700
 └── buy/<slug>.md                    # per-standing-search strategy
 ```
 
-- **File ownership:** `local_tools.py` owns `config.json` reads and `klodi_setup_*` writes. `register.py` writes `nats.creds` + `config.json` after a successful claim. `watch.py` owns `buy/<slug>.md`. The skill tree is owned by `hermes_installer.py::seed_skill_dir` and the `klodi_setup_reseed_skill` handler in `local_tools.py`.
+- **File ownership:** `local_tools.py` owns `config.json` reads and `klodi_setup_*` writes. `register.py` writes `nats.creds` + `config.json` after a successful claim. `watch.py` owns `buy/<slug>.md`. The skill tree is owned by `hermes_installer.py::seed_skill_dir` and the `klodi_setup_reseed_skill` handler in `local_tools.py`. `pending_decisions.py` owns `${klodi_home}/pending/<entity_id>.json`.
+- **Host data root (`$HERMES_HOME`, read-only to klodi):** the outbound resolver (§4a) reads Hermes's own SQLite session store at `$HERMES_HOME/state.db` and channel directory at `$HERMES_HOME/channel_directory.json` to resolve the operator's reachable `(platform, chat_id)`. These are Hermes-owned files; klodi only reads them. `$HERMES_HOME` defaults to `~/.hermes` when unset (it is `/opt/data` in the stage/prod image).
 - **Idempotency:** `seed_skill_dir` force-overwrites the skill bundle (canonical-source-of-truth model). Policy seeding is non-destructive (`_seed_if_absent`).
 
 ## 8. Test entry points
@@ -84,7 +95,7 @@ ${klodi_home}/                       # mode 0700
   hermes plugins enable klodi
   ```
 - **Required runtime version:** Hermes plugin SDK v0.3.0+; Python 3.10+.
-- **Required env / pre-existing files:** none. `KLODI_HOME` and `KLODI_API_URL` env vars optional.
+- **Required env / pre-existing files:** none. `KLODI_HOME` and `KLODI_API_URL` env vars optional. `HERMES_HOME` is the Hermes runtime's own data root (defaults to `~/.hermes`; `/opt/data` in the stage/prod image); the outbound resolver reads `$HERMES_HOME/state.db` + `$HERMES_HOME/channel_directory.json` (§4a). No `KLODI_FALLBACK_*` / default-channel config exists — operator delivery resolves the live operator session or surfaces `no_operator_target`.
 
 ## 10. Open questions
 
