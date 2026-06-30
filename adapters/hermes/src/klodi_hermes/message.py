@@ -41,7 +41,7 @@ genuinely-absent operator surfaces a loud ``no_operator_target``.
     ``gateway.config.load_gateway_config`` platform config) — NOT the
     in-gateway ``DeliveryRouter``, which needs the gateway's live
     platform adapters that a ``hermes chat`` wake subprocess does not
-    hold. See ADR on operator escalation for the full rationale.
+    hold. See ADR-0020 for the full rationale.
 
 The host modules above ship only inside the Hermes runtime, never in the
 ``klodi-hermes`` wheel's own environment, so every host import is LAZY

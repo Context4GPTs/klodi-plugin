@@ -3,9 +3,9 @@ id: 0019-wake-inject-failure-disposition
 title: Wake-inject failure disposition by class — timeout is swallowed-and-ACKed; a deterministic nonzero exit is a loud correlated alarm, never NAK/redeliver/dead-letter
 tags: [wake, error-handling, observability, alarm, consumer, ack, adapters, parity, hermes, nats]
 card: wake-inject-failures-silent-and-lost-hermes
-commit: b0e39b9
+commit: 709dd7c
 updated_at: 2026-06-30
-updated_by_card: openclaw-zeroclaw-per-conversation-wake-keying
+updated_by_card: bind-message-user-delivery-and-operator-resolver
 ---
 
 # ADR-0019 — Wake-inject failure disposition by failure class
@@ -100,8 +100,9 @@ present", because several kinds carry >1 id (`offer.accepted` has both `listing_
 
 **Why the `klodi:` namespace is load-bearing, not cosmetic.** The sibling outbound card
 `wake-outbound-roundtrip-message-and-correlation` (same epic) resolves the operator's active
-session from `runtime/active_sessions.json` and must **exclude the wake-session family** — but a
-bare entity id is syntactically indistinguishable from a session the human operator owns
+session from the host's SQLite session store (`hermes_state.SessionDB`, per
+[[0020-operator-escalation-delivery-binding]]) and must **exclude the wake-session family** —
+but a bare entity id is syntactically indistinguishable from a session the human operator owns
 (sharpest: a `search_slug` like `vintage-camera`). The `klodi:` prefix is the only filter that
 separates the two; the colon also distinguishes it from the retired single shared `klodi-wake`
 (hyphen) session. `:` in a session id is **already established in this epic** — openclaw uses
@@ -252,7 +253,8 @@ line. A future change must not widen the alarm to echo a redacted field
   per-conversation `klodi:`-namespaced session scheme (the frozen epic template).
 - **Sibling outbound card:** `wake-outbound-roundtrip-message-and-correlation`
   (epic `wake-inject-swallow-2026-06`) — **consumes** the `klodi:` namespace: it excludes the
-  wake-session family from operator-session resolution in `active_sessions.json` by the prefix.
+  wake-session family from operator-session resolution (over `hermes_state.SessionDB`, by the
+  id/title prefix). The delivery + resolution binding is [[0020-operator-escalation-delivery-binding]].
 - **Related:** [[0001-persistent-websocket-connection]] (transport),
   [[0011-adapter-exception-envelope]] (outbound tool-call error axis),
   [[0012-tool-request-payload-parity]] (payload rides the wake text).
