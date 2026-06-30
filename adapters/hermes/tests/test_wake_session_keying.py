@@ -5,9 +5,10 @@ listing, transaction notification, for the daemon's whole lifetime — ran in ON
 shared ``klodi-wake`` session, so history grew unbounded with no cleanup. The
 redesign keys each wake to its CONVERSATION, derived from ``event.kind``, and
 NAMESPACES every session under the ``klodi:`` prefix so the sibling outbound
-card's active-session resolver can exclude the whole wake-session family from
-``active_sessions.json`` (a bare ``search_slug`` like ``vintage-camera`` is
-otherwise indistinguishable from an operator session):
+card's operator-session resolver can exclude the whole wake-session family from
+the host session store (``hermes_state.SessionDB``, by the id/title prefix — see
+ADR-0020) — a bare ``search_slug`` like ``vintage-camera`` is otherwise
+indistinguishable from an operator session:
 
   * channel.*           -> klodi:<channel_id>     (the buy/sell negotiation thread)
   * offer.* / listing.* / comment.created -> klodi:<listing_id>

@@ -95,14 +95,14 @@ _ENTITY_TYPE_BY_KEY_FIELD: dict[str, str] = {
 }
 
 # Namespace prefix on EVERY wake-session name. Lets the outbound resolver
-# (``message.resolve_operator_target``, which reads the operator's active
-# session from ``active_sessions.json``) exclude the whole wake-session
-# family by this prefix — a bare entity id (esp. a ``search_slug`` like
-# ``vintage-camera``) is otherwise indistinguishable from an operator
-# session name. PUBLIC: this is the shared cross-module contract the
-# resolver imports. The colon here is deliberately distinct from the
-# retired shared-session literal ``klodi-wake`` (hyphen), so a namespaced
-# key can never contain that substring.
+# (``message.resolve_operator_target``, which scans the host session store
+# ``hermes_state.SessionDB``) exclude the whole wake-session family by this
+# prefix — a wake session's id/title is ``klodi:<entity_id>``, and a bare
+# entity id (esp. a ``search_slug`` like ``vintage-camera``) is otherwise
+# indistinguishable from an operator session. PUBLIC: this is the shared
+# cross-module contract the resolver imports. The colon here is deliberately
+# distinct from the retired shared-session literal ``klodi-wake`` (hyphen),
+# so a namespaced key can never contain that substring.
 WAKE_SESSION_NAMESPACE = "klodi:"
 
 _EPHEMERAL_SESSION_PREFIX = "wake-"
