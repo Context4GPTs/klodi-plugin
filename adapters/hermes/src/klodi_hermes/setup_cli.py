@@ -323,6 +323,9 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.set_defaults(hermes_skill_index=True)
+    # --no-reseed is accepted-but-inert during a sequenced cross-repo
+    # deprecation (klodi-stage drops it from boot scripts; a follow-up
+    # card deletes it once that image ships). See ADR-0020.
     parser.add_argument(
         "--no-reseed",
         dest="reseed",

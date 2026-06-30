@@ -8,6 +8,7 @@ Rows are sorted **newest `updated_at` first**.
 
 | Doc | Title | Tags | Updated |
 |---|---|---|---|
+| [[0020-version-aware-skill-seeding]] | Skill seeding is unconditionally version-aware (canonical bundle wins when newer); `--no-reseed` demoted to accepted-but-inert and sequenced for cross-repo removal | skill, bundle, seeding, versioning, reseed, deprecation, cross-repo, hermes, nanobot, installer, parity | 2026-06-30 |
 | [[0019-wake-inject-failure-disposition]] | Wake-inject failure disposition by class — timeout swallowed-and-ACKed; deterministic nonzero is a loud correlated alarm, never NAK/redeliver/dead-letter | wake, error-handling, observability, alarm, consumer, ack, adapters, parity, hermes, nats | 2026-06-30 |
 | [[0018-klodi-skill-bundle-slug]] | Skill bundle is namespaced `klodi-skill` at build time; `${klodi_home}/skill` install-time stays `skill` | skill, bundle, vendoring, publish, naming, collision, adapters, openclaw | 2026-06-25 |
 | [[0017-golden-corpus-cross-language-contract]] | Golden corpus is the cross-language wake-event contract (Decision 7) — fixtures mirror the publisher wire body, not the enriched event | golden, contract, drift, cross-language, events, codegen, nats, gate, fixtures | 2026-06-25 |
