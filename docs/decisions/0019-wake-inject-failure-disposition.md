@@ -3,7 +3,7 @@ id: 0019-wake-inject-failure-disposition
 title: Wake-inject failure disposition by class — timeout is swallowed-and-ACKed; a deterministic nonzero exit is a loud correlated alarm, never NAK/redeliver/dead-letter
 tags: [wake, error-handling, observability, alarm, consumer, ack, adapters, parity, hermes, nats]
 card: wake-inject-failures-silent-and-lost-hermes
-commit: 47cd550
+commit: 611750d
 updated_at: 2026-06-30
 updated_by_card: audit-all-adapters-for-silent-wake-inject-failure
 ---
