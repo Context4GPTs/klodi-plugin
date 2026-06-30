@@ -35,6 +35,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::forwarder::WakeEvent;
+use klodi_nats_client::NotificationEvent;
 
 /// Namespace prefix on EVERY wake-session key. Lets an outbound/operator-session
 /// resolver exclude the whole wake-session family by this prefix (the BR-5
@@ -51,12 +52,88 @@ pub const WAKE_SESSION_NAMESPACE: &str = "klodi:";
 /// key; the safe per-wake ephemeral fallback (`klodi:wake-<event_id>`) is
 /// produced instead, mirroring hermes `_reject_traversal_entity_id`.
 pub fn derive_wake_session(event: &WakeEvent) -> String {
-    // qa stub — expert-developer implements. See the module-level STUB note.
-    let _ = event;
-    todo!(
-        "derive_wake_session: port the ADR-0019 exhaustive-match scheme \
-         (see adapters/hermes/.../wake_handlers.py::derive_wake_session)"
-    )
+    // ADR-0019 + `_SESSION_KEY_FIELD_BY_DOMAIN` (the hermes reference,
+    // `adapters/hermes/src/klodi_hermes/wake_handlers.py`): the entity id is
+    // pulled by the EXHAUSTIVE typed match in `entity_id`, keyed off the kind's
+    // DOMAIN — never "first id present". A poisoned or absent id folds into the
+    // bounded per-wake ephemeral fallback: this `-> String` signature cannot
+    // raise, so traversal refusal IS the fallback and the poisoned id never
+    // reaches the output (THREAT_MODEL T5).
+    if let Some(id) = entity_id(event) {
+        if is_safe_entity_id(&id) {
+            return format!("{WAKE_SESSION_NAMESPACE}{id}");
+        }
+    }
+    format!("{WAKE_SESSION_NAMESPACE}{}", ephemeral_id(event.event_id()))
+}
+
+/// Bounded per-wake fallback id: `wake-<event_id>`, or `wake-<uuid4>` when the
+/// wake carries no `event_id` — NEVER a shared constant (BR-3), which would
+/// re-introduce the unbounded shared-session bug being fixed.
+fn ephemeral_id(event_id: &str) -> String {
+    if event_id.is_empty() {
+        format!("wake-{}", uuid::Uuid::new_v4())
+    } else {
+        format!("wake-{event_id}")
+    }
+}
+
+/// Refuse a marketplace-supplied id that is not a single safe path component
+/// (mirrors hermes `_reject_traversal_entity_id`; THREAT_MODEL T5). Returning
+/// `false` routes the wake to the safe ephemeral fallback above, so a poisoned
+/// id never becomes a `--session klodi:../…` arg or a derived filename.
+fn is_safe_entity_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.starts_with('.')
+}
+
+/// The conversation entity id a wake scopes to, keyed off the event's DOMAIN
+/// (ADR-0019). EXHAUSTIVE over `NotificationEvent` / `ChannelMessageEvent`: a
+/// new variant forces a keying decision at compile time (fail-fast), never a
+/// silent fallthrough. `None` when the mapped field is empty.
+fn entity_id(event: &WakeEvent) -> Option<String> {
+    match event {
+        WakeEvent::ChannelMessage { payload, .. } => non_empty(&payload.channel_id),
+        WakeEvent::Notification { payload, .. } => notification_entity_id(payload),
+    }
+}
+
+fn notification_entity_id(payload: &NotificationEvent) -> Option<String> {
+    use NotificationEvent::*;
+    match payload {
+        // `offer.*` · `comment.created` · `listing.*` all scope to the LISTING
+        // (the negotiation's subject) — keyed off the domain prefix, NOT the
+        // first id present (`offer.accepted` also carries a `transaction_id`).
+        ListingCreated { listing_id, .. }
+        | ListingRelisted { listing_id, .. }
+        | ListingWithdrawn { listing_id, .. }
+        | ListingSold { listing_id, .. }
+        | ListingExpired { listing_id, .. }
+        | ListingStatusChanged { listing_id, .. }
+        | OfferProposed { listing_id, .. }
+        | OfferAccepted { listing_id, .. }
+        | OfferRejected { listing_id, .. }
+        | CommentCreated { listing_id, .. } => non_empty(listing_id),
+        // `transaction.*` → transaction_id (NOT the co-carried listing_id).
+        TransactionCompleted { transaction_id, .. }
+        | TransactionCancelled { transaction_id, .. } => non_empty(transaction_id),
+        // `search.match` → search_slug.
+        SearchMatch { search_slug, .. } => non_empty(search_slug),
+        // `channel.*` → channel_id.
+        ChannelOpened { channel_id, .. } | ChannelClosed { channel_id, .. } => {
+            non_empty(channel_id)
+        }
+    }
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 #[cfg(test)]
