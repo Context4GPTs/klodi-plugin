@@ -1,5 +1,6 @@
 """``klodi_message_user`` — the outbound escalation tool (Piece 3) + the
-operator-target resolver + the turn-less delivery seam.
+operator-target resolver + the turn-less delivery seam, bound to Hermes's
+own host primitives.
 
 This is how a klodi agent actively reaches its human operator when a
 marketplace decision is reserved for the human (negotiation_style.md
@@ -9,13 +10,12 @@ security.md hard rule). It runs INSIDE the isolated
 the operator's *separate* live session without running an agent turn
 there (the Piece-3 no-hijack requirement).
 
-Control flow (deliver-then-persist — devops [MED]):
+Control flow (deliver-then-persist — BR-9):
 
-    resolve target (most-recently-active GENUINE operator session, else
-    the configured fallback, else a surfaced no-target failure) →
-    ``_deliver`` (turn-less) → ON SUCCESS ``record_pending`` keyed off the
-    bridge-set ``KLODI_WAKE_ENTITY_*`` env (the keystone) → non-error
-    envelope.
+    resolve target (most-recently-active GENUINE operator session, else a
+    surfaced no-operator failure) → ``_deliver`` (turn-less) → ON SUCCESS
+    ``record_pending`` keyed off the bridge-set ``KLODI_WAKE_ENTITY_*``
+    env (the keystone) → non-error envelope.
 
 Every call terminates in exactly one observable disposition — delivered
 XOR surfaced-failure (BR-2 / INV-1). A silent no-op is the one forbidden
@@ -23,28 +23,45 @@ outcome: a silently-undelivered escalation strands a marketplace action
 forever invisibly. Persist happens ONLY after a successful deliver, so a
 failed send never leaves a dangling decision the operator never saw.
 
-Two host seams sit behind one function each, both PROBE-GATED (merge
-gate, stacked on #32):
+Both host seams are bound to the runtime Hermes ships (confirmed by
+``docker exec`` against the staging image ``klodi-hermes-live:local``,
+hermes-agent 0.11.0). There is NO default fallback channel (founder
+decision): the target is always the resolved live operator, and a
+genuinely-absent operator surfaces a loud ``no_operator_target``.
 
-  * ``_active_sessions_path`` — the host's ``active_sessions.json``
-    operator-session registry (assumed schema; the real binding is the
-    merge-gate).
-  * ``_deliver`` — the host's turn-less delivery primitive (a
-    ``hermes send``-style CLI preferred over importing the internal
-    ``standalone_sender_fn``). Unbound until the probe lands → it raises,
-    so every escalation surfaces a loud failure rather than delivering
-    nowhere (safe-by-default).
+  * ``resolve_operator_target`` reads the host session store
+    (``hermes_state.SessionDB.list_sessions_rich``) for the
+    most-recently-active session whose ``source`` is a reachable
+    messaging platform, excluding the ``klodi:`` wake-session family,
+    then recovers its deliverable ``chat_id`` from
+    ``gateway.channel_directory``.
+  * ``_deliver`` pushes the message turn-lessly via the SAME standalone
+    sender Hermes's cron runner uses when the gateway process is not in
+    this process (``tools.send_message_tool._send_to_platform`` over a
+    ``gateway.config.load_gateway_config`` platform config) — NOT the
+    in-gateway ``DeliveryRouter``, which needs the gateway's live
+    platform adapters that a ``hermes chat`` wake subprocess does not
+    hold. See ADR-0020 for the full rationale.
+
+The host modules above ship only inside the Hermes runtime, never in the
+``klodi-hermes`` wheel's own environment, so every host import is LAZY
+(inside the function that needs it). Importing this module therefore
+never requires Hermes to be installed, and the unit suite drives the two
+host boundaries (``_list_operator_sessions`` / ``_resolve_chat_id`` and
+``_deliver``) as seams while the live stage exercises the real bindings.
 """
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from klodi_nats_client.envelope import make_envelope
 
@@ -58,28 +75,20 @@ from .wake_handlers import WAKE_SESSION_NAMESPACE
 
 log = logging.getLogger("klodi_hermes.message")
 
-# The host's operator-session registry (devops Probe 2). $HERMES_HOME is a
-# new env dependency — the adapter only ever resolved $KLODI_HOME before.
-# Default ~/.hermes per the plugin-clone path; the real path is merge-gated.
+# $HERMES_HOME is the host runtime's data root (``/opt/data`` in the
+# stage/prod image). The SQLite session store lives at its top level.
 _HERMES_HOME_ENV = "HERMES_HOME"
-_RUNTIME_SUBDIR = "runtime"
-_ACTIVE_SESSIONS_FILE = "active_sessions.json"
+_STATE_DB_FILE = "state.db"
 
-# Assumed registry schema (probe-gated): a JSON array of session records.
-# If the real host schema differs, the parse AND the test fixtures move
-# together — the merge-gate contract.
-_SESSION_FIELD = "session"
-_PLATFORM_FIELD = "platform"
-_CHAT_ID_FIELD = "chat_id"
-_LAST_ACTIVE_FIELD = "last_active_at"
+# How many recent sessions to scan when resolving the operator. The host
+# query orders by ``started_at`` DESC; we re-rank the window by
+# ``last_active`` ourselves (a recently-active operator is effectively
+# always within a small window of recent starts).
+_SESSION_SCAN_LIMIT = 50
 
-# Net-new hermes fallback-channel config (devops Probe 2): hermes has no
-# native operator pairing today (TELEGRAM_CHAT_ID is a zeroclaw/rust
-# concept). Unset → no fallback → the cold path is a surfaced no-target
-# failure, never a silent drop. The final config key is a merge-gate call.
-_FALLBACK_PLATFORM_ENV = "KLODI_FALLBACK_PLATFORM"
-_FALLBACK_CHAT_ID_ENV = "KLODI_FALLBACK_CHAT_ID"
-_DEFAULT_FALLBACK_PLATFORM = "telegram"
+# A turn-less send must not block the wake turn indefinitely when it has
+# to run on a dedicated thread (already-async caller); bound it.
+_SEND_TIMEOUT_SECONDS = 30
 
 _MESSAGE_USER_DESCRIPTION = (
     "Actively reach the human operator when a marketplace decision is"
@@ -92,6 +101,13 @@ _MESSAGE_USER_DESCRIPTION = (
 )
 
 
+class DeliveryError(Exception):
+    """A turn-less delivery attempt failed deterministically — an unknown
+    or disabled platform, or a non-empty error from the host sender. Carries
+    a contextual message so the handler can surface a loud ``delivery_failed``
+    envelope (BR-2/INV-1: surfaced, never silent)."""
+
+
 @dataclass(frozen=True)
 class DeliveryTarget:
     """Where an escalation is delivered. Compared by value (frozen) so the
@@ -101,35 +117,35 @@ class DeliveryTarget:
     chat_id: str
 
 
-def resolve_operator_target(
-    *, fallback: DeliveryTarget | None = None
-) -> DeliveryTarget | None:
-    """Resolve where a klodi escalation is delivered. Precedence:
-    (1) the most-recently-active GENUINE operator session, (2) the
-    configured ``fallback`` channel, (3) ``None`` (→ surfaced failure
-    upstream). NEVER raises — a fresh-install cold path (no registry, no
-    fallback) is the common case and a crash here would strand every
+def resolve_operator_target() -> DeliveryTarget | None:
+    """Resolve where a klodi escalation is delivered: the most-recently-active
+    GENUINE operator session that maps to a reachable ``(platform, chat_id)``,
+    or ``None`` (→ a surfaced ``no_operator_target`` upstream). There is NO
+    default fallback channel (founder decision) — the target is always a live
+    operator. NEVER raises: a fresh-install cold path (no sessions, no
+    directory) is the common case and a crash here would strand every
     escalation.
 
-    The whole ``klodi:`` wake-session family is excluded (BR-3): an
-    isolated wake session is the bot's own transcript, so self-addressing
-    it means the human never sees the message and can never reply — the
-    highest product risk this resolver exists to prevent.
+    Recency comes from the numeric ``last_active`` field (BR-6), not the
+    host query's ``started_at`` ordering, so a long-lived but freshly-active
+    operator session still wins. The whole ``klodi:`` wake-session family is
+    excluded (BR-4): an isolated wake session is the bot's own transcript, so
+    self-addressing it means the human never sees the message — the highest
+    product risk this resolver exists to prevent. Wake sessions also carry a
+    non-messaging ``source`` (``cli``), so they have no reachable ``chat_id``
+    regardless; the namespace guard is defence in depth.
     """
-    target = _most_recent_operator(_load_active_sessions())
-    return target if target is not None else fallback
-
-
-def configured_fallback() -> DeliveryTarget | None:
-    """The net-new hermes fallback-channel target, or ``None`` when unset.
-    A module-level seam the handler calls and tests monkeypatch —
-    probe-gated (devops Probe 2): the final config key is a merge-gate
-    decision."""
-    chat_id = os.environ.get(_FALLBACK_CHAT_ID_ENV)
-    if not chat_id:
-        return None
-    platform = os.environ.get(_FALLBACK_PLATFORM_ENV, _DEFAULT_FALLBACK_PLATFORM)
-    return DeliveryTarget(platform=platform, chat_id=chat_id)
+    sessions = _list_operator_sessions()
+    for session in sorted(sessions, key=_last_active, reverse=True):
+        if _is_wake_session(session):
+            continue
+        platform = session.get("source")
+        if not isinstance(platform, str) or not platform:
+            continue
+        chat_id = _resolve_chat_id(platform)
+        if chat_id:
+            return DeliveryTarget(platform=platform, chat_id=chat_id)
+    return None
 
 
 def handle_message_user(args: dict[str, Any], **_kwargs: Any) -> str:
@@ -150,27 +166,26 @@ def handle_message_user(args: dict[str, Any], **_kwargs: Any) -> str:
             )
         )
 
-    target = resolve_operator_target(fallback=configured_fallback())
+    target = resolve_operator_target()
     if target is None:
         log.error(
-            "klodi_message_user_no_target — escalation undeliverable:"
-            " no operator session and no configured fallback channel"
+            "klodi_message_user_no_target — escalation undeliverable: no"
+            " active operator session resolves to a reachable channel"
         )
         return json.dumps(
             make_envelope(
                 error="no_operator_target",
                 message=(
-                    "No active operator session and no configured fallback"
+                    "No active operator session resolves to a reachable"
                     " channel — the escalation could not be delivered. The"
                     " human was NOT reached."
                 ),
                 details=None,
                 recovery_hint={
-                    "kind": "tool",
-                    "tool": "klodi_setup_status",
+                    "kind": "human",
                     "message": (
-                        "No delivery target — start an operator session or"
-                        " configure a fallback channel, then retry."
+                        "Message the bot from your operator chat (Telegram,"
+                        " Discord, …) so a live session exists, then retry."
                     ),
                 },
             )
@@ -180,8 +195,9 @@ def handle_message_user(args: dict[str, Any], **_kwargs: Any) -> str:
         _deliver(target.platform, target.chat_id, text)
     except Exception as err:  # noqa: BLE001 — boundary: surface, never swallow
         log.error(
-            "klodi_message_user_delivery_failed platform=%s error=%s",
+            "klodi_message_user_delivery_failed platform=%s chat_id=%s error=%s",
             target.platform,
+            target.chat_id,
             err,
         )
         return json.dumps(
@@ -260,86 +276,149 @@ def register_message_tools(ctx: Any) -> int:
     return 1
 
 
-def _deliver(platform: str, chat_id: str, text: str) -> None:
-    """Turn-less delivery seam — push a real-time message into the
-    operator's ``(platform, chat_id)`` WITHOUT running an agent turn in
-    their session (the Piece-3 no-hijack requirement).
+# ── Host boundaries (lazy imports — Hermes runtime only) ──────────────
 
-    PROBE-GATED (merge gate, stacked on #32). The host's turn-less
-    delivery primitive is hermes-internal and UNCONFIRMED here: no
-    ``hermes`` binary / wiki to run ``hermes send --help`` or import
-    ``gateway.delivery.standalone_sender_fn``. We deliberately do NOT
-    shell a *guessed* command or import a *guessed* symbol — that could
-    deliver into the wrong transcript (silent loss) or no-op. Until the
-    binding is confirmed this raises, so every escalation surfaces a loud
-    no-delivery failure (BR-2 / INV-1: surfaced, never silent). The
-    confirmed binding (a ``hermes send``-style CLI preferred over the
-    internal import) goes HERE. Tests replace this seam wholesale.
-    """
-    raise RuntimeError(
-        "klodi_message_user delivery is not bound: the hermes turn-less"
-        " sender is probe-gated (card merge-gate). No message was sent."
+
+def _list_operator_sessions() -> list[dict[str, Any]]:
+    """Host boundary: the recent sessions from Hermes's SQLite session store
+    (``hermes_state.SessionDB.list_sessions_rich``). Returns the host's own
+    row dicts (keys incl. ``id``, ``source``, ``title``, ``last_active``).
+    A missing store / unavailable host module degrades to ``[]`` — the
+    cold-start path is common and must never raise. Driven as a seam by the
+    unit suite; exercised for real in the live stage."""
+    try:
+        from hermes_state import SessionDB  # ty: ignore[unresolved-import]
+    except Exception:  # noqa: BLE001 — host module absent (non-runtime env)
+        return []
+    try:
+        db = SessionDB(db_path=_state_db_path())
+        return list(db.list_sessions_rich(limit=_SESSION_SCAN_LIMIT))
+    except Exception as err:  # noqa: BLE001 — store missing/locked → cold path
+        log.warning("operator_session_scan_failed error=%s", err)
+        return []
+
+
+def _resolve_chat_id(platform: str) -> str | None:
+    """Host boundary: recover a deliverable ``chat_id`` for ``platform`` from
+    Hermes's channel directory (``gateway.channel_directory.load_directory``),
+    the same map the cron delivery path consults. Returns the first reachable
+    chat for the platform, or ``None`` when the directory has no entry (→ the
+    resolver tries the next session, else surfaces no-target). Driven as a
+    seam by the unit suite; exercised for real in the live stage."""
+    try:
+        from gateway import channel_directory  # ty: ignore[unresolved-import]
+    except Exception:  # noqa: BLE001 — host module absent (non-runtime env)
+        return None
+    try:
+        directory = channel_directory.load_directory()
+    except Exception as err:  # noqa: BLE001 — unreadable directory → no target
+        log.warning("channel_directory_load_failed platform=%s error=%s", platform, err)
+        return None
+    entries = directory.get("platforms", {}).get(platform, [])
+    for entry in entries:
+        chat_id = entry.get("id")
+        if chat_id:
+            return str(chat_id)
+    return None
+
+
+def _deliver(platform: str, chat_id: str, text: str) -> None:
+    """Turn-less delivery seam — push a real-time message into the operator's
+    ``(platform, chat_id)`` WITHOUT running an agent turn in their session
+    (the Piece-3 no-hijack requirement).
+
+    Bound to ``tools.send_message_tool._send_to_platform`` over a
+    ``gateway.config.load_gateway_config`` platform config — the SAME
+    one-shot standalone sender Hermes's cron runner uses to deliver job
+    output to a chat when the gateway process is elsewhere (``cron/
+    scheduler.py::_deliver_result``). It is platform-agnostic (Telegram,
+    Discord, Signal, …) and needs no live gateway adapter, which is why the
+    in-gateway ``DeliveryRouter`` (adapter-bound) is the wrong primitive for
+    a ``hermes chat`` wake subprocess. Raises :class:`DeliveryError` on an
+    unknown/disabled platform or a non-empty sender error so the handler
+    surfaces a loud ``delivery_failed`` (BR-2 / INV-1); returns ``None`` on
+    success. Tests replace this seam wholesale."""
+    from gateway.config import (  # ty: ignore[unresolved-import]
+        Platform,
+        load_gateway_config,
     )
+    from tools.send_message_tool import (  # ty: ignore[unresolved-import]
+        _send_to_platform,
+    )
+
+    try:
+        plat = Platform(platform)
+    except ValueError as err:
+        raise DeliveryError(f"unknown delivery platform {platform!r}") from err
+
+    config = load_gateway_config()
+    pconfig = config.platforms.get(plat)
+    if pconfig is None or not getattr(pconfig, "enabled", False):
+        raise DeliveryError(
+            f"hermes platform {platform!r} is not configured or not enabled"
+            " — cannot deliver the escalation"
+        )
+
+    result = _run_send(lambda: _send_to_platform(plat, pconfig, chat_id, text))
+    if isinstance(result, dict) and result.get("error"):
+        raise DeliveryError(
+            f"hermes sender failed delivering to {platform}:{chat_id}:"
+            f" {result['error']}"
+        )
+
+
+def _run_send(make_coro: Callable[[], Any]) -> Any:
+    """Drive the async send coroutine resiliently from a possibly-async
+    caller — mirrors the cron runner's standalone-send dispatch. When this
+    thread has no running loop, ``asyncio.run`` is safe; when a loop is
+    already running (the tool ran inside one), the send runs on a dedicated
+    thread+loop so it never reenters the live loop. The coroutine is built
+    lazily in the chosen branch so it is awaited exactly once."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(make_coro())
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(make_coro())).result(
+            timeout=_SEND_TIMEOUT_SECONDS
+        )
+
+
+def _state_db_path() -> Path:
+    home = os.environ.get(_HERMES_HOME_ENV)
+    base = Path(home) if home else Path.home() / ".hermes"
+    return base / _STATE_DB_FILE
+
+
+def _last_active(session: dict[str, Any]) -> float:
+    """The session's last-activity timestamp as a float for recency ranking.
+    A missing / non-numeric value sorts oldest (``0.0``) — a malformed row can
+    never shadow a well-formed operator session by sorting newest."""
+    try:
+        return float(session.get("last_active") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_wake_session(session: dict[str, Any]) -> bool:
+    """True when the session belongs to the ``klodi:`` wake family (BR-4),
+    identified by its namespaced session id/title — the wake turn runs under
+    ``--session klodi:<entity_id>``, so the namespace lands on the session's
+    id or title, never its ``source`` (which is the host CLI ``source``)."""
+    for field in ("id", "title"):
+        value = session.get(field)
+        if isinstance(value, str) and value.startswith(WAKE_SESSION_NAMESPACE):
+            return True
+    return False
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _active_sessions_path() -> Path:
-    home = os.environ.get(_HERMES_HOME_ENV)
-    base = Path(home) if home else Path.home() / ".hermes"
-    return base / _RUNTIME_SUBDIR / _ACTIVE_SESSIONS_FILE
-
-
-def _load_active_sessions() -> list[dict[str, Any]]:
-    try:
-        raw = _active_sessions_path().read_text(encoding="utf-8")
-    except OSError:
-        return []
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return []
-    if not isinstance(parsed, list):
-        return []
-    return [item for item in parsed if isinstance(item, dict)]
-
-
-def _most_recent_operator(
-    sessions: list[dict[str, Any]],
-) -> DeliveryTarget | None:
-    candidates = [s for s in sessions if _is_operator_session(s)]
-    if not candidates:
-        return None
-    newest = max(candidates, key=lambda s: str(s.get(_LAST_ACTIVE_FIELD, "")))
-    return DeliveryTarget(
-        platform=str(newest[_PLATFORM_FIELD]),
-        chat_id=str(newest[_CHAT_ID_FIELD]),
-    )
-
-
-def _is_operator_session(session: dict[str, Any]) -> bool:
-    """A genuine operator session: a well-formed registry entry whose name
-    is NOT in the ``klodi:`` wake-session family (BR-3). Filtering on
-    well-formedness here means a malformed newest entry can never shadow a
-    valid older operator session."""
-    name = session.get(_SESSION_FIELD)
-    if not isinstance(name, str) or name.startswith(WAKE_SESSION_NAMESPACE):
-        return False
-    platform = session.get(_PLATFORM_FIELD)
-    chat_id = session.get(_CHAT_ID_FIELD)
-    return (
-        isinstance(platform, str)
-        and bool(platform)
-        and isinstance(chat_id, str)
-        and bool(chat_id)
-    )
-
-
 __all__ = [
+    "DeliveryError",
     "DeliveryTarget",
-    "configured_fallback",
     "handle_message_user",
     "register_message_tools",
     "resolve_operator_target",
