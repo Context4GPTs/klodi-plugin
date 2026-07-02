@@ -30,6 +30,17 @@ ERROR as a raise, and treats CLOSE/CLOSING/CLOSED as EOF.
 
 Patch is idempotent — re-applying is a no-op (sentinel attribute on
 the patched callable).
+
+**Scope after the ``tls://`` transport landed** (epic
+``nats-ws-ingress-flap-2026-06``): this patch is **inert on ``tls://``**
+— the raw TCP+TLS transport never instantiates ``WebSocketTransport``,
+so the CLOSE-frame→EOF defect it repairs cannot occur there. It is
+**retained** because it stays load-bearing on the surviving WebSocket
+paths: ``ws://localhost`` (local dev) and any ``wss://`` connection,
+whose long-lived JetStream consumers still die on the first CLOSE / PING
+/ ERROR frame without it. ``apply_patch()`` is called unconditionally at
+connect (cheap + idempotent); it simply has nothing to fix on the raw
+TLS code path.
 """
 
 from __future__ import annotations

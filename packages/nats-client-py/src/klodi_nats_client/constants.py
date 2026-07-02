@@ -71,6 +71,24 @@ KLODI_DEFAULT_API_URL: str = _require_str("KLODI_DEFAULT_API_URL")
 #: Canonical NATS-WS URL for the persistent klodi connection.
 KLODI_DEFAULT_NATS_URL: str = _require_str("KLODI_DEFAULT_NATS_URL")
 
+def _optional_str(name: str) -> str:
+    """Read a catalog string constant that may legitimately be empty.
+
+    Unlike :func:`_require_str`, an empty / missing value is not an
+    error — it is a valid pre-cutover state (see ``KLODI_NATS_CA_PEM``).
+    """
+    value = _CONSTANTS.get(name, "")
+    return value if isinstance(value, str) else ""
+
+
+#: Bundled private-CA PEM trusted for the ``tls://`` L4-proxy transport.
+#: Intentionally EMPTY until the epic (`nats-ws-ingress-flap-2026-06`)
+#: mints the real CA — an empty value means "fall through to the
+#: ``KLODI_NATS_CA_FILE`` override or the system trust store" (see
+#: ``klodi_nats_client.tls``). Non-strict: unlike the required string
+#: constants above, an empty PEM is a valid pre-cutover state.
+KLODI_NATS_CA_PEM: str = _optional_str("KLODI_NATS_CA_PEM")
+
 #: Max ``klodi_channel_message`` body length, in Unicode code-points.
 MAX_CHANNEL_MESSAGE_CHARS: int = _require_int("MAX_CHANNEL_MESSAGE_CHARS")
 
@@ -84,6 +102,7 @@ REGISTER_POLL_CEILING_SECONDS: int = _require_int("REGISTER_POLL_CEILING_SECONDS
 __all__ = [
     "KLODI_DEFAULT_API_URL",
     "KLODI_DEFAULT_NATS_URL",
+    "KLODI_NATS_CA_PEM",
     "MAX_CHANNEL_MESSAGE_CHARS",
     "REGISTER_POLL_CEILING_SECONDS",
     "REGISTER_POLL_INTERVAL_SECONDS",

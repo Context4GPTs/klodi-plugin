@@ -36,7 +36,7 @@ from klodi_nats_client.config import (
     ConfigNotFoundError,
     CredsNotFoundError,
     KlodiConfig,
-    assert_wss_or_localhost,
+    assert_encrypted_or_localhost,
     is_localhost,
     load_config,
     load_creds,
@@ -44,8 +44,10 @@ from klodi_nats_client.config import (
 from klodi_nats_client.constants import (
     KLODI_DEFAULT_API_URL,
     KLODI_DEFAULT_NATS_URL,
+    KLODI_NATS_CA_PEM,
     MAX_CHANNEL_MESSAGE_CHARS,
 )
+from klodi_nats_client.tls import CaTrustError, build_tls_context
 from klodi_nats_client.consumers import (
     ActiveSubscription,
     ChannelHandler,
@@ -96,6 +98,7 @@ __all__ = [
     "BackoffPolicy",
     "CHANNEL_MESSAGE_PARAMS",
     "ChannelHandler",
+    "CaTrustError",
     "ChannelLifecycleEvent",
     "ChannelMessageEvent",
     "ClientMetrics",
@@ -113,6 +116,7 @@ __all__ = [
     "EventId",
     "KLODI_DEFAULT_API_URL",
     "KLODI_DEFAULT_NATS_URL",
+    "KLODI_NATS_CA_PEM",
     "KlodiClient",
     "KlodiConfig",
     "KlodiRequestError",
@@ -141,7 +145,8 @@ __all__ = [
     "WakePump",
     "WakePumpClient",
     "WakePumpHealth",
-    "assert_wss_or_localhost",
+    "assert_encrypted_or_localhost",
+    "build_tls_context",
     "compute_backoff_seconds",
     "create_wake_pump",
     "default_api_url",

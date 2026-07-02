@@ -14,7 +14,8 @@
 //! Adapters never touch `async-nats` directly.
 
 use crate::backoff::default_reconnect_delay;
-use crate::config::{KlodiConfig, assert_wss_or_localhost, load_config, load_creds};
+use crate::config::{KlodiConfig, assert_encrypted_or_localhost, load_config, load_creds};
+use crate::tls::resolve_ca_file;
 use crate::consumers::{
     ActiveSubscription, ChannelHandler, NotificationHandler, subscribe_channels,
     subscribe_notifications,
@@ -121,20 +122,32 @@ impl KlodiClient {
         // Per **D § D10**: refuse plaintext nats_url unless the host
         // resolves to localhost. Closes the compound attack where a
         // compromised registration endpoint injects a `ws://` URL.
-        assert_wss_or_localhost(&self.config.nats_url)?;
+        // Accepts `wss://` and `tls://`.
+        assert_encrypted_or_localhost(&self.config.nats_url)?;
         // P2-5: replace async-nats's default linear delay with the
         // shared exponential-backoff-with-jitter formula. The callback
         // is `Fn(usize) -> Duration` — translates `attempts` to a
         // 1-based attempt index inside `default_reconnect_delay`.
-        let client = ConnectOptions::with_credentials(self.creds.as_str())?
+        let mut options = ConnectOptions::with_credentials(self.creds.as_str())?
             .ping_interval(WS_PING_INTERVAL)
             .connection_timeout(WS_CONNECT_TIMEOUT)
             .name("klodi-rust-client")
             .max_reconnects(None)
             .reconnect_delay_callback(default_reconnect_delay)
-            .retry_on_initial_connect()
-            .connect(self.config.nats_url.as_str())
-            .await?;
+            .retry_on_initial_connect();
+        // `tls://` (raw TCP+TLS, L4 proxy): trust the private CA and
+        // require TLS explicitly. `add_root_certificates` builds a
+        // standard *verifying* rustls config (cert + SNI-hostname checks
+        // ON) trusting only that CA — a missing / wrong CA or SAN
+        // mismatch fails closed at the handshake. Verification is never
+        // disabled. `wss://` keeps async-nats' default system TLS.
+        if self.config.nats_url.starts_with("tls://") {
+            options = options.require_tls(true);
+            if let Some(ca_path) = resolve_ca_file()? {
+                options = options.add_root_certificates(ca_path);
+            }
+        }
+        let client = options.connect(self.config.nats_url.as_str()).await?;
         let ctx = jetstream::new(client.clone());
         *state = Some(Connected { client, ctx });
         Ok(())

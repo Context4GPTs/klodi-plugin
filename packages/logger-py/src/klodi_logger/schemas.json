@@ -5430,6 +5430,7 @@
   "constants": {
     "KLODI_DEFAULT_API_URL": "https://klodi.4gpts.com",
     "KLODI_DEFAULT_NATS_URL": "wss://klodi-net.4gpts.com",
+    "KLODI_NATS_CA_PEM": "",
     "MAX_CHANNEL_MESSAGE_CHARS": 2000,
     "REGISTER_POLL_INTERVAL_SECONDS": 5,
     "REGISTER_POLL_CEILING_SECONDS": 600
