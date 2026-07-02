@@ -34,6 +34,23 @@ _EXPECTED_SOURCE = "klodi"
 # leaves ZERO literal occurrences of the rejected flag for the AC-7 grep gate.
 _REJECTED_SESSION_FLAG = "--" + "session"
 
+# A wake's marketplace ``event_id`` — the key the completion marker is stamped
+# with (the klodi-owned proof-of-turn artifact the klodi-stage AC1 gate keys
+# on, replacing the version-fragile ``sessions.source='klodi'`` check).
+_MARKER_EVENT_ID = "b2c3d4e5-0008-4000-8000-000000000008"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_klodi_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Per-test throwaway ``${KLODI_HOME}`` so the wake-completion marker store
+    is isolated (and never touches a real home). Harmless to the ``Bridge``
+    creds tests, which pass ``klodi_home`` explicitly and ignore this env."""
+    home = tmp_path / "khome"
+    monkeypatch.setenv("KLODI_HOME", str(home))
+    return home
+
 
 # ── BridgeCtx ─────────────────────────────────────────────────────────
 
@@ -215,6 +232,92 @@ def test_inject_serializes_concurrent_calls_on_same_session() -> None:
     # if the lock works. (Concurrent execution would finish in ~50ms.)
     assert elapsed >= 0.13
     assert len(runner.calls) == 3
+
+
+# ── Wake completion marker WIRING (proof-of-turn for the AC1 gate) ──────
+#
+# Card: distinguish-wake-sessions-from-operator-sessions. hermes v0.17.0's
+# ``-q`` create drops ``--source``, so ``sessions.source='klodi'`` no longer
+# marks a completed wake — AC1 loses its proof-of-turn signal. The fix gives
+# AC1 a DURABLE, klodi-owned artifact: the ``klodi_hermes.wake_completions``
+# store (spec'd end-to-end — write/bound/atomic/tolerance — in
+# ``test_wake_completions.py``). THESE tests pin only the BRIDGE WIRING the
+# store-primitive tests cannot see: ``inject_message`` records a completion
+# ONLY on subprocess exit 0, keyed by the wake's ``event_id``, and records
+# NOTHING on a nonzero exit (which raises) or a timeout (which is swallowed).
+# That "only on a completed turn" wiring is the whole point — a marker on a
+# failed/absent inject would false-green the gate on a turn that never ran.
+
+
+def _completed_markers() -> list[dict[str, Any]]:
+    """Read the wake-completion marker store via the single marker contract
+    (``klodi_hermes.wake_completions``) — imported LAZILY so a not-yet-created
+    module fails only the asserting test, never module collection."""
+    import json
+
+    from klodi_hermes import wake_completions
+
+    path = wake_completions._store_path()
+    if not path.is_file():
+        return []
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _completed_event_ids() -> list[str]:
+    return [m["event_id"] for m in _completed_markers()]
+
+
+def test_inject_exit0_records_wake_completion_marker() -> None:
+    """A completed wake turn (exit 0) must record a completion marker keyed by
+    the wake's ``event_id`` and carrying its session correlation — the
+    klodi-owned proof-of-turn the klodi-stage AC1 gate keys on in place of
+    ``sessions.source='klodi'``."""
+    runner = _RecordingRunner(returncode=0)
+    ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
+
+    ctx.inject_message(
+        "hello wake", session="klodi:listing-1", event_id=_MARKER_EVENT_ID
+    )
+
+    markers = _completed_markers()
+    assert [m["event_id"] for m in markers] == [_MARKER_EVENT_ID], (
+        "exit 0 must record exactly one completion marker keyed by the event_id"
+    )
+    assert markers[0]["session"] == "klodi:listing-1", (
+        "the bridge must thread the wake's session correlation into the marker"
+    )
+
+
+def test_inject_nonzero_exit_writes_no_completion_marker() -> None:
+    """A fast deterministic nonzero exit RAISES ``WakeInjectFailed`` AND records
+    NO marker — a failed inject that never produced a turn must never
+    false-green AC1 (the exact failure AC1 exists to catch)."""
+    runner = _RecordingRunner(returncode=2, stdout="hermes: boom", stderr="")
+    ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
+
+    with pytest.raises(WakeInjectFailed):
+        ctx.inject_message("x", session="listing-1", event_id=_MARKER_EVENT_ID)
+
+    assert _MARKER_EVENT_ID not in _completed_event_ids(), (
+        "a nonzero-exit inject recorded a completion marker — it must not; AC1"
+        " would false-green on a turn that never completed"
+    )
+
+
+def test_inject_timeout_writes_no_completion_marker() -> None:
+    """A subprocess timeout is swallowed (losing one wake beats wedging the
+    consumer) but is NOT a completed turn — it must also record NO marker.
+    Exit 0 is the ONLY path that records completion."""
+    runner = _RecordingRunner(raise_timeout=True)
+    ctx = BridgeCtx(
+        hermes_bin="/usr/bin/hermes", runner=runner, inject_timeout_seconds=1
+    )
+
+    ctx.inject_message("late wake", session="s", event_id=_MARKER_EVENT_ID)
+
+    assert _MARKER_EVENT_ID not in _completed_event_ids(), (
+        "a swallowed timeout is not a completed turn — it must record no marker"
+    )
 
 
 # ── Bridge ────────────────────────────────────────────────────────────

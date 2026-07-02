@@ -3,9 +3,9 @@ id: 0020-operator-escalation-delivery-binding
 title: Operator escalation (`klodi_message_user`) binds to the host's cron-standalone sender + SQLite session store — turn-less, live-operator-resolved, no default channel
 tags: [escalation, message-user, delivery, operator-resolution, sessiondb, channel-directory, hermes, wake, outbound]
 card: bind-message-user-delivery-and-operator-resolver
-commit: 709dd7c
-updated_at: 2026-06-30
-updated_by_card: bind-message-user-delivery-and-operator-resolver
+commit: e03cae5
+updated_at: 2026-07-02
+updated_by_card: distinguish-wake-sessions-from-operator-sessions
 ---
 
 # ADR-0020 — Operator escalation binds to the host's own primitives
@@ -54,7 +54,9 @@ disproved both guesses and surfaced two non-obvious facts that force the design:
    `hermes chat --source klodi`, persisting `source=klodi` on the session row, so the query
    filters the whole family server-side *(this **supersedes** the v0.3.6 design, which set no
    source tag and so could only exclude by an id/title-prefix guard on `klodi:<entity_id>` —
-   see the 2026-06-30 amendment)*; (c) the row carries **no `chat_id`** — the
+   see the 2026-06-30 amendment. **Both are since superseded — `--source` does NOT persist on
+   hermes v0.17.0's one-shot `-q` create, so a wake lands `source='cli'`, not `klodi`; see
+   Amendment (2026-07-02).**)*; (c) the row carries **no `chat_id`** — the
    deliverable `(platform, chat_id)` is recovered from
    `gateway.channel_directory.load_directory()["platforms"][source]`.
 
@@ -125,14 +127,23 @@ exercises the real bindings.
 ## Security implications
 
 No default channel means an escalation can never be misdirected to a statically-configured
-chat — the resolver only ever targets a *live* operator session, and the source-based
-exclusion (`exclude_sources=["klodi"]`) prevents self-addressing into the bot's own isolated
-wake transcript (the highest product risk: the human would never see the message). The
+chat — the resolver only ever targets a *live* operator session, and self-addressing into the
+bot's own isolated wake transcript (the highest product risk: the human would never see the
+message) is prevented by the resolver's positive `(platform, chat_id)` identification — a wake
+`cli` row maps to no messaging chat *(as of Amendment (2026-07-02) this is the load-bearing
+guard; the source exclusion is a recency-window optimisation only — a wake no longer persists
+`source='klodi'`)*. The
 adapter reads the host-owned `state.db` and
 channel directory **read-only**; it owns neither. No marketplace payload rides the delivery
 metadata — only the operator-authored escalation `text`.
 
 ## Amendment (2026-06-30) — card `fix-hermes-wake-inject-session-flag-argv`
+
+> **Superseded 2026-07-02.** This amendment's core premise — that a wake session persists a
+> `klodi` source tag the resolver can exclude on — does **not** hold on hermes v0.17.0: the
+> one-shot `hermes chat -q … -Q` create path silently drops `--source`, so a wake lands
+> `source='cli'`. The source-based exclusion, the `_is_wake_session` deletion rationale, and
+> the pin caveat below are all superseded. See **Amendment (2026-07-02)**.
 
 The inbound bridge's wake-inject argv was found to use a `session`-named flag that **no
 hermes version defines** — every wake `sys.exit(2)`'d with `unrecognized arguments`, so the
@@ -158,12 +169,67 @@ tag**, the outbound exclusion this ADR depends on changed shape:
   self-addressing — safe-by-default. Re-confirm on the deployed pin or bump it (klodi-stage
   Dockerfile-pin discipline).
 
+## Amendment (2026-07-02) — card `distinguish-wake-sessions-from-operator-sessions`
+
+A wake session is **no longer distinguished by `source`**, because hermes session `source` is
+not durable through the wake spawn path. On hermes v0.17.0 (`nousresearch/hermes-agent:v2026.6.19`)
+the one-shot `hermes chat -q … -Q` *create* path silently **drops `--source`** (and the
+`HERMES_SESSION_SOURCE` env) and persists the default `source='cli'` on the new `sessions` row;
+`SessionDB` exposes no source setter, so klodi cannot back-fill it. Confirmed live in-container —
+every variation (flag before *and* after `-q`, `HERMES_SESSION_SOURCE` from process start) lands
+`source='cli'`. A completed wake session is therefore **byte-identical to a genuine operator CLI
+session** at the store, and the `source='klodi'` tag the 2026-06-30 amendment relied on never
+lands. This **supersedes fact 2(b), the whole 2026-06-30 amendment, and its pin caveat.**
+
+Two durable, version-independent klodi-plugin mechanisms replace the single `source='klodi'`
+distinguisher — one per consumer of the old tag:
+
+- **Resolver (self-addressing safety) — positive identification, backed by a class-level
+  exclusion.** `_list_operator_sessions` now queries
+  `exclude_sources=[HERMES_CLI_SOURCE, KLODI_WAKE_SOURCE]` (`['cli','klodi']`, `message.py:331`) —
+  forward-compat in **both** directions: it excludes wakes whether hermes drops `--source` (→ `cli`,
+  today) or a future host ever honours it (→ `klodi`). The load-bearing guard against
+  self-addressing is **not** this exclusion but `resolve_operator_target`'s positive
+  `(platform, chat_id)` identification: a `cli` row maps to no `channel_directory` chat and is not
+  a messaging `Platform`, so it can never be a *deliverable* operator. The class exclusion only
+  keeps wakes from crowding the `_SESSION_SCAN_LIMIT` recency window (fact 2(b)'s real purpose).
+  `--source klodi` stays in the bridge argv as declared intent / forward-compat, documented
+  **inert** on v0.17.0 `-q` (`bridge.KLODI_WAKE_SOURCE`).
+- **AC1 gate (proof-of-turn) — a klodi-owned completion marker.** The bridge writes an
+  `event_id`-keyed marker on subprocess **exit 0** to `${KLODI_HOME}/wake/completions.json`
+  (`wake_completions.record_wake_completion`), a **bounded rolling JSON ring** (`_MAX_COMPLETIONS`
+  newest retained, atomic write-temp + `os.replace`, never one file per wake). It fires **only** on
+  a completed turn — the nonzero path raises `WakeInjectFailed`, a timeout is swallowed, neither
+  records — so it can never false-green on an inject that produced no turn. This is the durable
+  substitute for `sessions.source='klodi'` as the "a wake turn completed" signal.
+
+**Why not make `source` stick / set it via `SessionDB`** — needs a change to hermes itself or a
+nonexistent setter; version-fragile, the exact objection confirmed dead by the live table.
+**Why not a per-session wake marker** — unbuildable: klodi cannot obtain or set the wake's hermes
+session id (`--continue <name>` errors on first contact, `-Q` prints nothing) or title (the `-q`
+session is untitled), so a wake `cli` row and an operator `cli` row are byte-identical at the
+store. Class-level `cli` exclusion is the only available axis, and it is sufficient because a `cli`
+session is never a *deliverable* operator.
+
+**Cross-repo lockstep (epic `hermes-wake-relay-2026-06`).** The klodi-stage
+`integration/hosts/hermes/wake.test.ts` AC1 DELIVERED gate keyed on a new `source='klodi'` session
+appearing after the wake. It **re-points onto `${KLODI_HOME}/wake/completions.json`** in lockstep —
+on the existing klodi-stage gate card, sequenced **after** this card lands the marker. The
+DELIVERED semantic (the operator physically receives the escalation) never weakens; only the
+source-proxy assertion moves. Marker-first ordering is mandatory: flip the assertion before the
+artifact exists and AC1 has nothing to key on; land the marker before the flip and AC1 stays RED on
+the stale `source='klodi'` reason.
+
 ## References
 
 - **Delivery seam:** `adapters/hermes/src/klodi_hermes/message.py` — `_deliver`, `_run_send`
   (mirrors `cron/scheduler.py::_deliver_result`).
 - **Resolver:** `message.py` — `resolve_operator_target`, `_list_operator_sessions`
-  (sets `exclude_sources=["klodi"]`), `_resolve_chat_id`, `_last_active`.
+  (sets `exclude_sources=["cli","klodi"]`; see Amendment 2026-07-02), `_resolve_chat_id`,
+  `_last_active`.
+- **Proof-of-turn marker:** `adapters/hermes/src/klodi_hermes/wake_completions.py` —
+  `record_wake_completion` (the bounded ring at `${KLODI_HOME}/wake/completions.json`); wired in
+  `bridge.py`'s `inject_message` exit-0 branch.
 - **Spec:** `docs/specs/hosts/hermes.md` §4a (binding), §7 (`$HERMES_HOME` layout), §9 (env).
 - **Inbound sibling:** [[0019-wake-inject-failure-disposition]] (the `klodi:` wake-session
   model this resolver excludes; the inbound failure-disposition axis).

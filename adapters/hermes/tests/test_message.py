@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 import sys
+import types
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -524,3 +525,116 @@ def test_pending_decisions_tool_carries_identity_for_disambiguation(
         assert row["entity_type"] and row["entity_id"] and row["question"], (
             "each decision must carry full identity for disambiguation"
         )
+
+
+# ── Card: distinguish-wake-sessions-from-operator-sessions ────────────
+#
+# hermes v0.17.0's one-shot ``hermes chat -q … -Q`` create silently drops
+# ``--source``, so a completed wake session lands ``source='cli'`` —
+# byte-identical to a genuine operator ``cli`` session at the store. The
+# resolver's positive ``(platform, chat_id)`` identification already refuses
+# to self-address a ``cli`` row (no messaging chat_id), so the resolver-level
+# invariant holds. The break the fix must close at THIS layer is the
+# recency-window crowd-out: ``_list_operator_sessions`` must exclude ``'cli'``
+# at the host query, not only ``'klodi'``, or a flood of wake ``cli`` rows
+# buries a genuine operator out of the ``_SESSION_SCAN_LIMIT`` window before
+# the resolver ever ranks it.
+
+
+def test_list_operator_sessions_excludes_both_cli_and_klodi_sources(
+    _isolated_homes: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seam assertion (recency-window crowd-out fix): the host session-store
+    query must filter BOTH source classes a wake can land in — ``'cli'`` (what
+    hermes v0.17.0's ``-q`` create actually persists after silently dropping
+    ``--source``) AND ``'klodi'`` (forward-compat, if a future hermes ever
+    honours ``--source`` on ``-q``). Keying on only ``'klodi'`` (today) no
+    longer matches any wake, so wakes fill the ``limit``-row window server-side
+    and crowd out a genuine operator BEFORE the resolver's positive-id runs.
+
+    This drives the REAL ``_list_operator_sessions`` over a faked
+    ``hermes_state`` module (the host module is absent in the adapter venv, so
+    the lazy import is the seam) and inspects the kwargs handed to
+    ``SessionDB.list_sessions_rich``."""
+    captured: dict[str, Any] = {}
+
+    class _FakeSessionDB:
+        def __init__(self, *, db_path: Any) -> None:
+            self._db_path = db_path
+
+        def list_sessions_rich(
+            self, *, limit: int, exclude_sources: list[str]
+        ) -> list[dict[str, Any]]:
+            captured["limit"] = limit
+            captured["exclude_sources"] = list(exclude_sources)
+            return []
+
+    fake_hermes_state = types.ModuleType("hermes_state")
+    fake_hermes_state.SessionDB = _FakeSessionDB  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "hermes_state", fake_hermes_state)
+
+    message._list_operator_sessions()
+
+    assert "exclude_sources" in captured, (
+        "the seam never reached SessionDB.list_sessions_rich"
+    )
+    excluded = captured["exclude_sources"]
+    assert "cli" in excluded, (
+        "a completed wake lands source='cli' on hermes v0.17.0's -q create; the"
+        " recency-window query MUST exclude 'cli' server-side or wake rows"
+        f" crowd out a genuine operator. exclude_sources={excluded!r}"
+    )
+    assert "klodi" in excluded, (
+        "must STILL exclude 'klodi' (forward-compat: a future hermes that"
+        f" honours --source on -q writes 'klodi'). exclude_sources={excluded!r}"
+    )
+    assert captured["limit"] == message._SESSION_SCAN_LIMIT, (
+        "the scan window must stay bounded by _SESSION_SCAN_LIMIT"
+    )
+
+
+def test_resolver_returns_messaging_operator_despite_more_recent_cli_wakes(
+    _isolated_homes: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PO AC (positive-id / cli-crowding): a genuine operator on a REACHABLE
+    messaging platform (signal here — a ``cli`` session is undeliverable and
+    never a genuine operator) stays eligible and is returned even when one or
+    more wake ``cli`` sessions are MORE-recently-active. Class-level ``cli``
+    exclusion drops only the undeliverable ``cli`` class, never a deliverable
+    messaging operator — the PO invariant 'never drop a genuine operator'."""
+    _install_sessions(monkeypatch, [
+        _session("op-signal", "signal", 100.0),
+        _session("klodi:" + _LISTING_ID, "cli", 900.0, title="klodi:" + _LISTING_ID),
+        _session("klodi:vintage-camera", "cli", 950.0, title="klodi:vintage-camera"),
+    ])
+    _install_directory(monkeypatch, {"signal": "op-chat", "telegram": "tg-chat"})
+
+    assert resolve_operator_target() == DeliveryTarget(
+        platform="signal", chat_id="op-chat"
+    ), "a reachable messaging operator must win over more-recent cli wakes"
+
+
+def test_handler_no_operator_when_store_has_only_cli_sessions(
+    _isolated_homes: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BR-2 / INV-1: a store containing ONLY ``cli`` sessions (wake sessions,
+    no genuine messaging operator) resolves to ``None`` → the handler surfaces
+    a loud ``no_operator_target`` and NEVER falls through to self-address a
+    wake ``cli`` session. Distinct from the empty-store no-target case: here
+    the store is populated, but with nothing deliverable."""
+    _install_sessions(monkeypatch, [
+        _session("klodi:" + _LISTING_ID, "cli", 950.0, title="klodi:" + _LISTING_ID),
+        _session("klodi:vintage-camera", "cli", 900.0, title="klodi:vintage-camera"),
+    ])
+    _install_directory(monkeypatch, {"telegram": "op-chat"})
+    deliver = _RecordingDeliver()
+    _install_deliver(monkeypatch, deliver)
+
+    out = handle_message_user({"text": _QUESTION})
+
+    obj = json.loads(out)
+    assert obj.get("error") == "no_operator_target", (
+        f"a cli-only store must surface no_operator_target, not deliver: {out}"
+    )
+    assert deliver.calls == [], "must never self-address a wake cli session"
+    assert open_pending() == [], "nothing delivered → nothing persisted"
