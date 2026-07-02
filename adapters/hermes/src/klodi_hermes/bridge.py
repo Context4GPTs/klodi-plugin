@@ -63,6 +63,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from . import wake_completions
+
 log = logging.getLogger("klodi_hermes.bridge")
 
 # Spawn-env keystone (Piece-3/4 of the outbound round-trip). The bridge —
@@ -76,14 +78,22 @@ KLODI_WAKE_ENTITY_ID_ENV = "KLODI_WAKE_ENTITY_ID"
 KLODI_WAKE_ENTITY_TYPE_ENV = "KLODI_WAKE_ENTITY_TYPE"
 KLODI_WAKE_EVENT_ID_ENV = "KLODI_WAKE_EVENT_ID"
 
-# Session ``--source`` tag stamped on every wake turn. ``hermes chat
-# --source klodi`` persists it on the session's ``source`` column, so the
-# outbound resolver can exclude the wake's own session by source
-# (``exclude_sources=[KLODI_WAKE_SOURCE]`` — see
-# ``message.resolve_operator_target``). It is deliberately distinct from
-# the host's default ``cli`` source and from real operator messaging
-# sources (telegram/signal/…); that source-based exclusion is what stops
-# an escalation self-addressing into the bot's own wake transcript.
+# Session ``--source`` tag passed on every wake turn. INERT on hermes v0.17.0:
+# the one-shot ``hermes chat -q … -Q`` create path silently drops ``--source``
+# (and ``HERMES_SESSION_SOURCE``) and persists the default ``source='cli'`` on
+# the new ``sessions`` row — confirmed live in-container (every ``--source``/env
+# variation lands ``cli``), and ``SessionDB`` exposes no source setter to
+# back-fill it. The flag is RETAINED as declared intent / forward-compat: if a
+# future hermes ever honours it on ``-q``, wakes become ``source='klodi'`` and
+# the resolver already excludes that class too (``exclude_sources=
+# [HERMES_CLI_SOURCE, KLODI_WAKE_SOURCE]`` — see ``message.resolve_operator_
+# target``). Because the tag does NOT stick today, a completed wake is NOT
+# distinguished by its session-row source; the durable proof-of-turn is instead
+# the klodi-owned completion marker written on subprocess exit 0 (see
+# :func:`klodi_hermes.wake_completions.record_wake_completion` + the exit-0
+# branch of :meth:`BridgeCtx.inject_message`). Self-addressing is prevented not
+# by source but by the resolver's positive ``(platform, chat_id)`` identification
+# (a ``cli`` row maps to no messaging chat).
 KLODI_WAKE_SOURCE = "klodi"
 
 # How long to give ``hermes chat -q … -Q`` to process a single wake. The
@@ -263,11 +273,19 @@ class BridgeCtx:
                     returncode=returncode, stdout=stdout, stderr=stderr
                 )
             log.info(
-                "wake_inject_complete role=%s session=%s exit=%d len=%d",
+                "wake_inject_complete role=%s session=%s event_id=%s exit=%d len=%d",
                 role,
                 session,
+                event_id,
                 returncode,
                 len(text),
+            )
+            # Proof-of-turn: ONLY a completed turn (exit 0) records a marker.
+            # The nonzero branch above already raised, and a timeout returned
+            # early — neither reaches here — so the klodi-stage AC1 gate can
+            # never see a marker for an inject that produced no turn.
+            wake_completions.record_wake_completion(
+                event_id=event_id, session=session, role=role
             )
 
     def drain_session(self, session: str) -> None:
@@ -312,8 +330,12 @@ class Bridge:
         self._creds_poll_s = creds_poll_seconds
         self._stop = threading.Event()
         # Test seams. Production injects sensible defaults below.
-        self._ctx_factory = ctx_factory if ctx_factory is not None else self._default_ctx_factory
-        self._klodi_loader = klodi_loader if klodi_loader is not None else self._default_klodi_loader
+        self._ctx_factory = (
+            ctx_factory if ctx_factory is not None else self._default_ctx_factory
+        )
+        self._klodi_loader = (
+            klodi_loader if klodi_loader is not None else self._default_klodi_loader
+        )
         self._ctx: Any = None
         self._registered = False
         self._klodi_module: Any = None
@@ -348,9 +370,7 @@ class Bridge:
         )
         while not self._stop.is_set():
             if not self._wait_for_creds():
-                log.info(
-                    "bridge_stopped_before_register reason=creds_wait_interrupted"
-                )
+                log.info("bridge_stopped_before_register reason=creds_wait_interrupted")
                 return
             if not self._register_plugin():
                 # Register failed (transport, config parse, etc.). Exit so
@@ -413,9 +433,7 @@ class Bridge:
         config = self._klodi_home / "config.json"
         while not self._stop.is_set():
             if not (creds.is_file() and config.is_file()):
-                log.warning(
-                    "bridge_creds_removed — tearing down for re-register"
-                )
+                log.warning("bridge_creds_removed — tearing down for re-register")
                 return
             if self._stop.wait(timeout=self._creds_poll_s):
                 return
