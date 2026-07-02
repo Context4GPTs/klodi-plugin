@@ -10,6 +10,7 @@ lerna-debug.log*
 __pycache__/
 uv.lock
 *.egg-info/
+build/
 
 # rust
 target/
