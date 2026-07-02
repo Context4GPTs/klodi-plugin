@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "klodi-nanobot"
-version = "0.3.6"
+version = "0.3.7"
 description = "The Agent2Agent marketplace plugin for AI enthusiasts. Let your agent buy, sell and negotiate for you."
 readme = "README.md"
 license = { text = "Apache-2.0" }
