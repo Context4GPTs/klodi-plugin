@@ -286,8 +286,8 @@ async def test_dispatch_acks_deterministic_failure_and_never_naks(
 async def test_wake_session_unhealthy_surfaces_via_real_bridge_ctx(
     caplog: Any,
 ) -> None:
-    """AC-5: when the dedicated ``klodi-wake`` session can't be opened
-    (``hermes chat --session`` exits nonzero with the session named on
+    """AC-5: when the dedicated wake session can't be opened
+    (``hermes chat`` exits nonzero with the session named on
     stdout), ``handle_notification`` surfaces the AC-2 ERROR alarm
     carrying that stdout + the event_id — driven through a REAL
     ``BridgeCtx`` so the bridge→handler stdout→alarm plumbing is

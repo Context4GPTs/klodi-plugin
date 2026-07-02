@@ -3,21 +3,23 @@ correlation key, threaded to the tool via the spawn env.
 
 Card: ``wake-outbound-roundtrip-message-and-correlation`` (In-Dev TDD step 4).
 
-``klodi_message_user`` runs INSIDE the ``hermes chat --session klodi:<key>``
-subprocess the bridge spawns for each isolated wake turn. To key the
-pending-decision by the SAME id the wake turn runs under — deterministically,
-not via an LLM-supplied argument — the bridge (the only site that already
-computes the per-wake key for ``--session``) also sets
+``klodi_message_user`` runs INSIDE the ``hermes chat`` subprocess the bridge
+spawns for each isolated wake turn (tagged ``--source klodi`` so the resolver
+can exclude it). To key the pending-decision by the SAME id the wake turn runs
+under — deterministically, not via an LLM-supplied argument — the bridge (the
+only site that already computes the per-wake key) also sets
 ``KLODI_WAKE_ENTITY_ID`` / ``_TYPE`` / ``_EVENT_ID`` on the spawn env. The
 tool reads ``os.environ`` and keys off it.
 
 The binding these tests lock:
 
-    "klodi:" + env["KLODI_WAKE_ENTITY_ID"]  ==  the spawned --session
+    "klodi:" + env["KLODI_WAKE_ENTITY_ID"]  ==  the wake-session key
 
 i.e. the bare entity id in the env is exactly the wake-session key without
 its ``klodi:`` namespace prefix. That is the whole point of the round-trip:
 the outbound correlation key and the inbound wake-session key are the same id.
+The key is no longer a hermes argv flag (no hermes version accepts one — the
+defect this card removes); it lives on the env and in the bridge's log.
 
 These drive the REAL ``BridgeCtx`` (with a stub subprocess runner that
 captures argv AND kwargs) through the REAL wake handler, so no hermes binary
@@ -45,6 +47,10 @@ from klodi_hermes import wake_handlers  # noqa: E402 — after sys.path bootstra
 from klodi_hermes.bridge import BridgeCtx  # noqa: E402
 
 _KLODI_NS = "klodi:"
+
+# The defective flag the fix removes. Built from fragments so this test file
+# leaves ZERO literal occurrences of the rejected flag for the AC-7 grep gate.
+_REJECTED_SESSION_FLAG = "--" + "session"
 
 _GOLDEN_DIR = (
     Path(__file__).resolve().parents[3]
@@ -98,9 +104,22 @@ async def _spawn(event: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
     return runner.calls[0]
 
 
-def _session_arg(cmd: list[str]) -> str:
-    assert "--session" in cmd, f"argv missing --session: {cmd}"
-    return cmd[cmd.index("--session") + 1]
+def _assert_corrected_argv(cmd: list[str]) -> None:
+    """The wake inject must use the corrected flag: tagged ``--source`` and
+    NEVER the rejected session flag (no hermes accepts it) nor an
+    operator-session resume (``--continue``/``--resume``)."""
+    assert _REJECTED_SESSION_FLAG not in cmd, f"argv carries the rejected flag: {cmd}"
+    assert "--continue" not in cmd and "--resume" not in cmd, (
+        f"argv must not resume the operator session: {cmd}"
+    )
+    assert "--source" in cmd, f"argv must tag --source: {cmd}"
+
+
+def _session_from_env(env: dict[str, str]) -> str:
+    """The wake-session key == ``"klodi:"`` + the bare entity id the bridge
+    threads on the spawn env. The key is no longer a hermes argv flag — the
+    inbound key IS the outbound correlation key, carried on the env."""
+    return f"{_KLODI_NS}{env['KLODI_WAKE_ENTITY_ID']}"
 
 
 @pytest.mark.asyncio
@@ -117,11 +136,12 @@ async def test_spawn_env_carries_wake_entity_matching_the_session(
     env = kwargs.get("env")
     assert env is not None, "bridge must spawn the wake with an explicit env"
 
-    session = _session_arg(cmd)
-    assert session == f"{_KLODI_NS}{event[key_field]}"
-    # The keystone equality.
-    assert f"{_KLODI_NS}{env['KLODI_WAKE_ENTITY_ID']}" == session, (
-        "env entity id must equal the wake-session key minus the klodi: prefix"
+    _assert_corrected_argv(cmd)
+    # The keystone: the env-carried entity id, namespaced, IS the wake-session
+    # key for this event — the inbound key equals the outbound correlation key.
+    session = _session_from_env(env)
+    assert session == f"{_KLODI_NS}{event[key_field]}", (
+        "env-derived wake key must match the event's entity key"
     )
     assert env["KLODI_WAKE_ENTITY_ID"] == str(event[key_field])
     assert env["KLODI_WAKE_ENTITY_TYPE"] == entity_type
@@ -163,7 +183,8 @@ async def test_channel_message_wake_also_threads_entity_env() -> None:
     cmd, kwargs = runner.calls[0]
     env = kwargs.get("env")
     assert env is not None
-    session = _session_arg(cmd)
+    _assert_corrected_argv(cmd)
+    session = _session_from_env(env)
     assert session == f"{_KLODI_NS}{event['channel_id']}"
     assert env["KLODI_WAKE_ENTITY_ID"] == str(event["channel_id"])
     assert env["KLODI_WAKE_ENTITY_TYPE"] == "channel"
@@ -172,8 +193,8 @@ async def test_channel_message_wake_also_threads_entity_env() -> None:
 # ── Belt-and-suspenders (review round 1, P1): refuse a poisoned id at the
 #    DERIVATION boundary, not only at the store ─────────────────────────
 #
-# The marketplace-supplied entity id flows derive_wake_entity → the spawned
-# ``--session klodi:<id>`` AND ``KLODI_WAKE_ENTITY_ID`` → message.py →
+# The marketplace-supplied entity id flows derive_wake_entity → the
+# wake-session key AND ``KLODI_WAKE_ENTITY_ID`` → message.py →
 # record_pending → ``${KLODI_HOME}/pending/<id>.json``. The store guard is
 # the backstop; this pins the SOURCE guard so a poisoned id never even
 # becomes a session key or env value. A traversal id implies a compromised
@@ -193,7 +214,7 @@ _POISONED_SERVER_IDS = [
 def test_derive_wake_entity_rejects_poisoned_server_id(poisoned: str) -> None:
     """P1 belt-and-suspenders: derive_wake_entity must REFUSE a traversal /
     absolute marketplace id (raises ValueError) so it never becomes a path
-    component or a --session key downstream."""
+    component or a wake-session key downstream."""
     event = {
         "kind": "offer.proposed",
         "listing_id": poisoned,

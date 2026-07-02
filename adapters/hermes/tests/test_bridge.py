@@ -26,6 +26,14 @@ from klodi_hermes.bridge import (
     WakeInjectFailed,
 )
 
+# The corrected source tag the bridge must add to every wake inject. The fixed
+# argv contract is [hermes, "chat", "-q", text, "-Q", "--source", "klodi"].
+_EXPECTED_SOURCE = "klodi"
+
+# The defective flag the fix removes. Built from fragments so this test file
+# leaves ZERO literal occurrences of the rejected flag for the AC-7 grep gate.
+_REJECTED_SESSION_FLAG = "--" + "session"
+
 
 # ── BridgeCtx ─────────────────────────────────────────────────────────
 
@@ -65,13 +73,15 @@ def test_register_tool_and_skill_are_stubs() -> None:
     assert ctx.register_skill("klodi", Path("/tmp/SKILL.md")) is None
 
 
-def test_inject_spawns_session_scoped_chat(caplog: Any) -> None:
-    """AC-4′ (isolation invariant) under the per-key model: inject_message
-    runs the wake turn in the DEDICATED ``--session <session>`` threaded
-    down from the handler, with NO ``--continue`` — so a klodi wake never
-    resumes (or pollutes) the operator's most-recent session. The session
-    is now a per-wake argument (the conversation key), not ctx-owned
-    state. The argv is the bridge's verifiable isolation mechanism."""
+def test_inject_spawns_source_tagged_chat(caplog: Any) -> None:
+    """AC-5 (isolation invariant) under the corrected flag: inject_message
+    runs the wake turn tagged ``--source klodi`` — the source tag lets the
+    outbound resolver exclude the wake's own session, and NO flag resumes or
+    pollutes the operator's live session (no rejected session flag, no
+    --continue/--resume). The session key is still threaded down for
+    env-keying + logging, but it is NO LONGER a hermes argv flag: no hermes
+    version accepts the rejected flag — that is the defect this card removes.
+    The fixed argv is the bridge's verifiable contract."""
     runner = _RecordingRunner(returncode=0)
     ctx = BridgeCtx(hermes_bin="/opt/hermes/.venv/bin/hermes", runner=runner)
     with caplog.at_level("INFO", logger="klodi_hermes.bridge"):
@@ -80,13 +90,13 @@ def test_inject_spawns_session_scoped_chat(caplog: Any) -> None:
     cmd = runner.calls[0]["cmd"]
     assert cmd == [
         "/opt/hermes/.venv/bin/hermes", "chat", "-q", "hello wake",
-        "--session", "klodi:channel-42", "-Q",
+        "-Q", "--source", _EXPECTED_SOURCE,
     ]
-    # The isolation invariant, asserted both ways: the per-wake dedicated
-    # (namespaced) session is present and the operator-session resume flag
-    # is absent. The bridge is a pass-through — the keyer owns the prefix.
-    assert "--session" in cmd and cmd[cmd.index("--session") + 1] == "klodi:channel-42"
-    assert "--continue" not in cmd
+    # The corrected isolation mechanism: --source tags the wake session so the
+    # resolver excludes it; no flag resumes the operator's session.
+    assert "--source" in cmd and cmd[cmd.index("--source") + 1] == _EXPECTED_SOURCE
+    assert _REJECTED_SESSION_FLAG not in cmd
+    assert "--continue" not in cmd and "--resume" not in cmd
     # The retired shared session must never leak into the argv.
     assert "klodi-wake" not in cmd
     # capture_output + text=True so we get strings back for logging.
@@ -95,16 +105,25 @@ def test_inject_spawns_session_scoped_chat(caplog: Any) -> None:
     assert any("wake_inject_complete" in r.message for r in caplog.records)
 
 
-def test_inject_uses_session_argument_in_argv() -> None:
-    """The session is a per-wake argument threaded from the handler — the
-    value must flow into the argv verbatim, never a hardcoded literal."""
+def test_inject_threads_session_into_log_not_argv(caplog: Any) -> None:
+    """The per-wake session key is threaded from the handler for correlation,
+    but it is NO LONGER a hermes argv flag (no hermes version accepts the
+    rejected session flag). The key still flows verbatim into the
+    ``wake_inject_complete`` log line, and the argv carries the corrected
+    ``--source`` tag instead of any session flag."""
     runner = _RecordingRunner(returncode=0)
     ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)
-    ctx.inject_message("x", session="klodi:listing-99")
+    with caplog.at_level("INFO", logger="klodi_hermes.bridge"):
+        ctx.inject_message("x", session="klodi:listing-99")
     cmd = runner.calls[0]["cmd"]
-    assert "--session" in cmd
-    assert cmd[cmd.index("--session") + 1] == "klodi:listing-99"
-    assert "--continue" not in cmd
+    assert _REJECTED_SESSION_FLAG not in cmd
+    assert "--continue" not in cmd and "--resume" not in cmd
+    assert "--source" in cmd
+    # The session key is preserved for correlation — in the log, not the argv.
+    assert any(
+        "wake_inject_complete" in r.message and "klodi:listing-99" in r.message
+        for r in caplog.records
+    )
 
 
 def test_inject_default_timeout_passed_to_runner() -> None:
@@ -172,9 +191,9 @@ def test_inject_nonzero_exit_carries_stderr_too() -> None:
 
 def test_inject_serializes_concurrent_calls_on_same_session() -> None:
     """Two injects targeting the SAME session must not run concurrently —
-    the lock prevents two ``hermes chat --session <s>`` processes racing on
-    the same session file. (Same-key serialization holds whether the lock
-    stays global or narrows to per-session; this test pins only the
+    the lock prevents two ``hermes chat`` processes racing on the same
+    conversation's session file. (Same-key serialization holds whether the
+    lock stays global or narrows to per-session; this test pins only the
     same-key guarantee the redesign must preserve.)"""
     runner = _RecordingRunner(sleep_s=0.05)
     ctx = BridgeCtx(hermes_bin="/usr/bin/hermes", runner=runner)

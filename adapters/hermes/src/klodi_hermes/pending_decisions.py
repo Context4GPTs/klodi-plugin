@@ -16,7 +16,7 @@ the agent re-grounds the entity's CURRENT state via the klodi read tools
 that — hence the deliberately narrow schema.
 
 Cross-process safety (devops [HIGH]): the writer runs inside the isolated
-``hermes chat --session klodi:<entity_id>`` wake subprocess; the reader
+``hermes chat … --source klodi`` wake subprocess; the reader
 runs inside a DIFFERENT operator-session subprocess, possibly
 concurrently. Two OS processes on the same files mean no in-process lock
 helps — every write is write-temp + ``os.replace`` (atomic rename) and

@@ -10,17 +10,21 @@ The bridge productizes that bypass. It mirrors the pattern OpenClaw's
 adapter uses against its gateway runtime (long-running process imports
 the plugin, calls ``register(ctx)`` once, stays alive so the JetStream
 consumers keep delivering). The production ctx's ``inject_message``
-shells out to ``hermes chat -q <text> --session <key> -Q`` to run each
-wake as an ISOLATED turn in a session scoped to its CONVERSATION — the
-session key is derived per-wake from the event (channel thread / listing
-/ transaction / standing search), namespaced under ``klodi:`` so it can
-never be mistaken for an operator session (see
-``wake_handlers.derive_wake_session``), and threaded down, never
-``--continue`` into the operator's live conversation. Per-conversation
-keying bounds each session's history to one conversation instead of
-letting one shared session grow unbounded for the daemon's whole life.
-The agent reasons about the marketplace event with the klodi toolset and
-acts on its own, leaving the human's other chats untouched.
+shells out to ``hermes chat -q <text> -Q --source klodi`` to run each
+wake as an ISOLATED, fresh single-turn session — tagged with the
+``klodi`` source (:data:`KLODI_WAKE_SOURCE`) so the outbound resolver can
+exclude the wake's own session and the agent never resumes or pollutes
+the operator's live conversation. No hermes version accepts a session
+flag and ``hermes chat`` cannot mint a session by name
+(``--continue <name>`` errors on first contact), so the per-wake
+conversation key — derived from the event (channel thread / listing /
+transaction / standing search; see ``wake_handlers.derive_wake_session``)
+— is no longer a CLI argument: it survives only to key the outbound
+pending-decision (via the spawn env) and to correlate the wake's log
+line. Each wake is single-turn, so no session grows unbounded for the
+daemon's whole life. The agent reasons about the marketplace event with
+the klodi toolset and acts on its own, leaving the human's other chats
+untouched.
 
 Run shape:
   * Bridge boots; if creds are absent it polls until ``klodi_register``
@@ -62,19 +66,29 @@ from typing import Any
 log = logging.getLogger("klodi_hermes.bridge")
 
 # Spawn-env keystone (Piece-3/4 of the outbound round-trip). The bridge —
-# the only site that already computes a wake's per-entity key for
-# ``--session`` — also threads that entity identity to the in-subprocess
-# ``klodi_message_user`` tool via these env vars, so the outbound
-# pending-decision is keyed by the SAME id the wake turn runs under,
-# deterministically (bridge-computed, never LLM-supplied). The bare entity
-# id here equals the ``--session`` key minus its ``klodi:`` namespace.
+# the only site that already computes a wake's per-entity key — also
+# threads that entity identity to the in-subprocess ``klodi_message_user``
+# tool via these env vars, so the outbound pending-decision is keyed by
+# the SAME id the wake turn runs under, deterministically (bridge-computed,
+# never LLM-supplied). The bare entity id here equals the wake-session key
+# minus its ``klodi:`` namespace.
 KLODI_WAKE_ENTITY_ID_ENV = "KLODI_WAKE_ENTITY_ID"
 KLODI_WAKE_ENTITY_TYPE_ENV = "KLODI_WAKE_ENTITY_TYPE"
 KLODI_WAKE_EVENT_ID_ENV = "KLODI_WAKE_EVENT_ID"
 
-# How long to give ``hermes chat -q --continue`` to process a single
-# wake. The command blocks on the LLM; 120s leaves room for a normal
-# agent turn while bounding pathological hangs.
+# Session ``--source`` tag stamped on every wake turn. ``hermes chat
+# --source klodi`` persists it on the session's ``source`` column, so the
+# outbound resolver can exclude the wake's own session by source
+# (``exclude_sources=[KLODI_WAKE_SOURCE]`` — see
+# ``message.resolve_operator_target``). It is deliberately distinct from
+# the host's default ``cli`` source and from real operator messaging
+# sources (telegram/signal/…); that source-based exclusion is what stops
+# an escalation self-addressing into the bot's own wake transcript.
+KLODI_WAKE_SOURCE = "klodi"
+
+# How long to give ``hermes chat -q … -Q`` to process a single wake. The
+# command blocks on the LLM; 120s leaves room for a normal agent turn
+# while bounding pathological hangs.
 DEFAULT_INJECT_TIMEOUT_SECONDS = 120
 
 # Polling cadence while waiting for first-run ``klodi_register``. 5s
@@ -124,13 +138,15 @@ class BridgeCtx:
         a duplicate tool surface.
       * ``register_skill(name, path)`` — stub for the same reason.
       * ``inject_message(text, role, *, session)`` — production path.
-        Shells out to ``hermes chat -q <text> --session <session> -Q``;
+        Shells out to ``hermes chat -q <text> -Q --source klodi``;
         blocks until the chat subprocess exits. ``session`` is the
-        per-wake conversation key threaded down from the handler. The
-        wake pump's ``max_ack_pending: 1`` already serializes deliveries,
-        so blocking here is the right shape for ordered wake processing.
-        A fast nonzero exit raises :class:`WakeInjectFailed`; a timeout
-        is logged and swallowed.
+        per-wake conversation key threaded down from the handler — used
+        for env-keying + log correlation, NOT as a CLI flag (no hermes
+        version accepts a session flag). The wake pump's
+        ``max_ack_pending: 1`` already serializes deliveries, so blocking
+        here is the right shape for ordered wake processing. A fast
+        nonzero exit raises :class:`WakeInjectFailed`; a timeout is
+        logged and swallowed.
       * ``drain_session(session)`` — best-effort reclamation of a
         session after its conversation's terminal event (probe-gated).
     """
@@ -189,9 +205,12 @@ class BridgeCtx:
           * exit 0 → ``wake_inject_complete`` INFO
 
         ``session`` is the per-wake conversation key derived by
-        ``wake_handlers.derive_wake_session`` and threaded down — a wake
-        never resumes the operator's session (no ``--continue``) and never
-        shares one global session across conversations.
+        ``wake_handlers.derive_wake_session`` and threaded down for
+        env-keying + log correlation only — it is NOT a hermes CLI flag
+        (no version accepts a session flag). The turn runs in a fresh
+        session tagged ``--source klodi`` (:data:`KLODI_WAKE_SOURCE`): a
+        wake never resumes the operator's session and never shares one
+        global session across conversations.
 
         ``entity_type`` / ``entity_id`` / ``event_id`` are the wake's
         marketplace identity (``wake_handlers.derive_wake_entity``); they
@@ -206,9 +225,9 @@ class BridgeCtx:
             "chat",
             "-q",
             text,
-            "--session",
-            session,
             "-Q",
+            "--source",
+            KLODI_WAKE_SOURCE,
         ]
         env = {
             **os.environ,
@@ -433,6 +452,7 @@ __all__ = [
     "KLODI_WAKE_ENTITY_ID_ENV",
     "KLODI_WAKE_ENTITY_TYPE_ENV",
     "KLODI_WAKE_EVENT_ID_ENV",
+    "KLODI_WAKE_SOURCE",
     "Bridge",
     "BridgeCtx",
     "WakeInjectFailed",

@@ -23,7 +23,7 @@ best-effort ``drain_session`` to reclaim it.
 Hermes's daemon is long-running; the connection lives for the
 daemon's lifetime, and consumer pull loops live on a dedicated
 asyncio thread (see ``client.py``). The bridge ctx's
-``inject_message`` blocks on a ``hermes chat --session <key>``
+``inject_message`` blocks on a ``hermes chat … --source klodi``
 subprocess for the agent turn's duration, so the inject is dispatched
 off the loop via ``asyncio.to_thread``. Otherwise the running
 subprocess freezes the second consumer's pull-fetch and the nats-py WS
@@ -138,8 +138,8 @@ class WakeEntity:
 
 def _reject_traversal_entity_id(entity_id: str) -> str:
     """Refuse a marketplace-supplied id that is not a safe single path
-    component, at the SOURCE — before it becomes a ``--session klodi:<id>``
-    argument or (threaded via the spawn env) a
+    component, at the SOURCE — before it becomes the wake-session key
+    (``klodi:<id>``) or (threaded via the spawn env) a
     ``${KLODI_HOME}/pending/<id>.json`` filename. A traversal / absolute id
     here implies a compromised marketplace server (THREAT_MODEL T5).
 
@@ -184,7 +184,7 @@ def derive_wake_entity(event: dict[str, Any]) -> WakeEntity:
 
     The marketplace-supplied id is validated at this boundary
     (``_reject_traversal_entity_id``) so a poisoned/traversal server id is
-    refused at the SOURCE — it never becomes a ``--session`` key or a pending
+    refused at the SOURCE — it never becomes a wake-session key or a pending
     filename downstream. The internally-built ephemeral fallback is safe by
     construction (``wake-`` + event_id / uuid4) and needs no boundary check.
     """
@@ -207,12 +207,13 @@ def _session_for_entity(entity: WakeEntity) -> str:
 
 
 def derive_wake_session(event: dict[str, Any]) -> str:
-    """The ``--session`` key for a wake: the wake entity id namespaced
-    under ``klodi:`` (so the outbound resolver can exclude the wake-session
-    family from operator-session resolution — see
-    ``WAKE_SESSION_NAMESPACE``). One marketplace conversation == one
-    session, so a session's history stays bounded per conversation instead
-    of one shared session growing unbounded (the round-3 defect)."""
+    """The session key for a wake: the wake entity id namespaced under
+    ``klodi:``. It is no longer a hermes CLI flag (no version accepts a
+    session flag); it keys the outbound pending-decision (via the spawn
+    env) and correlates the wake's log line. One marketplace conversation
+    == one key, but each wake runs as its own fresh ``--source klodi``
+    session, so nothing grows unbounded for the daemon's lifetime (the
+    round-3 defect)."""
     return _session_for_entity(derive_wake_entity(event))
 
 
@@ -388,7 +389,7 @@ def _supported_inject_kwargs(inject: Any, **candidate: str) -> dict[str, str]:
     actually accepts.
 
     Two ctx types legitimately bind here: the daemon's ``BridgeCtx``
-    (shells ``hermes chat --session <key>`` and sets the ``KLODI_WAKE_*``
+    (shells ``hermes chat … --source klodi`` and sets the ``KLODI_WAKE_*``
     spawn env — takes ``session`` + ``entity_type`` / ``entity_id`` /
     ``event_id``) and hermes's in-process per-chat ctx (injects into the
     live chat — its ``inject_message(text, role)`` predates all of these).
@@ -415,7 +416,7 @@ async def _call_inject(
     event_id: str,
 ) -> None:
     """Run the (sync, blocking) inject off the asyncio loop. ``inject``
-    blocks on a ``hermes chat --session <key>`` subprocess for the agent
+    blocks on a ``hermes chat … --source klodi`` subprocess for the agent
     turn's duration; a worker thread keeps the loop — shared by both
     consumer pull-fetches and the nats-py WS heartbeat — ticking.
     Cross-inject serialization stays in ``BridgeCtx._inject_lock``."""
