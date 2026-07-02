@@ -30,12 +30,17 @@ decision): the target is always the resolved live operator, and a
 genuinely-absent operator surfaces a loud ``no_operator_target``.
 
   * ``resolve_operator_target`` reads the host session store
-    (``hermes_state.SessionDB.list_sessions_rich``) for the
-    most-recently-active session whose ``source`` is a reachable
-    messaging platform, excluding the wake-session family by source
-    (``exclude_sources=[KLODI_WAKE_SOURCE]`` — each wake runs
-    ``--source klodi``), then recovers its deliverable ``chat_id`` from
-    ``gateway.channel_directory``.
+    (``hermes_state.SessionDB.list_sessions_rich``) and returns the
+    most-recently-active session whose ``source`` is a reachable messaging
+    platform — that positive ``(platform, chat_id)`` identification is the
+    load-bearing self-addressing guard. A completed wake turn lands
+    ``source='cli'`` (hermes v0.17.0's one-shot ``-q`` create silently drops
+    ``--source klodi`` and persists the default ``cli``), so it maps to no
+    messaging chat and can never be picked. The store query additionally
+    excludes the ``cli`` and ``klodi`` source classes up front
+    (``exclude_sources=[HERMES_CLI_SOURCE, KLODI_WAKE_SOURCE]``) so wake
+    sessions never crowd a genuine operator out of the recency window; the
+    deliverable ``chat_id`` is then recovered from ``gateway.channel_directory``.
   * ``_deliver`` pushes the message turn-lessly via the SAME standalone
     sender Hermes's cron runner uses when the gateway process is not in
     this process (``tools.send_message_tool._send_to_platform`` over a
@@ -80,6 +85,17 @@ log = logging.getLogger("klodi_hermes.message")
 # stage/prod image). The SQLite session store lives at its top level.
 _HERMES_HOME_ENV = "HERMES_HOME"
 _STATE_DB_FILE = "state.db"
+
+# The default ``source`` hermes writes on a one-shot ``hermes chat -q`` create.
+# A COMPLETED WAKE lands here: hermes v0.17.0's ``-q`` path silently drops
+# ``--source klodi`` (see ``bridge.KLODI_WAKE_SOURCE``) and persists ``cli``, so
+# a wake session is byte-identical to a genuine operator CLI session at the
+# store. It is excluded as a CLASS at the recency-window query — a ``cli``
+# session is never a *deliverable* operator (no channel-directory chat_id, not a
+# messaging ``Platform``), so excluding the class drops no reachable operator
+# yet keeps a flood of wake ``cli`` rows from crowding a genuine operator out of
+# the ``_SESSION_SCAN_LIMIT`` window before positive-id ever ranks it.
+HERMES_CLI_SOURCE = "cli"
 
 # How many recent sessions to scan when resolving the operator. The host
 # query orders by ``started_at`` DESC; we re-rank the window by
@@ -129,14 +145,19 @@ def resolve_operator_target() -> DeliveryTarget | None:
 
     Recency comes from the numeric ``last_active`` field (BR-6), not the
     host query's ``started_at`` ordering, so a long-lived but freshly-active
-    operator session still wins. The wake-session family is excluded at the
-    store query by source (``exclude_sources=[KLODI_WAKE_SOURCE]`` in
-    ``_list_operator_sessions``, BR-4): each wake runs in a fresh session
-    tagged ``--source klodi``, and an isolated wake session is the bot's own
-    transcript — self-addressing it means the human never sees the message
-    (the highest product risk this resolver exists to prevent). Excluding by
-    source at the query also keeps the recency window from filling with wake
-    sessions and crowding out a genuine operator.
+    operator session still wins. The load-bearing self-addressing guard (BR-4)
+    is positive identification: only a session whose ``source`` maps to a
+    reachable messaging ``(platform, chat_id)`` is ever returned. A completed
+    wake turn lands ``source='cli'`` — hermes v0.17.0's one-shot ``-q`` create
+    silently drops ``--source klodi`` and persists the default ``cli``
+    (``SessionDB`` exposes no source setter, so klodi cannot back-fill it),
+    leaving a wake row byte-identical to an operator CLI session — and ``cli``
+    maps to no messaging chat, so a wake is never a delivery target. The store
+    query additionally excludes the ``cli`` and ``klodi`` source classes
+    (``exclude_sources=[HERMES_CLI_SOURCE, KLODI_WAKE_SOURCE]`` in
+    ``_list_operator_sessions``) so wake sessions cannot crowd a genuine
+    operator out of the recency window under wake volume — a defence-in-depth
+    optimisation, not the safety guard.
     """
     sessions = _list_operator_sessions()
     for session in sorted(sessions, key=_last_active, reverse=True):
@@ -282,14 +303,22 @@ def register_message_tools(ctx: Any) -> int:
 
 def _list_operator_sessions() -> list[dict[str, Any]]:
     """Host boundary: the recent sessions from Hermes's SQLite session store
-    (``hermes_state.SessionDB.list_sessions_rich``), with the wake-session
-    family filtered out at the query via ``exclude_sources=[KLODI_WAKE_SOURCE]``
-    (each wake runs ``--source klodi``) so a wake session can neither be
-    self-addressed nor crowd a genuine operator out of the recency window.
-    Returns the host's own row dicts (keys incl. ``id``, ``source``,
-    ``title``, ``last_active``). A missing store / unavailable host module
-    degrades to ``[]`` — the cold-start path is common and must never raise.
-    Driven as a seam by the unit suite; exercised for real in the live stage."""
+    (``hermes_state.SessionDB.list_sessions_rich``), with the ``cli`` and
+    ``klodi`` source classes filtered out server-side
+    (``exclude_sources=[HERMES_CLI_SOURCE, KLODI_WAKE_SOURCE]``) so wake
+    sessions cannot crowd a genuine operator out of the recency window. A
+    completed wake turn lands ``source='cli'`` (hermes v0.17.0's ``-q`` create
+    drops ``--source klodi`` to the default ``cli``), so ``cli`` is the class
+    that actually matches a wake today; ``klodi`` is kept forward-compat for a
+    future hermes that ever honours ``--source``. Neither class is a
+    deliverable operator (``cli`` maps to no channel-directory chat and is not a
+    messaging ``Platform``), so excluding the classes drops no reachable
+    operator — the resolver's positive ``(platform, chat_id)`` identification
+    remains the self-addressing safety guard. Returns the host's own row dicts
+    (keys incl. ``id``, ``source``, ``title``, ``last_active``). A missing
+    store / unavailable host module degrades to ``[]`` — the cold-start path is
+    common and must never raise. Driven as a seam by the unit suite; exercised
+    for real in the live stage."""
     try:
         from hermes_state import SessionDB  # ty: ignore[unresolved-import]
     except Exception:  # noqa: BLE001 — host module absent (non-runtime env)
@@ -299,7 +328,7 @@ def _list_operator_sessions() -> list[dict[str, Any]]:
         return list(
             db.list_sessions_rich(
                 limit=_SESSION_SCAN_LIMIT,
-                exclude_sources=[KLODI_WAKE_SOURCE],
+                exclude_sources=[HERMES_CLI_SOURCE, KLODI_WAKE_SOURCE],
             )
         )
     except Exception as err:  # noqa: BLE001 — store missing/locked → cold path
