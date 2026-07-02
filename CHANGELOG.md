@@ -4,6 +4,14 @@ All notable changes to klodi-plugin (every adapter — `@4gpts/klodi` for OpenCl
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). All adapters move together — they share a single version line. Pre-1.0 the public surface is not yet stable — check this file on every upgrade before bumping the pinned version.
 
+## [0.3.8] — 2026-07-02 — a completed wake no longer masquerades as the operator (hermes)
+
+**All six adapters move to `0.3.8` together (lockstep version line).** The one functional change since `0.3.7` (#43) is a Hermes bugfix: on the deployed `hermes v0.17.0`, a completed wake session persists as `source='cli'` — byte-identical to a genuine operator session — so an inbound wake could crowd the real operator out of the escalation resolver's recency window. OpenClaw, `klodi-nanobot`, and the three Rust adapters (`klodi-moltis`, `klodi-ironclaw`, `klodi-zeroclaw`) carry no functional change; they republish only to hold the shared version line.
+
+### Fixed
+
+- **A completed wake session no longer crowds out the genuine operator (hermes).** `hermes v0.17.0`'s one-shot `hermes chat -q … -Q` create path drops the `--source klodi` argument the bridge passes, so a finished wake turn persists with `source='cli'` — indistinguishable from a real operator's CLI session, which could push a genuine operator out of the most-recently-active window the escalation resolver reads. `_list_operator_sessions` now excludes **both** `cli` and `klodi` source classes from its `hermes_state.SessionDB.list_sessions_rich` query (`klodi` retained for forward-compat), so wake rows can no longer displace a real operator; positive `(platform, chat_id)` identification stays the load-bearing self-addressing guard. Complementing this, the bridge now records a bounded, atomic, `event_id`-keyed **wake-completion marker** at `${KLODI_HOME}/wake/completions.json` — written **only** on an inject that exits `0` (the nonzero path raises, the timeout path returns), so a downstream proof-of-turn check can never false-green on a wake that produced no turn. The now-inert `--source` behaviour and the durable resolver mechanism are recorded in [ADR-0020](./docs/decisions/0020-operator-escalation-delivery-binding.md).
+
 ## [0.3.7] — 2026-07-02 — inbound wakes actually run (hermes)
 
 **All six adapters move to `0.3.7` together (lockstep version line).** The one functional change since `0.3.6` (#40) is a Hermes bugfix: inbound marketplace wakes never ran on the deployed pin because the bridge passed a `--session` flag no `hermes` version accepts. OpenClaw and the three Rust adapters (`klodi-moltis`, `klodi-ironclaw`, `klodi-zeroclaw`) carry no functional change; they republish only to hold the shared version line.
