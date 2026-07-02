@@ -4,8 +4,8 @@ title: Wake-inject failure disposition by class — timeout is swallowed-and-ACK
 tags: [wake, error-handling, observability, alarm, consumer, ack, adapters, parity, hermes, nats]
 card: wake-inject-failures-silent-and-lost-hermes
 commit: 709dd7c
-updated_at: 2026-06-30
-updated_by_card: bind-message-user-delivery-and-operator-resolver
+updated_at: 2026-07-02
+updated_by_card: fix-hermes-wake-inject-session-flag-argv
 ---
 
 # ADR-0019 — Wake-inject failure disposition by failure class
@@ -221,6 +221,19 @@ re-confirmed on v0.17.0 but not on the prod-alice v0.11.0 pin — re-confirm or 
 Dockerfile-pin discipline). The `drain_session` probe-gate is now also resolvable
 (`hermes sessions delete <id>` is confirmed) but, since each wake is single-turn under this fix, is
 left as a separate simplification decision.
+
+**Why this can't silently recur — a reusable testing rule.** The defect reached prod because the
+bridge's argv test asserted a **hand-written literal** (`[…, <session-flag>, …]`) — a stub that can
+only ever confirm the author's assumption, never that a shipped hermes actually accepts the flag. The
+corrected guard (`adapters/hermes/tests/test_hermes_cli_surface.py`) instead asserts every flag the
+bridge emits against the recognized-option set parsed from a **checked-in, version-stamped capture of
+the real `hermes chat --help`** (`fixtures/hermes_chat_help_v2026.6.19.txt`), and fails on any flag
+that surface does not define; `test_hermes_test_files_carry_no_rejected_session_flag` additionally
+forbids re-introducing the rejected flag anywhere in the hermes test tree. The general rule for **any
+adapter that spawns a host CLI** (the sibling `audit-all-adapters-for-silent-wake-inject-failure` is
+the propagation vehicle): validate the argv against the shipped binary's captured surface, never a
+literal that restates the author's belief — a stub literal *is* the contract with your own assumption,
+not with the tool.
 
 ## Alternatives considered
 
