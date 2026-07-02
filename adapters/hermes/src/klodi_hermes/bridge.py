@@ -11,10 +11,17 @@ adapter uses against its gateway runtime (long-running process imports
 the plugin, calls ``register(ctx)`` once, stays alive so the JetStream
 consumers keep delivering). The production ctx's ``inject_message``
 shells out to ``hermes chat -q <text> -Q --source klodi`` to run each
-wake as an ISOLATED, fresh single-turn session — tagged with the
-``klodi`` source (:data:`KLODI_WAKE_SOURCE`) so the outbound resolver can
-exclude the wake's own session and the agent never resumes or pollutes
-the operator's live conversation. No hermes version accepts a session
+wake as an ISOLATED, fresh single-turn session, so the agent never
+resumes or pollutes the operator's live conversation. The ``--source
+klodi`` tag (:data:`KLODI_WAKE_SOURCE`) is DECLARED intent but INERT on
+hermes v0.17.0: the one-shot ``-q`` create path drops it and the wake
+persists ``source='cli'``, so a wake is NOT distinguished by its session
+source. The outbound resolver instead refuses a wake by positive
+``(platform, chat_id)`` identification (a ``cli`` row maps to no
+messaging chat), and the durable proof that a wake turn completed is the
+klodi-owned completion marker written on exit 0 (see
+:mod:`klodi_hermes.wake_completions` and ADR-0020, Amendment 2026-07-02).
+No hermes version accepts a session
 flag and ``hermes chat`` cannot mint a session by name
 (``--continue <name>`` errors on first contact), so the per-wake
 conversation key — derived from the event (channel thread / listing /
@@ -218,9 +225,12 @@ class BridgeCtx:
         ``wake_handlers.derive_wake_session`` and threaded down for
         env-keying + log correlation only — it is NOT a hermes CLI flag
         (no version accepts a session flag). The turn runs in a fresh
-        session tagged ``--source klodi`` (:data:`KLODI_WAKE_SOURCE`): a
-        wake never resumes the operator's session and never shares one
-        global session across conversations.
+        session — a wake never resumes the operator's session and never
+        shares one global session across conversations. The argv carries
+        ``--source klodi`` (:data:`KLODI_WAKE_SOURCE`) as forward-compat
+        intent, but it is INERT on v0.17.0 ``-q`` (the wake persists
+        ``source='cli'``); on exit 0 this method records the durable
+        completion marker (see ADR-0020, Amendment 2026-07-02).
 
         ``entity_type`` / ``entity_id`` / ``event_id`` are the wake's
         marketplace identity (``wake_handlers.derive_wake_entity``); they

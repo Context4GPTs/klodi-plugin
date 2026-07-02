@@ -10,6 +10,8 @@ therefore byte-indistinguishable from a genuine operator CLI session at the
 host store, and ``sessions.source='klodi'`` can no longer mark "a wake turn
 completed". The klodi-stage AC1 DELIVERED gate reads THIS marker instead (a
 lockstep card, sequenced after this one, moves the gate's assertion onto it).
+See ADR-0020 (Amendment 2026-07-02) for the durable-mechanism rationale and the
+cross-repo lockstep contract.
 
 Written ONLY from the bridge's ``inject_message`` exit-0 branch: a nonzero exit
 raises ``WakeInjectFailed`` and a timeout is swallowed — both record nothing —
