@@ -1,5 +1,6 @@
 /**
  * TLS trust for the raw `tls://` NATS transport (private-CA proxy).
+ * See ADR-0022 (`docs/decisions/0022-tls-nats-transport-private-ca-trust.md`).
  *
  * The Railway L4 TCP proxy terminates TLS at the NATS server with a
  * **private** CA (epic `nats-ws-ingress-flap-2026-06`). For a `tls://`
@@ -12,9 +13,13 @@
  * `KLODI_NATS_CA_FILE` selects *which* CA to trust, never *whether* to
  * verify — a missing / wrong CA fails **closed** (the handshake rejects).
  *
- * Providing `ca` makes Node's TLS stack trust that CA in addition to the
- * system roots; a private-CA cert then verifies, and any other invalid
- * cert still fails closed.
+ * Providing `ca` makes Node's TLS stack trust **only** that CA: Node's
+ * `tls.createSecureContext` *replaces* the default Mozilla bundle when
+ * `ca` is set (`@nats-io/transport-node` forwards it straight to
+ * `tls.connect`), so this is private-CA-**only** — matching the Python
+ * (`ssl` `cadata=`) and Rust (`add_root_certificates`) clients. A
+ * private-CA cert verifies; any other cert (including a public chain)
+ * fails closed.
  *
  * CA resolution order (highest priority first):
  *   1. `KLODI_NATS_CA_FILE` env var — a path to a PEM bundle (local /

@@ -1,4 +1,5 @@
 //! TLS trust for the raw `tls://` NATS transport (private-CA proxy).
+//! See ADR-0022 (`docs/decisions/0022-tls-nats-transport-private-ca-trust.md`).
 //!
 //! The Railway L4 TCP proxy terminates TLS at the NATS server with a
 //! **private** CA (epic `nats-ws-ingress-flap-2026-06`). For a `tls://`

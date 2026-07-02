@@ -8,6 +8,7 @@ Rows are sorted **newest `updated_at` first**.
 
 | Doc | Title | Tags | Updated |
 |---|---|---|---|
+| [[0022-tls-nats-transport-private-ca-trust]] | Client `tls://` NATS transport with private-CA trust — verify-ON, private-CA-only, fail-closed; guard widened wss→wss+tls (two-family), CA via tool-catalog constant + `KLODI_NATS_CA_FILE` override, TS transport-node un-vendored | nats, tls, transport, ca, trust, security, guard, vendoring, adapters, parity, railway | 2026-07-02 |
 | [[0019-wake-inject-failure-disposition]] | Wake-inject failure disposition by class — timeout swallowed-and-ACKed; deterministic nonzero is a loud correlated alarm, never NAK/redeliver/dead-letter | wake, error-handling, observability, alarm, consumer, ack, adapters, parity, hermes, nats, testing | 2026-07-02 |
 | [[0021-version-aware-skill-seeding]] | Skill seeding is unconditionally version-aware (canonical bundle wins when newer); `--no-reseed` demoted to accepted-but-inert and sequenced for cross-repo removal | skill, bundle, seeding, versioning, reseed, deprecation, cross-repo, hermes, nanobot, installer, parity | 2026-06-30 |
 | [[0020-operator-escalation-delivery-binding]] | Operator escalation binds to the host's cron-standalone sender + SQLite session store — turn-less, live-operator-resolved, no default channel | escalation, message-user, delivery, operator-resolution, sessiondb, channel-directory, hermes, wake, outbound | 2026-06-30 |
