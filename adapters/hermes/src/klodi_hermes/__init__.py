@@ -15,8 +15,13 @@ What ``register(ctx)`` does, in order:
      Schema export bundled with ``klodi-nats-client``.
   3. Register the local tools (``klodi_setup_*``, ``klodi_register*``,
      ``klodi_watch``, ``klodi_unwatch``, ``klodi_channel_message``).
-  4. Open the persistent NATS-WS connection and attach the
-     notifications + channels wake handlers.
+  4. **Only in the wake-pump host** (the klodi-hermes-bridge daemon's
+     ``BridgeCtx``): open the persistent NATS-WS connection and subscribe
+     the notifications + channels durable consumers. Steps 1-3 run in
+     EVERY process that loads the plugin; step 4 is gated so a non-host
+     loader (the ``hermes gateway run`` daemon, a ``hermes chat -q`` wake
+     subprocess) never arms a competing pump. See :data:`WAKE_PUMP_HOST_ATTR`
+     and ADR-0015 ("loaded != armed").
 
 Lifecycle:
   Hermes is a long-running daemon, so the connection's lifetime is the
@@ -30,6 +35,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from .bridge import WAKE_PUMP_HOST_ATTR
 from .client import close_client
 from .local_tools import register_local_tools
 from .message import register_message_tools
@@ -78,52 +84,87 @@ def register(ctx: Any) -> None:
     local_tools += register_message_tools(ctx)
     local_tools += register_pending_tools(ctx)
 
-    # Open the connection and wire wake handlers. This must happen
-    # AFTER tool registration so the agent sees the toolset even if
-    # the connection fails (the user can call klodi_setup_status to
-    # diagnose).
-    #
-    # Per **R § P2-29**: the success log used to fire unconditionally
-    # AFTER the try/except around connect+wakes — meaning a connect
-    # failure would log both `klodi_hermes_plugin_connect_failed`
-    # (WARN) and `klodi_hermes_plugin_registered` (INFO), giving
-    # operators a misleading "everything is fine" signal. Now the
-    # success log fires only when both connect and wake-subscription
-    # complete cleanly.
-    wakes_wired = False
-    # Narrow to `Exception` (not `BaseException`) so `KeyboardInterrupt`
-    # and `SystemExit` propagate — those signal operator intent and
-    # critical config errors that should not be swallowed during boot.
-    #
-    # Subscribe ownership lives in the shared `WakePump`. The pump
-    # composes the two underlying subscribe calls + reconnect-safe
-    # retry into one eager start — no host SDK lifecycle dependency.
-    try:
-        start_wake_pump()
-        wakes_wired = True
-    except Exception as err:  # noqa: BLE001 — never crash plugin boot on transport errors
-        log.warning(
-            "klodi_hermes_plugin_connect_failed error=%s — tool calls"
-            " will fail until creds are present. Run klodi_register to"
-            " sign up, or klodi_setup_status to diagnose existing setup.",
-            err,
-        )
+    # Arming gate (ADR-0015 parity — "loaded != armed"). Tools/skills above
+    # register in EVERY loader; the wake pump arms in EXACTLY ONE process —
+    # the klodi-hermes-bridge daemon, whose BridgeCtx positively declares the
+    # WAKE_PUMP_HOST_ATTR marker. A non-host loader (the `hermes gateway run`
+    # daemon, a transient `hermes chat -q` wake subprocess) must NOT subscribe
+    # the shared durable consumers: its ctx no-ops any wake it pulls and the
+    # consumer ACKs the drop — the first-wake-after-idle split-brain this card
+    # fixes. The discriminator is a positive, NON-inherited ctx attribute
+    # (never an env var: inject_message merges {**os.environ} into its
+    # children, so an env flag would leak and fail OPEN). See ADR-0015.
+    _arm_wake_pump_or_skip(
+        ctx,
+        request_tools=request_tools,
+        local_tools=local_tools,
+        skills=skills_registered,
+    )
 
-    if wakes_wired:
+
+def _is_wake_pump_host(ctx: Any) -> bool:
+    """True iff ``ctx`` is the designated wake-pump host — the
+    klodi-hermes-bridge daemon's ``BridgeCtx``, which positively declares the
+    capability via :data:`WAKE_PUMP_HOST_ATTR`. Duck-typed on purpose: a
+    non-bridge per-chat / gateway ctx simply lacks the marker, so the gate is
+    fail-safe by absence and cannot be tripped by an inherited environment
+    variable (the ADR-0015 fail-OPEN trap)."""
+    return bool(getattr(ctx, WAKE_PUMP_HOST_ATTR, False))
+
+
+def _arm_wake_pump_or_skip(
+    ctx: Any, *, request_tools: int, local_tools: int, skills: int
+) -> None:
+    """Arm the wake pump when ``ctx`` is the wake-pump host, else load-only.
+
+    Non-host: emit the positive ``wake_pump_skip_non_host`` marker (the
+    hermes analogue of openclaw's ``wake_pump_skip_non_gateway``) and a
+    tools-only registration summary — this is the EXPECTED path for the
+    gateway daemon and wake subprocesses, not a degraded state.
+
+    Host: open the connection and subscribe the durable consumers. Per
+    **R § P2-29**, the ``klodi_hermes_plugin_registered`` success log fires
+    ONLY when connect + wake-subscription complete cleanly; a connect failure
+    logs ``klodi_hermes_plugin_connect_failed`` + ``_registered_degraded``.
+    """
+    if not _is_wake_pump_host(ctx):
         log.info(
-            "klodi_hermes_plugin_registered request_tools=%d local_tools=%d skills=%d",
+            "wake_pump_skip_non_host — process is not the klodi-hermes-bridge"
+            " wake-pump host; registering tools only, no wake subscription."
+            " request_tools=%d local_tools=%d skills=%d",
             request_tools,
             local_tools,
-            skills_registered,
+            skills,
         )
-    else:
+        return
+    # Narrow to `Exception` (not `BaseException`) so `KeyboardInterrupt` and
+    # `SystemExit` propagate — those signal operator intent and critical config
+    # errors that should not be swallowed during boot. Subscribe ownership
+    # lives in the shared `WakePump`: it composes the two underlying subscribe
+    # calls + reconnect-safe retry into one eager start — no host SDK dep.
+    try:
+        start_wake_pump()
+    except Exception as err:  # noqa: BLE001 — never crash plugin boot on transport errors
+        log.warning(
+            "klodi_hermes_plugin_connect_failed error=%s — tool calls will"
+            " fail until creds are present. Run klodi_register to sign up, or"
+            " klodi_setup_status to diagnose existing setup.",
+            err,
+        )
         log.warning(
             "klodi_hermes_plugin_registered_degraded"
             " request_tools=%d local_tools=%d skills=%d wakes_wired=False",
             request_tools,
             local_tools,
-            skills_registered,
+            skills,
         )
+        return
+    log.info(
+        "klodi_hermes_plugin_registered request_tools=%d local_tools=%d skills=%d",
+        request_tools,
+        local_tools,
+        skills,
+    )
 
 
 def shutdown(_ctx: Any | None = None) -> None:
