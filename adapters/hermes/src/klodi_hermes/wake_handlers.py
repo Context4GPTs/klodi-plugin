@@ -126,8 +126,8 @@ _EPHEMERAL_ENTITY_TYPE = "wake"
 # and gets NO disposition line, so an informational wake never arms the ping.
 # That absence is the deterministic guard behind the AC3/AC4 over-ping risk:
 # arming every wake to reach the operator would degrade the high-signal
-# operator channel. See the card's "warrants operator delivery vs purely
-# informational" business rule. An unmapped/future kind defaults to
+# operator channel — the "warrants operator delivery vs purely informational"
+# classification (ADR-0023). An unmapped/future kind defaults to
 # informational (no ping) — the conservative direction.
 _DELIVERY_WARRANTING_NOTIFICATION_KINDS: frozenset[str] = frozenset({
     "channel.opened",
@@ -149,7 +149,9 @@ _DELIVERY_WARRANTING_NOTIFICATION_KINDS: frozenset[str] = frozenset({
 # Two sentences by design: it rides every warranting wake, so it must not bloat
 # the payload (the token/bloat constraint). It is STATIC plugin text (never
 # derived from the counterparty-controlled payload), so a prompt-injection in
-# the JSON body cannot forge or suppress it (THREAT_MODEL / SKILL §8).
+# the JSON body cannot forge or suppress it (THREAT_MODEL / SKILL §8). The
+# discard-on-exit-0 behavior this compensates for is intentional and
+# load-bearing — see bridge.py's exit-0 branch and ADR-0023.
 _TERMINAL_DISPOSITION_CONTRACT = (
     "[klodi] Autonomous wake, isolated session: your closing chat text is NOT"
     " delivered to anyone — it is discarded when the turn ends. End in a real"

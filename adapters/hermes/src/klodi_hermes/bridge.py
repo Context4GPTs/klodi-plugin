@@ -282,6 +282,15 @@ class BridgeCtx:
                 raise WakeInjectFailed(
                     returncode=returncode, stdout=stdout, stderr=stderr
                 )
+            # Exit 0: the agent's turn output (``stdout``) is INTENTIONALLY
+            # dropped here — it is tool-narration/reasoning, not a deliverable
+            # operator message. A wake report reaches the operator only by the
+            # agent CALLING ``klodi_message_user`` mid-turn; the wake text's
+            # terminal-disposition contract
+            # (``wake_handlers._TERMINAL_DISPOSITION_CONTRACT``) is what makes
+            # that reliable. Do NOT route this stdout to the operator — that is
+            # the rejected salvage path (conversation pollution, breaks the
+            # pending-decision round-trip). See ADR-0023.
             log.info(
                 "wake_inject_complete role=%s session=%s event_id=%s exit=%d len=%d",
                 role,
