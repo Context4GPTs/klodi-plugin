@@ -47,6 +47,7 @@ from typing import Any, Optional
 from klodi_nats_client import (
     KLODI_DEFAULT_API_URL,
     KlodiRequestError,
+    assert_encrypted_or_localhost,
     default_klodi_home,
 )
 from klodi_nats_client.constants import (
@@ -443,19 +444,6 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
-def _is_localhost(url: str) -> bool:
-    """Per **D § D10** (P2-17 / P2-18): plaintext ws:// is only allowed
-    when the destination is unambiguously local."""
-    from urllib.parse import urlparse
-    try:
-        host = urlparse(url).hostname or ""
-    except ValueError:
-        return False
-    if host in ("localhost", "127.0.0.1", "0.0.0.0"):
-        return True
-    return host.endswith(".localhost")
-
-
 def handle_register(_args: dict[str, Any]) -> dict[str, Any]:
     if _load_config() is not None:
         existing = _load_config() or {}
@@ -628,12 +616,17 @@ def _persist_credentials(result: dict[str, Any]) -> None:
     ):
         if not isinstance(value, str) or not value:
             raise OSError(f"session claim missing {field}")
+    # Delegates to the single shared client guard so persist-time and
+    # connect-time policy can never drift — accepts `wss://` / `tls://`,
+    # rejects `ws://` / `nats://` off localhost (D § D10, P2-17 closure).
     assert isinstance(nats_url, str)  # narrowed above
-    if not nats_url.startswith("wss://") and not _is_localhost(nats_url):
+    try:
+        assert_encrypted_or_localhost(nats_url)
+    except ValueError as err:
         raise OSError(
             f"registration response had a plaintext nats_url ({nats_url}); "
             "refusing to persist. Verify your KLODI_API_URL.",
-        )
+        ) from err
     klodi_home = default_klodi_home()
     klodi_home.mkdir(parents=True, exist_ok=True)
     try:

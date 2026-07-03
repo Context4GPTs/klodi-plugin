@@ -719,6 +719,22 @@ export const KLODI_DEFAULT_API_URL = "https://klodi.4gpts.com";
 export const KLODI_DEFAULT_NATS_URL = "wss://klodi-net.4gpts.com";
 
 /**
+ * Bundled private-CA PEM trusted for the raw `tls://` NATS transport
+ * (the Railway L4 TCP-proxy path — epic `nats-ws-ingress-flap-2026-06`).
+ *
+ * Intentionally EMPTY until the epic mints the real CA and the gated
+ * cutover drops it in here. An empty value means "no bundled CA yet":
+ * clients fall through to the `KLODI_NATS_CA_FILE` env override (a PEM
+ * path — how local/self-signed tests trust their CA) and, absent that,
+ * to the system trust store. The CA *certificate* is non-secret, so
+ * shipping it in the published clients is safe; it is what lets NAT'd
+ * laptop hosts trust the proxy with zero per-host config. This selects
+ * *which* CA to trust — never *whether* to verify (verification is
+ * always ON; see each client's TLS module).
+ */
+export const KLODI_NATS_CA_PEM = "";
+
+/**
  * Max length for a `klodi_channel_message` body, in Unicode code-points.
  * Aligned with the `channel_messages.body` Postgres `varchar` cap and
  * the cross-language counting convention (Py `len()`, Rust `.chars().count()`,
@@ -748,6 +764,7 @@ export const REGISTER_POLL_CEILING_SECONDS = 600;
 export const KLODI_CATALOG_CONSTANTS = {
   KLODI_DEFAULT_API_URL,
   KLODI_DEFAULT_NATS_URL,
+  KLODI_NATS_CA_PEM,
   MAX_CHANNEL_MESSAGE_CHARS,
   REGISTER_POLL_INTERVAL_SECONDS,
   REGISTER_POLL_CEILING_SECONDS,

@@ -132,23 +132,36 @@ pub fn is_localhost(url: &str) -> bool {
         || host.ends_with(".localhost")
 }
 
+/// The two encrypted transports the guard accepts on non-localhost
+/// hosts. `wss://` = NATS-over-WebSocket-over-TLS (L7 edge path);
+/// `tls://` = raw NATS-over-TLS (L4 TCP-proxy path). Both terminate TLS
+/// at the NATS server with certificate + hostname verification ON (see
+/// [`crate::tls`]). Their plaintext siblings `ws://` / `nats://` are
+/// only tolerated when the host resolves to localhost.
+const ENCRYPTED_SCHEMES: [&str; 2] = ["wss://", "tls://"];
+
 /// Refuse `nats_url` if it's plaintext on a non-localhost host.
 ///
 /// Per **D § D10** (P2-17 / P2-18 closure): the smart-default TLS
 /// posture closes the compound attack where a compromised registration
 /// endpoint injects a plaintext `nats_url` and the next connect goes
-/// to attacker-controlled infrastructure.
-pub fn assert_wss_or_localhost(nats_url: &str) -> Result<(), KlodiError> {
-    if nats_url.starts_with("wss://") {
+/// to attacker-controlled infrastructure. Accepts the two encrypted
+/// transports (`wss://` and `tls://`); their plaintext siblings
+/// (`ws://` / `nats://`) are only allowed against a localhost host.
+pub fn assert_encrypted_or_localhost(nats_url: &str) -> Result<(), KlodiError> {
+    if ENCRYPTED_SCHEMES
+        .iter()
+        .any(|scheme| nats_url.starts_with(scheme))
+    {
         return Ok(());
     }
     if is_localhost(nats_url) {
         return Ok(());
     }
     Err(KlodiError::InvalidConfig(format!(
-        "KlodiClient: nats_url must use wss:// (got {nats_url}). \
-         Plaintext ws:// is only allowed when the host resolves to \
-         localhost. Re-register if creds came from a compromised source.",
+        "KlodiClient: nats_url must use wss:// or tls:// (got {nats_url}). \
+         Plaintext ws:// / nats:// is only allowed when the host resolves \
+         to localhost. Re-register if creds came from a compromised source.",
     )))
 }
 

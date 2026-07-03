@@ -227,10 +227,13 @@ async fn persist_session(klodi_home: &Path, env: &SessionEnvelope) -> Result<()>
         .context("registration response missing nats_url")?;
 
     // Per **D § D10** (P2-17 closure): refuse to persist a plaintext
-    // nats_url on a non-localhost host. A compromised registration
-    // endpoint could otherwise inject `ws://attacker.com` and trick the
-    // next connect into a plaintext, attacker-controlled session.
-    klodi_nats_client::config::assert_wss_or_localhost(nats_url)
+    // nats_url on a non-localhost host. Delegates to the single shared
+    // client guard (accepts `wss://` / `tls://`, rejects `ws://` /
+    // `nats://` off localhost) so persist-time and connect-time policy
+    // can never drift. A compromised registration endpoint could
+    // otherwise inject `ws://attacker.com` and trick the next connect
+    // into a plaintext, attacker-controlled session.
+    klodi_nats_client::config::assert_encrypted_or_localhost(nats_url)
         .context("registration response had a plaintext non-localhost nats_url")?;
 
     tokio::fs::create_dir_all(klodi_home)

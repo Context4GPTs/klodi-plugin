@@ -10,11 +10,16 @@ export {
   KlodiClient,
   KlodiRequestError,
   WHOAMI_PROBE_TIMEOUT_MS,
-  assertWssOrLocalhost,
+  assertEncryptedOrLocalhost,
   isLocalhost,
   type KlodiClientArgs,
   type RequestOptions,
 } from "./client.js";
+
+export {
+  CaTrustError,
+  resolveTlsCa,
+} from "./tls.js";
 
 export {
   ConfigInvalidError,

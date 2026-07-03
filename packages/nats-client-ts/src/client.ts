@@ -28,6 +28,7 @@ import {
   type Msg,
   type NatsConnection,
 } from "@nats-io/nats-core";
+import { connect as nodeConnect } from "@nats-io/transport-node";
 import {
   jetstream,
   jetstreamManager,
@@ -41,6 +42,7 @@ import type {
 } from "@klodi/tool-catalog";
 import { computeBackoffMs } from "./backoff.js";
 import { loadConfig, loadCreds, type KlodiConfig } from "./config.js";
+import { resolveTlsCa } from "./tls.js";
 import {
   subscribeChannels,
   subscribeNotifications,
@@ -69,10 +71,14 @@ const WS_PING_INTERVAL_MS = 20_000;
 const WS_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
- * Per **D § D10**: NATS connections require TLS (`wss://`) by default.
- * Plaintext (`ws://`) is only accepted when the host is localhost / 127.0.0.1
- * / 0.0.0.0 / *.localhost. There's no env opt-out — if a non-localhost host
- * needs plaintext, the deployment is misconfigured (terminate TLS at the edge).
+ * Per **D § D10**: NATS connections require an encrypted transport by
+ * default — `wss://` (NATS-over-WebSocket-over-TLS, the L7 edge path) or
+ * `tls://` (raw NATS-over-TLS, the L4 TCP-proxy path). Both terminate TLS
+ * at the NATS server with certificate + hostname verification ON (see
+ * `tls.ts`). Their plaintext siblings `ws://` / `nats://` are only
+ * accepted when the host is localhost / 127.0.0.1 / 0.0.0.0 / *.localhost.
+ * There's no env opt-out — if a non-localhost host needs plaintext, the
+ * deployment is misconfigured (terminate TLS at the edge).
  *
  * Defends against the compound attack: an attacker who controls the API
  * endpoint (DNS hijack) injects a plaintext `nats_url` into the registration
@@ -93,14 +99,28 @@ export function isLocalhost(url: string): boolean {
   }
 }
 
-export function assertWssOrLocalhost(natsUrl: string): void {
-  if (natsUrl.startsWith("wss://")) return;
+/** The two encrypted transports accepted on non-localhost hosts. */
+const ENCRYPTED_SCHEMES = ["wss://", "tls://"] as const;
+
+export function assertEncryptedOrLocalhost(natsUrl: string): void {
+  if (ENCRYPTED_SCHEMES.some((scheme) => natsUrl.startsWith(scheme))) return;
   if (isLocalhost(natsUrl)) return;
   throw new Error(
-    `KlodiClient: nats_url must use wss:// (got ${natsUrl}). `
-    + "Plaintext ws:// is only allowed when the host resolves to localhost. "
-    + "Re-register if creds came from a compromised source.",
+    `KlodiClient: nats_url must use wss:// or tls:// (got ${natsUrl}). `
+    + "Plaintext ws:// / nats:// is only allowed when the host resolves to "
+    + "localhost. Re-register if creds came from a compromised source.",
   );
+}
+
+/**
+ * True when `natsUrl` uses a WebSocket transport (`ws://` / `wss://`) and
+ * must go through nats-core's `wsconnect`. `tls://` / `nats://` use the
+ * raw TCP transport from `@nats-io/transport-node` instead — nats-core v3
+ * ships only the WS transport in core, so raw TCP+TLS needs the node
+ * transport package.
+ */
+function usesWebSocketTransport(natsUrl: string): boolean {
+  return natsUrl.startsWith("ws://") || natsUrl.startsWith("wss://");
 }
 
 export interface KlodiClientArgs {
@@ -409,7 +429,7 @@ export class KlodiClient {
 
   private async doConnect(): Promise<NatsConnection> {
     const config = this.loadConfigFromDisk();
-    assertWssOrLocalhost(config.nats_url);
+    assertEncryptedOrLocalhost(config.nats_url);
     const creds = loadCreds(this.args.credsPath);
     // P2-5: exponential backoff with jitter, base 250ms × 2 capped at
     // 60s ± 25%. The handler runs once per reconnect attempt; we
@@ -420,8 +440,27 @@ export class KlodiClient {
       this.reconnectAttempt += 1;
       return computeBackoffMs(this.reconnectAttempt);
     };
-    const nc = await wsconnect({
-      servers: config.nats_url,
+    // Branch by transport: `ws://` / `wss://` use nats-core's WebSocket
+    // `wsconnect`; `tls://` / `nats://` use the raw TCP transport from
+    // `@nats-io/transport-node` (nats-core v3 ships only WS in core).
+    const nc = usesWebSocketTransport(config.nats_url)
+      ? await this.connectWebSocket(config.nats_url, creds, delayHandler)
+      : await this.connectTcp(config.nats_url, creds, delayHandler);
+    // Initial connect succeeded — clear any prior attempt count so the
+    // next outage starts the backoff fresh.
+    this.reconnectAttempt = 0;
+    this.watchStatus(nc);
+    return nc;
+  }
+
+  /** WebSocket transport (`ws://` / `wss://`) via nats-core `wsconnect`. */
+  private connectWebSocket(
+    natsUrl: string,
+    creds: Uint8Array,
+    delayHandler: () => number,
+  ): Promise<NatsConnection> {
+    return wsconnect({
+      servers: natsUrl,
       authenticator: credsAuthenticator(creds),
       maxReconnectAttempts: -1,
       reconnectDelayHandler: delayHandler,
@@ -434,11 +473,30 @@ export class KlodiClient {
         encrypted: url.startsWith("wss://"),
       }),
     });
-    // Initial connect succeeded — clear any prior attempt count so the
-    // next outage starts the backoff fresh.
-    this.reconnectAttempt = 0;
-    this.watchStatus(nc);
-    return nc;
+  }
+
+  /**
+   * Raw TCP transport (`tls://` / `nats://`) via `@nats-io/transport-node`.
+   * For `tls://` the resolved private CA is trusted with certificate +
+   * hostname verification ON; `rejectUnauthorized` is never disabled, so a
+   * missing / wrong CA fails closed. `nats://` (localhost only, per the
+   * guard) stays plaintext — `tls` is omitted.
+   */
+  private connectTcp(
+    natsUrl: string,
+    creds: Uint8Array,
+    delayHandler: () => number,
+  ): Promise<NatsConnection> {
+    const ca = natsUrl.startsWith("tls://") ? resolveTlsCa() : undefined;
+    return nodeConnect({
+      servers: natsUrl,
+      authenticator: credsAuthenticator(creds),
+      maxReconnectAttempts: -1,
+      reconnectDelayHandler: delayHandler,
+      pingInterval: WS_PING_INTERVAL_MS,
+      timeout: WS_CONNECT_TIMEOUT_MS,
+      tls: ca !== undefined ? { ca } : undefined,
+    });
   }
 
   /**

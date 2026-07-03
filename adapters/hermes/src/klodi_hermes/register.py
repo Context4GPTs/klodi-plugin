@@ -46,7 +46,7 @@ import urllib.request
 import uuid
 from typing import Any, Optional
 
-from klodi_nats_client import KLODI_DEFAULT_API_URL
+from klodi_nats_client import KLODI_DEFAULT_API_URL, assert_encrypted_or_localhost
 from klodi_nats_client.secret_write import klodi_secret_write
 
 from .local_tools import (
@@ -310,21 +310,6 @@ def _fetch_session(session_id: str) -> dict[str, Any]:
         }
 
 
-def _is_localhost(url: str) -> bool:
-    """Return True when `url` points at localhost / 127.0.0.1 / 0.0.0.0
-    / *.localhost. Per **D § D10** (P2-17 / P2-18): plaintext ws:// is
-    only allowed when the destination is unambiguously local."""
-    from urllib.parse import urlparse
-
-    try:
-        host = urlparse(url).hostname or ""
-    except ValueError:
-        return False
-    if host in ("localhost", "127.0.0.1", "0.0.0.0"):
-        return True
-    return host.endswith(".localhost")
-
-
 def _persist_credentials(result: dict[str, Any]) -> None:
     handle = result.get("handle")
     user_id = result.get("user_id")
@@ -342,16 +327,22 @@ def _persist_credentials(result: dict[str, Any]) -> None:
         if not isinstance(value, str) or not value:
             raise OSError(f"session claim missing {field}")
 
-    # Per **D § D10** (P2-17 closure): refuse to persist a plaintext
-    # nats_url on a non-localhost host. A compromised registration
-    # endpoint could otherwise inject `ws://attacker.com` and trick the
-    # next connect into a plaintext, attacker-controlled session.
+    # Per **D § D10** (P2-17 closure): refuse to persist a `nats_url`
+    # that's plaintext on a non-localhost host. Delegates to the single
+    # shared client guard (`assert_encrypted_or_localhost`) so persist-
+    # time and connect-time policy can never drift — it accepts `wss://`
+    # and `tls://`, rejects `ws://` / `nats://` off localhost. A
+    # compromised registration endpoint could otherwise inject
+    # `ws://attacker.com` and trick the next connect into a plaintext,
+    # attacker-controlled session.
     assert isinstance(nats_url, str)  # narrowed above
-    if not nats_url.startswith("wss://") and not _is_localhost(nats_url):
+    try:
+        assert_encrypted_or_localhost(nats_url)
+    except ValueError as err:
         raise OSError(
             f"registration response had a plaintext nats_url ({nats_url}); "
             "refusing to persist. Verify your KLODI_API_URL.",
-        )
+        ) from err
 
     klodi_home = _klodi_home()
     klodi_home.mkdir(parents=True, exist_ok=True)

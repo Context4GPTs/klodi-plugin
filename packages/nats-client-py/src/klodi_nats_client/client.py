@@ -36,10 +36,11 @@ from klodi_nats_client._ws_transport_patch import apply_patch as _apply_ws_patch
 from klodi_nats_client.backoff import BackoffPolicy
 from klodi_nats_client.config import (
     KlodiConfig,
-    assert_wss_or_localhost,
+    assert_encrypted_or_localhost,
     load_config,
     load_creds,
 )
+from klodi_nats_client.tls import build_tls_context
 from klodi_nats_client.consumers import (
     ActiveSubscription,
     ChannelHandler,
@@ -169,20 +170,27 @@ class KlodiClient:
             return
 
         # Repair upstream nats-py's WebSocketTransport before any
-        # connect attempts. Without this, long-lived consumers (the
-        # wake pump's two JetStream subscriptions) die on the first
-        # CLOSE / PING / ERROR frame the edge sends — see
-        # ``_ws_transport_patch`` for the upstream defect.
+        # connect attempts. Inert on a ``tls://`` (raw TCP) transport,
+        # but still load-bearing on every ``ws://`` connection: without
+        # it, long-lived consumers (the wake pump's two JetStream
+        # subscriptions) die on the first CLOSE / PING / ERROR frame the
+        # WS edge sends — see ``_ws_transport_patch`` for the defect.
         _apply_ws_patch()
 
         config = self._load_config()
-        assert_wss_or_localhost(config.nats_url)
+        assert_encrypted_or_localhost(config.nats_url)
         creds = load_creds(self._creds_path)
+
+        # `tls://` → hand nats-py a verifying SSLContext that trusts the
+        # private CA (cert + hostname verification stays ON). `None` for
+        # `wss://` (nats-py's system-default TLS) and `ws://localhost`.
+        tls_ctx = build_tls_context(config.nats_url)
 
         nc = NATSClient()
         await nc.connect(
             servers=config.nats_url,
             user_credentials=str(creds),
+            tls=tls_ctx,
             max_reconnect_attempts=-1,
             reconnect_time_wait=WS_RECONNECT_TIME_WAIT_SECONDS,
             ping_interval=WS_PING_INTERVAL_SECONDS,
