@@ -116,6 +116,21 @@ DEFAULT_CREDS_POLL_SECONDS = 5
 # WARNING used, so an alarm carrying a runaway traceback stays bounded.
 _DIAG_TAIL = 500
 
+# Wake-pump arming discriminator (ADR-0015 parity port — "loaded != armed").
+# ``register(ctx)`` arms ``start_wake_pump()`` ONLY when ``ctx`` carries this
+# attribute set truthy. ``BridgeCtx`` — the ctx the always-on klodi-hermes-bridge
+# daemon passes, and the ONLY ctx that can shell a wake turn — declares it
+# positively (below). Every other loader (the ``hermes gateway run`` daemon and
+# each transient ``hermes chat -q`` wake-delivery subprocess) receives the host's
+# own per-chat ctx, which lacks the marker, so it loads the tool surface but does
+# NOT subscribe the shared durable consumers. This is a POSITIVE, NON-INHERITED
+# signal: it lives on an in-process Python object, so a spawned child cannot
+# inherit it — deliberately NOT an env var, because ``inject_message`` merges
+# ``{**os.environ}`` into its children (see :meth:`BridgeCtx.inject_message`), and
+# an env-based flag would leak into them and fail OPEN, the exact trap ADR-0015
+# rejects. The value MUST equal the ``BridgeCtx`` class attribute name below.
+WAKE_PUMP_HOST_ATTR = "klodi_wake_pump_host"
+
 
 class WakeInjectFailed(Exception):
     """A wake-inject subprocess exited fast with a nonzero code.
@@ -167,6 +182,14 @@ class BridgeCtx:
       * ``drain_session(session)`` — best-effort reclamation of a
         session after its conversation's terminal event (probe-gated).
     """
+
+    # Positive wake-pump-host capability marker (see WAKE_PUMP_HOST_ATTR).
+    # A BridgeCtx IS, by definition, the single wake-pump host — the only ctx
+    # that can shell a wake turn — so it declares the capability unconditionally
+    # at class scope. ``register(ctx)`` reads it to decide whether to arm the
+    # pump; the host per-chat / gateway ctx lacks it and stays load-only.
+    # Name MUST match WAKE_PUMP_HOST_ATTR.
+    klodi_wake_pump_host: bool = True
 
     def __init__(
         self,
@@ -481,6 +504,7 @@ __all__ = [
     "KLODI_WAKE_ENTITY_TYPE_ENV",
     "KLODI_WAKE_EVENT_ID_ENV",
     "KLODI_WAKE_SOURCE",
+    "WAKE_PUMP_HOST_ATTR",
     "Bridge",
     "BridgeCtx",
     "WakeInjectFailed",

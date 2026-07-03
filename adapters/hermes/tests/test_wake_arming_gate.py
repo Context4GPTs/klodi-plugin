@@ -198,6 +198,47 @@ def test_bridge_wake_pump_host_ctx_arms_pump_exactly_once(
     )
 
 
+def test_arming_gate_keys_off_the_published_capability_attr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-7 (detection matrix — the hermes analog of openclaw's ADR-0015
+    wake-pump-detection matrix). The arming gate keys off the PUBLISHED positive
+    capability attribute the bridge exports (``bridge.WAKE_PUMP_HOST_ATTR`` — the
+    class attribute ``BridgeCtx`` sets). A ctx bearing it (truthy) arms; a ctx
+    lacking it does not — via the same ``register()`` entry point.
+
+    Locks the exact non-inherited discriminator the In-Dev contract commits to.
+    The constant is imported LAZILY so a not-yet-added contract fails ONLY this
+    test (RED for the right reason), never file collection. Uses the exported
+    constant, not a magic string, so it tracks the source of truth."""
+    from klodi_hermes.bridge import WAKE_PUMP_HOST_ATTR  # RED until the fix lands
+
+    # The bridge's own ctx class declares the capability positively.
+    assert getattr(BridgeCtx, WAKE_PUMP_HOST_ATTR, False) is True, (
+        "BridgeCtx must positively declare the wake-pump-host capability attr"
+    )
+
+    host_stub = SimpleNamespace(
+        register_tool=lambda **_k: None,
+        register_skill=lambda _n, _p: None,
+        **{WAKE_PUMP_HOST_ATTR: True},
+    )
+    bare_stub = SimpleNamespace(
+        register_tool=lambda **_k: None,
+        register_skill=lambda _n, _p: None,
+    )
+
+    host_calls = _ArmCounter()
+    monkeypatch.setattr(klodi_hermes, "start_wake_pump", host_calls)
+    klodi_hermes.register(host_stub)
+    assert host_calls.count == 1, "a ctx bearing the capability attr must arm"
+
+    bare_calls = _ArmCounter()
+    monkeypatch.setattr(klodi_hermes, "start_wake_pump", bare_calls)
+    klodi_hermes.register(bare_stub)
+    assert bare_calls.count == 0, "a ctx lacking the capability attr must not arm"
+
+
 # ── AC-8 — the discriminator is not child-inheritable ─────────────────
 
 
