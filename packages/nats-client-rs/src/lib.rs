@@ -47,7 +47,7 @@ pub use events::{
 pub use metrics::{ClientMetrics, MetricsRecorder};
 pub use publish::PublishAck;
 pub use secret_write::{DEFAULT_MODE as SECRET_WRITE_DEFAULT_MODE, klodi_secret_write};
-pub use tls::{nats_ca_path, persist_nats_ca, resolve_ca_file};
+pub use tls::{ResolvedCa, nats_ca_path, persist_nats_ca, resolve_ca_file};
 pub use wake_pump::{
     ActiveSubscriptionLike, ChannelHandlerFn, NotifyHandlerFn, WakePump, WakePumpClient,
     WakePumpHealth, __reset_wake_pump_registry_for_tests, create_wake_pump,

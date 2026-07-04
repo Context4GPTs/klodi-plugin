@@ -195,7 +195,7 @@ describe("tls loud-fail (ts)", () => {
     home = mkdtempSync(join(tmpdir(), "klodi-tls-pos-"));
     delete process.env["KLODI_NATS_CA_FILE"];
     persistNatsCa(home, readFileSync(fx("ca-good.pem"), "utf-8"));
-    const ca = resolveTlsCa(home);
+    const { ca } = resolveTlsCa(home);
     expect(ca, "resolveTlsCa must return the persisted keyUsage CA").toBeTruthy();
 
     const server = await startTlsServer(fx("leaf-good.pem"), fx("leaf-good.key"));

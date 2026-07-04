@@ -45,7 +45,6 @@ from klodi_nats_client.config import (
 from klodi_nats_client.tls import (
     CaTrustError,
     build_tls_context,
-    describe_ca_source,
 )
 from klodi_nats_client.consumers import (
     ActiveSubscription,
@@ -221,20 +220,21 @@ class KlodiClient:
         # (`${KLODI_HOME}/nats-ca.pem`) lives in the same home as the creds,
         # so no upward KLODI_HOME re-resolution happens here (layering).
         klodi_home = Path(self._creds_path).parent
-        tls_ctx = build_tls_context(config.nats_url, klodi_home=klodi_home)
-        # Attribution label ONLY — this does not gate the classifier.
-        # `_is_ca_verify_error` keys on the error *type* (`SSLCertVerificationError`),
-        # so the terminal reclassification fires on any transport; a cert-verify
-        # failure is terminal-worthy on `wss://` too. We resolve the served-CA
-        # source string only for `tls://` (where a served CA exists) so the
-        # message names it; `None` elsewhere renders "served NATS CA (None) …",
-        # which is acceptable because a bare `SSLCertVerificationError` on a
-        # `wss://` initial connect is aiohttp-wrapped and does not reach here.
-        self._ca_source = (
-            describe_ca_source(klodi_home)
-            if config.nats_url.startswith("tls://")
-            else None
-        )
+        # `build_tls_context` returns `(ctx, source)` for `tls://` and `None`
+        # otherwise. The returned `source` is the single source of truth for the
+        # connect-failure attribution: the resolver already selected the CA
+        # source label at the branch that read it, so the loud-fail
+        # `CaTrustError` consumes it verbatim instead of independently
+        # re-deriving the env→persisted→bundled precedence. `None` for `wss://`
+        # renders "served NATS CA (None) …", which is acceptable because a bare
+        # `SSLCertVerificationError` on a `wss://` initial connect is
+        # aiohttp-wrapped and does not reach the classifier.
+        resolved = build_tls_context(config.nats_url, klodi_home=klodi_home)
+        if resolved is None:
+            tls_ctx = None
+            self._ca_source = None
+        else:
+            tls_ctx, self._ca_source = resolved
 
         nc = NATSClient()
         # Arm the terminal reclassification for the initial connect only.

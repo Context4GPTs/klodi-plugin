@@ -94,12 +94,30 @@ pub fn persist_nats_ca(klodi_home: &Path, pem: &str) -> Result<(), KlodiError> {
 /// repeated connects reuse one file rather than leaking one per attempt.
 static BUNDLED_CA_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Resolve the CA-bundle path to trust for a `tls://` connection.
+/// The resolved CA-bundle path plus the label naming *which* source
+/// [`resolve_ca_file`] selected. `source` is the single source of truth for the
+/// connect-failure attribution: the client threads it into
+/// [`KlodiError::CaTrust`](crate::error::KlodiError::CaTrust) instead of
+/// independently re-deriving the env → persisted → bundled precedence. It stays
+/// populated even when `path` is `None` (the empty-bundle / system-store
+/// fall-through), so a Tls failure against the system store keeps its
+/// attribution.
+#[derive(Debug, Clone)]
+pub struct ResolvedCa {
+    /// Path async-nats reads at connect, or `None` for the system trust store.
+    pub path: Option<PathBuf>,
+    /// Source label — env override / persisted register CA / bundled constant.
+    pub source: String,
+}
+
+/// Resolve the CA-bundle path to trust for a `tls://` connection, together with
+/// the label naming its source.
 ///
-/// Returns `Ok(None)` when no private CA is configured (system trust
-/// store applies). Returns `Err` only when a configured source cannot be
-/// realised (e.g. the bundled PEM can't be written to a temp file) — a
-/// fail-closed signal, never a silent downgrade.
+/// `path` is `None` when no private CA is configured (system trust store
+/// applies); `source` is always populated so a Tls failure keeps its
+/// attribution. Returns `Err` only when a configured source cannot be realised
+/// (e.g. the bundled PEM can't be written to a temp file) — a fail-closed
+/// signal, never a silent downgrade.
 ///
 /// The `KLODI_NATS_CA_FILE` path is *not* stat-checked here: async-nats
 /// opens it at connect and surfaces a clear error if it is missing, so a
@@ -108,10 +126,13 @@ static BUNDLED_CA_PATH: OnceLock<PathBuf> = OnceLock::new();
 /// `klodi_home` locates the persisted register CA (level 2); the caller
 /// derives it from the creds-path parent so this lower-layer package never
 /// re-resolves `KLODI_HOME` upward.
-pub fn resolve_ca_file(klodi_home: &Path) -> Result<Option<PathBuf>, KlodiError> {
+pub fn resolve_ca_file(klodi_home: &Path) -> Result<ResolvedCa, KlodiError> {
     if let Ok(path) = std::env::var(CA_FILE_ENV) {
         if !path.is_empty() {
-            return Ok(Some(PathBuf::from(path)));
+            return Ok(ResolvedCa {
+                source: format!("{CA_FILE_ENV}={path}"),
+                path: Some(PathBuf::from(path)),
+            });
         }
     }
     // Level 2 — the register-response CA persisted at registration. Only
@@ -120,29 +141,21 @@ pub fn resolve_ca_file(klodi_home: &Path) -> Result<Option<PathBuf>, KlodiError>
     // connect and a present-but-unreadable/invalid file fails closed there.
     let persisted = nats_ca_path(klodi_home);
     if persisted.exists() {
-        return Ok(Some(persisted));
+        return Ok(ResolvedCa {
+            source: format!("persisted register CA at {}", persisted.display()),
+            path: Some(persisted),
+        });
     }
     if !KLODI_NATS_CA_PEM.is_empty() {
-        return Ok(Some(bundled_ca_path()?.clone()));
+        return Ok(ResolvedCa {
+            path: Some(bundled_ca_path()?.clone()),
+            source: "bundled KLODI_NATS_CA_PEM".to_string(),
+        });
     }
-    Ok(None)
-}
-
-/// Legible label for *which* CA source [`resolve_ca_file`] would pick — used to
-/// attribute a connect-time TLS-verify failure to the served CA in the surfaced
-/// [`KlodiError::CaTrust`](crate::error::KlodiError::CaTrust). Mirrors the
-/// resolution precedence without reading the CA's contents.
-pub fn describe_ca_source(klodi_home: &Path) -> String {
-    if let Ok(path) = std::env::var(CA_FILE_ENV) {
-        if !path.is_empty() {
-            return format!("{CA_FILE_ENV}={path}");
-        }
-    }
-    let persisted = nats_ca_path(klodi_home);
-    if persisted.exists() {
-        return format!("persisted register CA at {}", persisted.display());
-    }
-    "bundled KLODI_NATS_CA_PEM".to_string()
+    Ok(ResolvedCa {
+        path: None,
+        source: "bundled KLODI_NATS_CA_PEM".to_string(),
+    })
 }
 
 /// Materialise the embedded [`KLODI_NATS_CA_PEM`] to a temp file once and

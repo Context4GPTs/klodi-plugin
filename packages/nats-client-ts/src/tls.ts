@@ -106,22 +106,37 @@ export class CaTrustError extends Error {
 }
 
 /**
- * Resolve the CA PEM text to trust for a `tls://` connection, or
- * `undefined` to use the system trust store. Applies the documented order:
- * env override (short-circuits) → persisted `${klodiHome}/nats-ca.pem` →
- * bundled constant → system store. Throws {@link CaTrustError} when a
- * configured source (the env override, or a present persisted file) is
- * unreadable — verification is never disabled to work around a broken CA.
- *
- * `klodiHome` locates the persisted register CA (level 2); the caller
- * derives it from the creds-path parent so this lower-layer package never
- * re-resolves `KLODI_HOME` upward.
+ * The resolved private CA plus the legible label naming *which* source
+ * {@link resolveTlsCa} selected. `source` is the single source of truth for the
+ * connect-failure attribution: the client interpolates it into the surfaced
+ * {@link CaTrustError} instead of independently re-deriving the precedence, so
+ * the env → persisted → bundled order lives in exactly one place.
  */
-export function resolveTlsCa(klodiHome?: string): string | undefined {
+export interface ResolvedTlsCa {
+  /** PEM text to hand Node's verifying TLS, or `undefined` for the system store. */
+  readonly ca: string | undefined;
+  /** Source label — env override / persisted register CA / bundled constant. */
+  readonly source: string;
+}
+
+/**
+ * Resolve the CA to trust for a `tls://` connection. Returns the PEM text
+ * (`undefined` = system trust store) **and** the label naming its source,
+ * co-located with the branch that selects each level. Applies the documented
+ * order: env override (short-circuits) → persisted `${klodiHome}/nats-ca.pem` →
+ * bundled constant → system store. Throws {@link CaTrustError} when a configured
+ * source (the env override, or a present persisted file) is unreadable —
+ * verification is never disabled to work around a broken CA.
+ *
+ * `klodiHome` locates the persisted register CA (level 2); the caller derives it
+ * from the creds-path parent so this lower-layer package never re-resolves
+ * `KLODI_HOME` upward.
+ */
+export function resolveTlsCa(klodiHome?: string): ResolvedTlsCa {
   const override = process.env[CA_FILE_ENV];
   if (override !== undefined && override !== "") {
     try {
-      return readFileSync(override, "utf-8");
+      return { ca: readFileSync(override, "utf-8"), source: `${CA_FILE_ENV}=${override}` };
     } catch (err) {
       throw new CaTrustError(
         `${CA_FILE_ENV}=${override} could not be read: ${String(err)}. `
@@ -139,7 +154,10 @@ export function resolveTlsCa(klodiHome?: string): string | undefined {
     const persisted = natsCaPath(klodiHome);
     if (existsSync(persisted)) {
       try {
-        return readFileSync(persisted, "utf-8");
+        return {
+          ca: readFileSync(persisted, "utf-8"),
+          source: `persisted register CA at ${persisted}`,
+        };
       } catch (err) {
         throw new CaTrustError(
           `persisted register CA at ${persisted} could not be read: `
@@ -150,22 +168,8 @@ export function resolveTlsCa(klodiHome?: string): string | undefined {
       }
     }
   }
-  return KLODI_NATS_CA_PEM.length > 0 ? KLODI_NATS_CA_PEM : undefined;
-}
-
-/**
- * Legible label for *which* CA source {@link resolveTlsCa} would pick — used to
- * attribute a connect-time TLS-verify failure to the served CA in the surfaced
- * {@link CaTrustError} (the operator needs to know which CA to fix). Mirrors the
- * resolution precedence without reading the CA's contents.
- */
-export function describeCaSource(klodiHome?: string): string {
-  const override = process.env[CA_FILE_ENV];
-  if (override !== undefined && override !== "") {
-    return `${CA_FILE_ENV}=${override}`;
-  }
-  if (klodiHome !== undefined && existsSync(natsCaPath(klodiHome))) {
-    return `persisted register CA at ${natsCaPath(klodiHome)}`;
-  }
-  return "bundled KLODI_NATS_CA_PEM";
+  return {
+    ca: KLODI_NATS_CA_PEM.length > 0 ? KLODI_NATS_CA_PEM : undefined,
+    source: "bundled KLODI_NATS_CA_PEM",
+  };
 }

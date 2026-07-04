@@ -21,6 +21,7 @@ export {
   natsCaPath,
   persistNatsCa,
   resolveTlsCa,
+  type ResolvedTlsCa,
 } from "./tls.js";
 
 export {
