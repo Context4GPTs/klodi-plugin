@@ -26,7 +26,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { KlodiClient } from "../../src/client.js";
-import { persistNatsCa } from "../../src/tls.js";
+import { CaTrustError, persistNatsCa } from "../../src/tls.js";
+
+/** A bad persisted CA must reach a terminal error within this bound; a hang
+ *  trips the race → the assertion fails. Card
+ *  gate-auto-trust-on-well-formed-ca-loud-fail. */
+const TERMINAL_BOUND_MS = 12_000;
 
 const ON = process.env["KLODI_TLS_INTEGRATION"] === "1";
 const NATS_URL = process.env["KLODI_TLS_NATS_URL"] ?? "";
@@ -98,11 +103,32 @@ describe.skipIf(!SHOULD_RUN)("tls:// with register-supplied CA", () => {
     }
   });
 
-  it("fails closed when the persisted CA does not match the proxy chain", async () => {
+  it("fails closed (terminal, bounded, structured) when the persisted CA does not match", async () => {
+    // TIGHTENED by card gate-auto-trust-on-well-formed-ca-loud-fail from a bare
+    // `.rejects.toThrow()`: the wrong-signer persisted register CA must fail
+    // loud + terminal + prompt with a structured `CaTrustError`, not merely
+    // "not connected". A hang trips the race → this fails. QA-owned.
     const { credsPath, configPath } = homeWithCreds();
     persistNatsCa(home, WRONG_CA);
     const client = new KlodiClient({ credsPath, configPath });
-    await expect(client.connect()).rejects.toThrow();
+    let timer: NodeJS.Timeout;
+    const timeout = new Promise<"timeout">((res) => {
+      timer = setTimeout(() => res("timeout"), TERMINAL_BOUND_MS);
+    });
+    const attempt = client
+      .connect()
+      .then(() => "connected" as const)
+      .catch((err: unknown) => err);
+    const outcome = await Promise.race([attempt, timeout]);
+    clearTimeout(timer!);
+    void attempt.catch(() => {});
+    expect(outcome, `wrong persisted CA connect HUNG past ${TERMINAL_BOUND_MS}ms`).not.toBe(
+      "timeout",
+    );
+    expect(
+      outcome instanceof CaTrustError,
+      `wrong persisted CA must surface a structured CaTrustError (got ${String(outcome)})`,
+    ).toBe(true);
     expect(client.isConnected()).toBe(false);
     await client.close();
   });

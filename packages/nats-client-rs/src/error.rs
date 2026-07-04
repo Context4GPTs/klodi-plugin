@@ -38,6 +38,18 @@ pub enum KlodiError {
     #[error("nats connect failed: {0}")]
     NatsConnect(#[from] async_nats::ConnectError),
 
+    /// The served CA cannot anchor the `tls://` handshake — a deterministic,
+    /// terminal CA-trust / TLS-verification failure (wrong-signer,
+    /// keyUsage-missing, or unparseable). Surfaced *instead of* async-nats'
+    /// `retry_on_initial_connect` retrying the same verify failure forever
+    /// (which pins the caller at a "connecting" state — the defect card
+    /// `gate-auto-trust-on-well-formed-ca-loud-fail` closes). `ca_source`
+    /// names the CA origin (`KLODI_NATS_CA_FILE`, the persisted register CA,
+    /// or the bundled constant) so the operator knows what to fix;
+    /// verification is never disabled to work around it.
+    #[error("served NATS CA {ca_source} could not be trusted: {message}")]
+    CaTrust { ca_source: String, message: String },
+
     #[error("nats request failed: {0}")]
     NatsRequest(#[from] async_nats::RequestError),
 

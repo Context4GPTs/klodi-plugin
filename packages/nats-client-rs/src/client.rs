@@ -15,7 +15,7 @@
 
 use crate::backoff::default_reconnect_delay;
 use crate::config::{KlodiConfig, assert_encrypted_or_localhost, load_config, load_creds};
-use crate::tls::resolve_ca_file;
+use crate::tls::{describe_ca_source, resolve_ca_file};
 use crate::consumers::{
     ActiveSubscription, ChannelHandler, NotificationHandler, subscribe_channels,
     subscribe_notifications,
@@ -23,7 +23,7 @@ use crate::consumers::{
 use crate::error::KlodiError;
 use crate::metrics::{ClientMetrics, MetricsRecorder};
 use crate::publish::{PublishAck, publish_channel_message};
-use async_nats::{Client, ConnectOptions, HeaderMap, Request};
+use async_nats::{Client, ConnectErrorKind, ConnectOptions, HeaderMap, Request};
 use async_nats::header::HeaderName;
 use async_nats::jetstream::{self, Context as JetStreamContext};
 use serde::Serialize;
@@ -139,13 +139,22 @@ impl KlodiClient {
         // shared exponential-backoff-with-jitter formula. The callback
         // is `Fn(usize) -> Duration` — translates `attempts` to a
         // 1-based attempt index inside `default_reconnect_delay`.
+        //
+        // NB: NO `.retry_on_initial_connect()`. That flag backgrounds the
+        // initial connect and swallows a deterministic CA/TLS-verify failure
+        // into an infinite retry loop (the caller gets an `Ok` client that
+        // never connects — the stall card
+        // `gate-auto-trust-on-well-formed-ca-loud-fail` closes). Instead the
+        // initial connect runs foreground via `initial_connect`, which fails
+        // fast + structured on a `Tls` verify error and retries only transient
+        // (Io/Dns/TimedOut) errors. `max_reconnects(None)` still governs
+        // POST-connect reconnects.
         let mut options = ConnectOptions::with_credentials(self.creds.as_str())?
             .ping_interval(WS_PING_INTERVAL)
             .connection_timeout(WS_CONNECT_TIMEOUT)
             .name("klodi-rust-client")
             .max_reconnects(None)
-            .reconnect_delay_callback(default_reconnect_delay)
-            .retry_on_initial_connect();
+            .reconnect_delay_callback(default_reconnect_delay);
         // `tls://` (raw TCP+TLS, L4 proxy): trust the private CA and
         // require TLS explicitly. `add_root_certificates` builds a
         // standard *verifying* rustls config (cert + SNI-hostname checks
@@ -158,10 +167,47 @@ impl KlodiClient {
                 options = options.add_root_certificates(ca_path);
             }
         }
-        let client = options.connect(self.config.nats_url.as_str()).await?;
+        let client = self.initial_connect(options).await?;
         let ctx = jetstream::new(client.clone());
         *state = Some(Connected { client, ctx });
         Ok(())
+    }
+
+    /// Foreground initial connect that classifies the failure class.
+    ///
+    /// A deterministic CA/TLS-verify failure (`ConnectErrorKind::Tls` — a
+    /// wrong-signer, keyUsage-missing, or unparseable served CA) is
+    /// **terminal**: it surfaces the structured, attributable
+    /// [`KlodiError::CaTrust`] rather than being retried forever (which would
+    /// pin the caller at a "connecting" state — the defect). A **transient**
+    /// failure (`Io` / `Dns` / `TimedOut`: refused, reset, DNS blip) keeps
+    /// retrying with the shared backoff so first-connect resilience does not
+    /// regress. Any other class (auth, server-parse) is terminal but keeps its
+    /// own error. Post-connect reconnects remain governed by
+    /// `max_reconnects(None)` on the returned client.
+    async fn initial_connect(&self, options: ConnectOptions) -> Result<Client, KlodiError> {
+        let url = self.config.nats_url.as_str();
+        let mut attempt: usize = 0;
+        loop {
+            match options.clone().connect(url).await {
+                Ok(client) => return Ok(client),
+                Err(err) => match err.kind() {
+                    ConnectErrorKind::Tls => {
+                        return Err(KlodiError::CaTrust {
+                            ca_source: describe_ca_source(&self.klodi_home),
+                            message: err.to_string(),
+                        });
+                    }
+                    ConnectErrorKind::Io
+                    | ConnectErrorKind::Dns
+                    | ConnectErrorKind::TimedOut => {
+                        tokio::time::sleep(default_reconnect_delay(attempt)).await;
+                        attempt = attempt.saturating_add(1);
+                    }
+                    _ => return Err(KlodiError::NatsConnect(err)),
+                },
+            }
+        }
     }
 
     /// Liveness check — true once `connect()` succeeded and the

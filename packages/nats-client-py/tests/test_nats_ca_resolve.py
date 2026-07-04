@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from klodi_nats_client.tls import build_tls_context
+from klodi_nats_client.tls import CaTrustError, build_tls_context
 
 # Two DISTINCT valid self-signed test CAs (generated with openssl, CN carries
 # the identity we introspect). Alpha stands in for the operator's explicit
@@ -234,12 +234,20 @@ def test_manual_ca_host_unchanged_when_response_omits_nats_ca(
 
 def test_malformed_persisted_ca_fails_closed(klodi_home: Path) -> None:
     """[unit] A persisted nats_ca that is PEM-shaped but not a valid cert →
-    building the tls:// trust context fails CLOSED (raises); it must NEVER
-    disable or loosen verification to compensate. Open questions #4."""
+    building the tls:// trust context fails CLOSED. TIGHTENED by card
+    gate-auto-trust-on-well-formed-ca-loud-fail: the parse-boundary failure must
+    surface as the STRUCTURED, attributable ``CaTrustError`` (today it leaks a
+    bare ``ssl.SSLError`` → RED), not merely "some exception". The message must
+    name the served-CA source so the operator knows the remedy. Open questions
+    #4. QA-owned — do NOT relax back to a bare-exception assertion."""
     _write(_persisted_ca_path(klodi_home), _MALFORMED_PEM)
 
-    with pytest.raises((ssl.SSLError, ValueError, OSError)):
+    with pytest.raises(CaTrustError) as excinfo:
         build_tls_context(_TLS_URL, klodi_home=klodi_home)
+
+    assert "nats-ca.pem" in str(excinfo.value), (
+        "the CaTrustError must name the persisted register CA as the source"
+    )
 
 
 def test_wss_url_never_consults_persisted_nats_ca(klodi_home: Path) -> None:

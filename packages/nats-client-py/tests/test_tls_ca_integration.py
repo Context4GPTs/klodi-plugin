@@ -40,6 +40,21 @@ _NATS_URL = os.environ.get("KLODI_TLS_NATS_URL", "")
 _CA_FILE = os.environ.get("KLODI_NATS_CA_FILE", "")
 _CREDS = os.environ.get("KLODI_TLS_CREDS_PATH", "")
 
+# A bad-CA connect must reach a terminal error well within this bound; a hang
+# (the defect) trips wait_for → TimeoutError → the assertion fails. See card
+# gate-auto-trust-on-well-formed-ca-loud-fail.
+_TERMINAL_BOUND_S = 12.0
+
+
+def _fixture(name: str) -> Path:
+    """A shared local TLS-CA fixture (test-fixtures/tls-ca/)."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pnpm-workspace.yaml").exists():
+            path = parent / "test-fixtures" / "tls-ca" / name
+            assert path.is_file(), f"missing fixture {path} (run gen.sh)"
+            return path
+    raise RuntimeError("pnpm-workspace.yaml not found above this test")
+
 pytestmark = pytest.mark.skipif(
     not (_ON and _NATS_URL and _CA_FILE and _CREDS),
     reason=(
@@ -111,25 +126,35 @@ def test_held_subscription_survives_idle_and_delivers() -> None:  # [e2e] tier
 
 
 def test_fail_closed_when_ca_is_wrong() -> None:
-    """Wrong CA → the handshake cannot verify the server cert → connect()
-    raises and the client never falls back to plaintext/unverified."""
+    """Wrong-signer CA → the handshake cannot verify the server cert → connect()
+    surfaces a **structured, terminal** ``CaTrustError`` within a **bounded
+    time** (never a silent hang), and the client never falls back to
+    plaintext/unverified.
+
+    TIGHTENED by card gate-auto-trust-on-well-formed-ca-loud-fail from a bare
+    ``raises(Exception)``: catching ANY exception was the blind spot. This now
+    uses a **well-formed** wrong-signer CA (``ca-wrong.pem`` — a real CA that
+    does NOT sign the test nats cert, so the failure is a handshake verify at
+    the CONNECT boundary, not a PEM parse), and asserts the structured type +
+    bounded-time terminality. If ``connect()`` hangs (retries the deterministic
+    verify failure forever), ``wait_for`` raises ``TimeoutError`` — NOT a
+    ``CaTrustError`` — and this test fails, which is the point.
+    QA-owned — never relax back to ``raises(Exception)``."""
     from klodi_nats_client.client import KlodiClient
+    from klodi_nats_client.tls import CaTrustError
 
     async def run() -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            # A syntactically-plausible but WRONG CA (does not sign the test
-            # nats cert). Selecting the wrong CA must fail closed — it must
-            # not disable verification.
-            wrong_ca = Path(tmp) / "wrong-ca.pem"
-            wrong_ca.write_text(
-                "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
-                encoding="utf-8",
-            )
-            os.environ["KLODI_NATS_CA_FILE"] = str(wrong_ca)
+            os.environ["KLODI_NATS_CA_FILE"] = str(_fixture("ca-wrong.pem"))
             config_path, creds_path = _write_config(Path(tmp), _NATS_URL)
             client = KlodiClient(creds_path=creds_path, config_path=config_path)
-            with pytest.raises(Exception):  # noqa: B017 — any connect failure
-                await client.connect()
-            assert not client.is_connected, "must not connect with a wrong CA"
+            try:
+                with pytest.raises(CaTrustError):
+                    await asyncio.wait_for(
+                        client.connect(), timeout=_TERMINAL_BOUND_S
+                    )
+                assert not client.is_connected, "must not connect with a wrong CA"
+            finally:
+                await client.close()
 
     asyncio.run(run())

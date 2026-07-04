@@ -63,16 +63,42 @@ _CA_FILE_MODE = 0o644
 
 
 class CaTrustError(RuntimeError):
-    """Raised when a configured CA source cannot be read.
+    """Raised when the resolved CA cannot be trusted for the ``tls://``
+    handshake.
 
-    Fail-closed signal: a ``KLODI_NATS_CA_FILE`` that points at a missing
-    or unreadable PEM must abort the connect, never silently downgrade to
-    an unverified transport.
+    Fail-closed signal covering both boundaries: a configured CA source
+    that cannot be *read* (missing / unreadable ``KLODI_NATS_CA_FILE`` or
+    persisted file), and one that reads but cannot be *used as a trust
+    anchor* — PEM-unparseable at context build (see
+    :func:`build_tls_context`), or rejected at the handshake (wrong-signer
+    / keyUsage-missing, reclassified terminal at the initial connect; see
+    ``client.py``). A bad served CA aborts the connect with this structured,
+    attributable error — never a silent downgrade to an unverified
+    transport, and never an indefinite retry that pins the caller at a
+    "connecting" state.
     """
 
 
-def _resolve_ca_pem(klodi_home: Path | str | None) -> str:
-    """Return the CA PEM text to trust, or ``""`` for the system store.
+def describe_ca_source(klodi_home: Path | str | None) -> str:
+    """Human-legible label for *which* CA source resolution would pick.
+
+    Names the source (env override → persisted register CA → bundled
+    constant) without reading its contents — used to attribute a
+    connect-time TLS-verify failure to the served CA in the surfaced
+    :class:`CaTrustError` (the operator needs to know which CA to fix). The
+    precedence mirrors :func:`_resolve_ca_pem` exactly.
+    """
+    override = os.environ.get(_CA_FILE_ENV)
+    if override:
+        return f"{_CA_FILE_ENV}={override}"
+    if klodi_home is not None and nats_ca_path(klodi_home).exists():
+        return f"persisted register CA at {nats_ca_path(klodi_home)}"
+    return "bundled KLODI_NATS_CA_PEM"
+
+
+def _resolve_ca_pem(klodi_home: Path | str | None) -> tuple[str, str]:
+    """Return ``(ca_pem, source)`` — the CA PEM text to trust (``""`` for the
+    system store) and a legible label naming its source.
 
     Applies the resolution order documented on the module: env override
     (short-circuits) → persisted ``${KLODI_HOME}/nats-ca.pem`` → bundled
@@ -83,7 +109,10 @@ def _resolve_ca_pem(klodi_home: Path | str | None) -> str:
     override = os.environ.get(_CA_FILE_ENV)
     if override:
         try:
-            return Path(override).read_text(encoding="utf-8")
+            return (
+                Path(override).read_text(encoding="utf-8"),
+                f"{_CA_FILE_ENV}={override}",
+            )
         except OSError as err:
             raise CaTrustError(
                 f"{_CA_FILE_ENV}={override!r} could not be read: {err}. "
@@ -100,7 +129,10 @@ def _resolve_ca_pem(klodi_home: Path | str | None) -> str:
         persisted = nats_ca_path(klodi_home)
         if persisted.exists():
             try:
-                return persisted.read_text(encoding="utf-8")
+                return (
+                    persisted.read_text(encoding="utf-8"),
+                    f"persisted register CA at {persisted}",
+                )
             except OSError as err:
                 raise CaTrustError(
                     f"persisted register CA at {persisted} could not be "
@@ -109,7 +141,7 @@ def _resolve_ca_pem(klodi_home: Path | str | None) -> str:
                     "never disabled to work around this.",
                 ) from err
 
-    return KLODI_NATS_CA_PEM
+    return KLODI_NATS_CA_PEM, "bundled KLODI_NATS_CA_PEM"
 
 
 def persist_nats_ca(klodi_home: Path | str, pem: str) -> Path | None:
@@ -155,12 +187,23 @@ def build_tls_context(
     if not nats_url.startswith("tls://"):
         return None
 
-    ca_pem = _resolve_ca_pem(klodi_home)
+    ca_pem, source = _resolve_ca_pem(klodi_home)
     if ca_pem:
         # `cadata` trusts ONLY this CA (private-CA-only, not augmenting
         # the system roots) — the tighter posture for a proxy that
-        # presents a private chain.
-        ctx = ssl.create_default_context(cadata=ca_pem)
+        # presents a private chain. A PEM-shaped-but-unparseable CA raises
+        # here; wrap the bare ``ssl.SSLError`` into the structured,
+        # source-attributed ``CaTrustError`` (the parse boundary) so the
+        # operator sees a legible fail-closed error, not a leaked stack.
+        try:
+            ctx = ssl.create_default_context(cadata=ca_pem)
+        except ssl.SSLError as err:
+            raise CaTrustError(
+                f"served NATS CA ({source}) could not be parsed as a trust "
+                f"anchor: {err}. Re-register to repersist it, or set "
+                f"{_CA_FILE_ENV} to a valid PEM — verification is never "
+                "disabled to work around this.",
+            ) from err
     else:
         ctx = ssl.create_default_context()
 
@@ -172,4 +215,9 @@ def build_tls_context(
     return ctx
 
 
-__all__ = ["CaTrustError", "build_tls_context", "persist_nats_ca"]
+__all__ = [
+    "CaTrustError",
+    "build_tls_context",
+    "describe_ca_source",
+    "persist_nats_ca",
+]
