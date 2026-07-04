@@ -88,18 +88,26 @@ host_shape_for_adapter() {
 # that match the known non-tool patterns below. The remainder is the
 # gate's universe of "klodi_* names referenced from this adapter."
 #
-# The deny list captures three categories of non-tool klodi_*
+# The deny list captures the categories of non-tool klodi_*
 # identifiers that legitimately appear in adapter source:
 #   1. ${klodi_home} env-var path key.
 #   2. ${klodi_api_url} env-var override key.
 #   3. klodi_<adapter>* — daemon binary names, log event prefixes
 #      (e.g. `klodi_moltis`, `klodi_nanobot_closed`).
-#   4. klodi_nats_client — the Python package name.
-#   5. klodi_*_loaded / _error / _failed / _chmod_failed — log event names.
-#   6. klodi_plugin_loaded / klodi_client_error — log event names.
+#   4. Internal (never-published) package names + their log-event
+#      descendants: klodi_nats_client, klodi_logger, klodi_rust_host.
+#   5. klodi_wake_pump_host — a host-internal dataclass attribute
+#      (bridge.py), referenced as a literal but never a callable tool.
+#   6. *_loaded / *_error / *_failed / *_chmod_failed — log event names.
+#      This suffix rule SUBSUMES the old klodi_plugin_loaded /
+#      klodi_client_error special-cases and also covers the log events
+#      (e.g. klodi_photos_resolution_failed) the previous regex leaked,
+#      which kept the gate chronically red and buried real drift.
 #
-# A new tool name shaped like `klodi_<verb>` or `klodi_<noun>_<verb>`
-# does NOT collide with these patterns by design.
+# A tool name shaped like `klodi_<verb>` or `klodi_<noun>_<verb>` does NOT
+# collide with these patterns by design; a real tool ending in _loaded /
+# _error / _failed would be a misnamed tool (adversarial-pinned in the
+# catalog test suite so the suffix rule can't silently swallow one).
 extract_referenced_names() {
     local adapter_dir="$1"
     {
@@ -108,8 +116,9 @@ extract_referenced_names() {
             -o -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.py" -o -name "*.rs" -o -name "*.json" -o -name "*.md" \) -print \
             | xargs -I{} grep -hoE '"klodi_[a-zA-Z0-9_]+"' {} 2>/dev/null \
             | tr -d '"' \
-            | grep -vE '^klodi_(home|api_url|nats_client|nanobot|moltis|ironclaw|zeroclaw|hermes|openclaw)(_.*)?$' \
-            | grep -vE '^klodi_(plugin_loaded|client_error)$' \
+            | grep -vE '^klodi_(home|api_url|nats_client|logger|rust_host|nanobot|moltis|ironclaw|zeroclaw|hermes|openclaw)(_.*)?$' \
+            | grep -vE '^klodi_wake_pump_host$' \
+            | grep -vE '_(loaded|error|failed|chmod_failed)$' \
             || true
     } | sort -u
 }

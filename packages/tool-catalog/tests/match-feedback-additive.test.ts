@@ -68,14 +68,19 @@ function schemaKeys(schema: unknown): { props: string[]; required: string[] } {
 }
 
 /**
- * Frozen pre-card snapshot of the 10 local tools that exist today (the 9
- * `in_agent`-required + `klodi_setup_status` which is also `cli_only`).
- * Captured from `src/local-tools.ts` at this card's RED phase. The map keys
- * are the tool names; the values pin the surface that MUST NOT move.
+ * Frozen snapshot of the established local tools — the surface `klodi_match_feedback`
+ * is additive to. The map keys are the tool names; the values pin the surface
+ * that MUST NOT move.
  *
  * `klodi_match_feedback` is deliberately ABSENT — it is the one permitted
- * addition. If a future edit changes any existing entry, the byte-identity
- * test below fails for the right reason.
+ * addition this card proves. If a future edit changes any listed entry, the
+ * byte-identity test below fails for the right reason.
+ *
+ * NOTE (card: wake-relay-tools-absent-from-tool-catalog): `klodi_message_user`
+ * and `klodi_pending_decisions` were added to `LOCAL_TOOLS` by a LATER card
+ * (finding F3) and are therefore part of the established surface here — their
+ * own registration + fidelity spec lives in `wake-relay-tools-catalog.test.ts`.
+ * They are pinned below so this test's byte-identity guard covers them too.
  */
 const PRE_EXISTING_LOCAL_TOOLS: ReadonlyArray<string> = [
   "klodi_register",
@@ -88,6 +93,8 @@ const PRE_EXISTING_LOCAL_TOOLS: ReadonlyArray<string> = [
   "klodi_setup_reseed_policies",
   "klodi_setup_reseed_skill",
   "klodi_channel_message",
+  "klodi_message_user",
+  "klodi_pending_decisions",
 ];
 
 /** Per-tool frozen surface: kind, host_shapes, sorted param + result keys. */
@@ -105,6 +112,12 @@ const PRE_EXISTING_SURFACE: Record<
   klodi_setup_reseed_policies: { kind: "local", host_shapes: ["in_agent"], params: [], result: ["reseeded_files", "timestamp"] },
   klodi_setup_reseed_skill: { kind: "local", host_shapes: ["in_agent"], params: [], result: ["reseeded_files", "timestamp"] },
   klodi_channel_message: { kind: "publish", host_shapes: ["in_agent"], params: ["channel_id", "content"], result: ["created_at", "event_id", "message_id", "sequence"] },
+  // Added by card wake-relay-tools-absent-from-tool-catalog (F3). result of
+  // klodi_pending_decisions is a top-level ARRAY, so it has no top-level
+  // `properties` — schemaKeys() reports [] here by design (its item-shape is
+  // pinned in wake-relay-tools-catalog.test.ts).
+  klodi_message_user: { kind: "local", host_shapes: ["in_agent"], params: ["text"], result: ["chat_id", "delivered", "entity_id", "pending_status", "platform"] },
+  klodi_pending_decisions: { kind: "local", host_shapes: ["in_agent"], params: [], result: [] },
 };
 
 describe("klodi_match_feedback — additive: existing local tools are byte-unchanged", () => {

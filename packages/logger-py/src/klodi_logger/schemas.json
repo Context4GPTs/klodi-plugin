@@ -5401,6 +5401,111 @@
       "host_shapes": [
         "in_agent"
       ]
+    },
+    "klodi_message_user": {
+      "name": "klodi_message_user",
+      "description": "Actively reach the human operator from an isolated wake turn — where your closing chat text reaches no one — when the wake cannot be resolved autonomously and needs the operator's decision or input: a decision reserved for them by policy (negotiation_style.md `Always Ask Me First` / `Escalation When Unknown`, or a security.md hard rule), a live counterparty left waiting, or an inbound you declined to act on. Being unsure or stuck is a decision for the human, not an informational note. Delivers a real-time, self-contained message into the operator's live session and records a pending-decision so their reply drives the right action. Do NOT ping for decisions the policy authorizes you to handle alone, nor for a purely-informational status wake where no counterparty is waiting and no decision is open.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "text": {
+            "minLength": 1,
+            "description": "The self-contained message to the operator — name the listing / counterparty, the question, and the options so a natural-language reply is interpretable hours later with no wake context.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "delivered": {
+            "type": "boolean"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "chat_id": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "pending_status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delivered",
+          "platform",
+          "chat_id",
+          "entity_id",
+          "pending_status"
+        ]
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent"
+      ]
+    },
+    "klodi_pending_decisions": {
+      "name": "klodi_pending_decisions",
+      "description": "List the open human-in-the-loop decisions awaiting the operator's reply. Scan at the start of every operator turn: when their message answers one, re-ground the entity's current state via the klodi read tools, act on the bound entity, then the decision is resolved.",
+      "params": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {}
+      },
+      "result": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "entity_type": {
+              "type": "string"
+            },
+            "entity_id": {
+              "type": "string"
+            },
+            "event_id": {
+              "type": "string"
+            },
+            "question": {
+              "type": "string"
+            },
+            "asked_at": {
+              "description": "ISO 8601 timestamp",
+              "type": "string"
+            },
+            "platform": {
+              "type": "string"
+            },
+            "chat_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "entity_type",
+            "entity_id",
+            "event_id",
+            "question",
+            "asked_at",
+            "platform",
+            "chat_id",
+            "status"
+          ]
+        }
+      },
+      "kind": "local",
+      "host_shapes": [
+        "in_agent"
+      ]
     }
   },
   "local_tools_by_host_shape": {
@@ -5415,7 +5520,9 @@
       "klodi_setup_reseed_policies",
       "klodi_setup_reseed_skill",
       "klodi_channel_message",
-      "klodi_match_feedback"
+      "klodi_match_feedback",
+      "klodi_message_user",
+      "klodi_pending_decisions"
     ],
     "daemon": [],
     "cli_only": [
