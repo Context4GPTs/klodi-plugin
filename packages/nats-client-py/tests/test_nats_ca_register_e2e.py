@@ -47,6 +47,11 @@ pytestmark = pytest.mark.skipif(
     ),
 )
 
+# A bad persisted CA must reach a terminal error well within this bound; a hang
+# (the defect) trips wait_for → TimeoutError → the assertion fails. See card
+# gate-auto-trust-on-well-formed-ca-loud-fail.
+_TERMINAL_BOUND_S = 12.0
+
 # A valid but WRONG self-signed CA (does not sign the test nats cert) for the
 # fail-closed / SAN-mismatch case.
 _WRONG_CA_PEM = """-----BEGIN CERTIFICATE-----
@@ -120,10 +125,17 @@ def test_connects_with_only_the_persisted_register_ca() -> None:
 
 def test_wrong_persisted_ca_fails_closed() -> None:
     """[integration] A persisted register CA that does not sign the proxy chain
-    → the handshake rejects and connect fails CLOSED; no plaintext / verify-off
-    fallback."""
+    → the handshake rejects and connect fails CLOSED, surfacing a **structured,
+    terminal** ``CaTrustError`` within a **bounded time** (never a plaintext /
+    verify-off fallback, never a silent hang).
+
+    TIGHTENED by card gate-auto-trust-on-well-formed-ca-loud-fail from a bare
+    ``raises(Exception)``: the wrong-signer persisted CA must fail *loud +
+    terminal + prompt*, not merely "not connected". If ``connect()`` retries the
+    deterministic verify failure forever, ``wait_for`` raises ``TimeoutError`` —
+    not ``CaTrustError`` — and this fails. QA-owned — never relax."""
     from klodi_nats_client.client import KlodiClient
-    from klodi_nats_client.tls import persist_nats_ca
+    from klodi_nats_client.tls import CaTrustError, persist_nats_ca
 
     async def run() -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -132,8 +144,13 @@ def test_wrong_persisted_ca_fails_closed() -> None:
             os.environ.pop("KLODI_NATS_CA_FILE", None)
             creds_path, config_path = _home_with_creds(home, _NATS_URL)
             client = KlodiClient(creds_path=creds_path, config_path=config_path)
-            with pytest.raises(Exception):  # noqa: B017 — any connect failure
-                await client.connect()
-            assert not client.is_connected
+            try:
+                with pytest.raises(CaTrustError):
+                    await asyncio.wait_for(
+                        client.connect(), timeout=_TERMINAL_BOUND_S
+                    )
+                assert not client.is_connected
+            finally:
+                await client.close()
 
     asyncio.run(run())

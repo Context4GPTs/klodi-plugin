@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -41,7 +42,11 @@ from klodi_nats_client.config import (
     load_config,
     load_creds,
 )
-from klodi_nats_client.tls import build_tls_context
+from klodi_nats_client.tls import (
+    CaTrustError,
+    build_tls_context,
+    describe_ca_source,
+)
 from klodi_nats_client.consumers import (
     ActiveSubscription,
     ChannelHandler,
@@ -109,6 +114,21 @@ def _default_error_sink(
     )
 
 
+def _is_ca_verify_error(err: BaseException) -> bool:
+    """True for a *deterministic* CA / certificate-verification failure.
+
+    ``ssl.SSLCertVerificationError`` is the class OpenSSL raises when the
+    served chain cannot be anchored to the trusted CA — wrong-signer
+    (``unable to get local issuer certificate``), keyUsage-missing
+    (``invalid CA certificate``), or a SAN/hostname mismatch. Retrying never
+    helps, so it is terminal. Deliberately narrow: it excludes transient TLS
+    faults (``SSLEOFError`` / ``SSLZeroReturnError`` from a mid-handshake
+    drop) and all non-TLS transport errors (timeout, refused, reset), which
+    stay on the retry path.
+    """
+    return isinstance(err, ssl.SSLCertVerificationError)
+
+
 class KlodiClient:
     """Process-wide NATS-WS client. Created once per session.
 
@@ -140,6 +160,18 @@ class KlodiClient:
         self._metrics = MutableMetrics()
         # P2-5 — exponential backoff cursor; resets on successful connect.
         self._backoff = BackoffPolicy()
+
+        # Loud-fail (card gate-auto-trust-on-well-formed-ca-loud-fail): a
+        # deterministic CA/TLS-verify failure on the INITIAL connect must be
+        # terminal, not swallowed by nats-py's unbounded reconnect
+        # (``max_reconnect_attempts=-1`` + ``allow_reconnect=True``, which
+        # otherwise retries a bad served CA forever and pins the caller — e.g.
+        # the hermes bridge — at a "connecting" state). ``_connecting_initial``
+        # scopes the terminal reclassification to the first connect;
+        # ``_ca_source`` attributes the surfaced ``CaTrustError`` to the served
+        # CA. Set/cleared around the ``nc.connect()`` call in :meth:`connect`.
+        self._connecting_initial = False
+        self._ca_source: str | None = None
 
     # ── Metrics ───────────────────────────────────────────────────────
 
@@ -188,23 +220,47 @@ class KlodiClient:
         # `klodi_home` is the creds-path parent — the persisted register CA
         # (`${KLODI_HOME}/nats-ca.pem`) lives in the same home as the creds,
         # so no upward KLODI_HOME re-resolution happens here (layering).
-        tls_ctx = build_tls_context(
-            config.nats_url, klodi_home=Path(self._creds_path).parent
+        klodi_home = Path(self._creds_path).parent
+        tls_ctx = build_tls_context(config.nats_url, klodi_home=klodi_home)
+        # Attribution label ONLY — this does not gate the classifier.
+        # `_is_ca_verify_error` keys on the error *type* (`SSLCertVerificationError`),
+        # so the terminal reclassification fires on any transport; a cert-verify
+        # failure is terminal-worthy on `wss://` too. We resolve the served-CA
+        # source string only for `tls://` (where a served CA exists) so the
+        # message names it; `None` elsewhere renders "served NATS CA (None) …",
+        # which is acceptable because a bare `SSLCertVerificationError` on a
+        # `wss://` initial connect is aiohttp-wrapped and does not reach here.
+        self._ca_source = (
+            describe_ca_source(klodi_home)
+            if config.nats_url.startswith("tls://")
+            else None
         )
 
         nc = NATSClient()
-        await nc.connect(
-            servers=config.nats_url,
-            user_credentials=str(creds),
-            tls=tls_ctx,
-            max_reconnect_attempts=-1,
-            reconnect_time_wait=WS_RECONNECT_TIME_WAIT_SECONDS,
-            ping_interval=WS_PING_INTERVAL_SECONDS,
-            connect_timeout=WS_CONNECT_TIMEOUT_SECONDS,
-            allow_reconnect=True,
-            error_cb=self._async_error_cb,
-            reconnected_cb=self._async_reconnected_cb,
-        )
+        # Arm the terminal reclassification for the initial connect only.
+        # `_async_error_cb` runs inside nats-py's connect retry loop; raising
+        # there on a deterministic CA/TLS-verify failure propagates out of
+        # `nc.connect()` (terminal) instead of looping forever. The half-open
+        # transport from the failed handshake is dropped with `nc` when this
+        # method unwinds — deliberately NOT `await nc.close()`d here: nats-py's
+        # drain blocks on a connection that never completed its handshake
+        # (it would re-introduce the very hang this card removes).
+        self._connecting_initial = True
+        try:
+            await nc.connect(
+                servers=config.nats_url,
+                user_credentials=str(creds),
+                tls=tls_ctx,
+                max_reconnect_attempts=-1,
+                reconnect_time_wait=WS_RECONNECT_TIME_WAIT_SECONDS,
+                ping_interval=WS_PING_INTERVAL_SECONDS,
+                connect_timeout=WS_CONNECT_TIMEOUT_SECONDS,
+                allow_reconnect=True,
+                error_cb=self._async_error_cb,
+                reconnected_cb=self._async_reconnected_cb,
+            )
+        finally:
+            self._connecting_initial = False
         self._nc = nc
         self._js = nc.jetstream()
         self._backoff.reset()
@@ -438,7 +494,23 @@ class KlodiClient:
         return self._js
 
     async def _async_error_cb(self, err: BaseException) -> None:
-        """nats-py error callback. Surfaces transport-level events."""
+        """nats-py error callback. Surfaces transport-level events.
+
+        During the INITIAL connect, a deterministic CA/TLS-verify failure is
+        terminal: raising here propagates out of ``nc.connect()`` (this
+        callback runs inside nats-py's connect retry loop) instead of being
+        swallowed by the unbounded reconnect policy and retried forever. A
+        *transient* failure (timeout, refused, reset) is not reclassified —
+        it falls through to the normal sink so the reconnect policy keeps
+        retrying (resilience must not regress).
+        """
+        if self._connecting_initial and _is_ca_verify_error(err):
+            raise CaTrustError(
+                f"served NATS CA ({self._ca_source}) could not be trusted: "
+                f"{err}. Re-register to repersist it, or set "
+                "KLODI_NATS_CA_FILE to a CA that signs the endpoint — "
+                "verification is never disabled to work around this.",
+            ) from err
         self._on_error(err, {"phase": "transport"})
 
     async def _async_reconnected_cb(self) -> None:

@@ -43,7 +43,7 @@ import type {
 } from "@klodi/tool-catalog";
 import { computeBackoffMs } from "./backoff.js";
 import { loadConfig, loadCreds, type KlodiConfig } from "./config.js";
-import { resolveTlsCa } from "./tls.js";
+import { CaTrustError, describeCaSource, resolveTlsCa } from "./tls.js";
 import {
   subscribeChannels,
   subscribeNotifications,
@@ -122,6 +122,35 @@ export function assertEncryptedOrLocalhost(natsUrl: string): void {
  */
 function usesWebSocketTransport(natsUrl: string): boolean {
   return natsUrl.startsWith("ws://") || natsUrl.startsWith("wss://");
+}
+
+/** Transient (retryable) network error codes — refused / reset / DNS / timeout.
+ *  A failure carrying one of these is NOT a deterministic CA-trust failure. */
+const TLS_TRANSIENT_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPIPE",
+  "ECONNABORTED",
+]);
+
+/**
+ * True for a *deterministic* CA / certificate-verification failure raised by
+ * Node's TLS stack (wrong-signer → `UNABLE_TO_VERIFY_LEAF_SIGNATURE`,
+ * self-signed / untrusted issuer, keyUsage-missing, or a SAN mismatch →
+ * `ERR_TLS_CERT_ALTNAME_INVALID`). Retrying never helps, so it is terminal.
+ * Transient network errors (`ECONNREFUSED` &c.) are excluded so they stay on
+ * the retry path — the guard against the classifier over-reaching.
+ */
+function isCaVerifyError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = String((err as { code?: unknown }).code ?? "");
+  if (TLS_TRANSIENT_CODES.has(code)) return false;
+  return /cert|signature|verif|tls|ssl|\bca\b/i.test(`${code} ${err.message}`);
 }
 
 export interface KlodiClientArgs {
@@ -482,27 +511,47 @@ export class KlodiClient {
    * hostname verification ON; `rejectUnauthorized` is never disabled, so a
    * missing / wrong CA fails closed. `nats://` (localhost only, per the
    * guard) stays plaintext — `tls` is omitted.
+   *
+   * Loud-fail (card `gate-auto-trust-on-well-formed-ca-loud-fail`): a
+   * deterministic CA/TLS-verify failure on the initial connect is reclassified
+   * into the structured, attributable {@link CaTrustError} (transport-node
+   * rejects such a handshake promptly with a bare Node TLS error). A transient
+   * failure (refused / reset / DNS) rethrows unchanged so the reconnect policy
+   * still applies.
    */
-  private connectTcp(
+  private async connectTcp(
     natsUrl: string,
     creds: Uint8Array,
     delayHandler: () => number,
   ): Promise<NatsConnection> {
+    const isTls = natsUrl.startsWith("tls://");
     // `klodiHome` is the creds-path parent — the persisted register CA
     // (`${KLODI_HOME}/nats-ca.pem`) lives in the same home as the creds, so
     // no upward KLODI_HOME re-resolution happens in this package (layering).
-    const ca = natsUrl.startsWith("tls://")
-      ? resolveTlsCa(dirname(this.args.credsPath))
-      : undefined;
-    return nodeConnect({
-      servers: natsUrl,
-      authenticator: credsAuthenticator(creds),
-      maxReconnectAttempts: -1,
-      reconnectDelayHandler: delayHandler,
-      pingInterval: WS_PING_INTERVAL_MS,
-      timeout: WS_CONNECT_TIMEOUT_MS,
-      tls: ca !== undefined ? { ca } : undefined,
-    });
+    const klodiHome = dirname(this.args.credsPath);
+    const ca = isTls ? resolveTlsCa(klodiHome) : undefined;
+    try {
+      return await nodeConnect({
+        servers: natsUrl,
+        authenticator: credsAuthenticator(creds),
+        maxReconnectAttempts: -1,
+        reconnectDelayHandler: delayHandler,
+        pingInterval: WS_PING_INTERVAL_MS,
+        timeout: WS_CONNECT_TIMEOUT_MS,
+        tls: ca !== undefined ? { ca } : undefined,
+      });
+    } catch (err) {
+      if (isTls && isCaVerifyError(err)) {
+        throw new CaTrustError(
+          `served NATS CA (${describeCaSource(klodiHome)}) could not be `
+          + `trusted: ${err instanceof Error ? err.message : String(err)}. `
+          + "Re-register to repersist it, or set KLODI_NATS_CA_FILE to a CA "
+          + "that signs the endpoint — verification is never disabled to work "
+          + "around this.",
+        );
+      }
+      throw err;
+    }
   }
 
   /**

@@ -128,6 +128,23 @@ pub fn resolve_ca_file(klodi_home: &Path) -> Result<Option<PathBuf>, KlodiError>
     Ok(None)
 }
 
+/// Legible label for *which* CA source [`resolve_ca_file`] would pick — used to
+/// attribute a connect-time TLS-verify failure to the served CA in the surfaced
+/// [`KlodiError::CaTrust`](crate::error::KlodiError::CaTrust). Mirrors the
+/// resolution precedence without reading the CA's contents.
+pub fn describe_ca_source(klodi_home: &Path) -> String {
+    if let Ok(path) = std::env::var(CA_FILE_ENV) {
+        if !path.is_empty() {
+            return format!("{CA_FILE_ENV}={path}");
+        }
+    }
+    let persisted = nats_ca_path(klodi_home);
+    if persisted.exists() {
+        return format!("persisted register CA at {}", persisted.display());
+    }
+    "bundled KLODI_NATS_CA_PEM".to_string()
+}
+
 /// Materialise the embedded [`KLODI_NATS_CA_PEM`] to a temp file once and
 /// cache the path. async-nats' `add_root_certificates` only accepts a
 /// path, so the in-binary PEM must live on disk to be consumed.

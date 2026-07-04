@@ -152,3 +152,20 @@ export function resolveTlsCa(klodiHome?: string): string | undefined {
   }
   return KLODI_NATS_CA_PEM.length > 0 ? KLODI_NATS_CA_PEM : undefined;
 }
+
+/**
+ * Legible label for *which* CA source {@link resolveTlsCa} would pick — used to
+ * attribute a connect-time TLS-verify failure to the served CA in the surfaced
+ * {@link CaTrustError} (the operator needs to know which CA to fix). Mirrors the
+ * resolution precedence without reading the CA's contents.
+ */
+export function describeCaSource(klodiHome?: string): string {
+  const override = process.env[CA_FILE_ENV];
+  if (override !== undefined && override !== "") {
+    return `${CA_FILE_ENV}=${override}`;
+  }
+  if (klodiHome !== undefined && existsSync(natsCaPath(klodiHome))) {
+    return `persisted register CA at ${natsCaPath(klodiHome)}`;
+  }
+  return "bundled KLODI_NATS_CA_PEM";
+}

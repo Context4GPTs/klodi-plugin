@@ -1,11 +1,11 @@
 ---
 id: 0022-tls-nats-transport-private-ca-trust
 title: Client `tls://` NATS transport with private-CA trust — verify-ON, private-CA-only, fail-closed
-tags: [nats, tls, transport, ca, trust, security, guard, vendoring, adapters, parity, railway]
+tags: [nats, tls, transport, ca, trust, security, guard, vendoring, adapters, parity, railway, loud-fail, starttls]
 card: support-tls-nats-transport-with-private-ca-trust
-commit: 6deaba1
+commit: 7ca5b14
 updated_at: 2026-07-04
-updated_by_card: auto-trust-nats-ca-from-register
+updated_by_card: gate-auto-trust-on-well-formed-ca-loud-fail
 ---
 
 # ADR-0022 — Client `tls://` NATS transport with private-CA trust
@@ -74,6 +74,32 @@ Ranked **above** the bundle because it is server-authoritative, endpoint-matched
 
 The on-disk file contract (mode `0644` non-secret, atomic write, `KLODI_HOME` derived from the creds-path parent) lives in `docs/knowledge/environment.md`. **Cross-repo:** the `nats_ca` field name/shape must be reconciled against the *merged* `serve-nats-ca-in-sessions-api` before prod trust; the plugin change is forward-compatible and inert until web emits the field (mirrors the client-before-server cutover ordering above).
 
+## Addendum (2026-07-04) — loud-fail contract: a bad served CA is terminal, structured, and prompt
+
+Card `gate-auto-trust-on-well-formed-ca-loud-fail` (epic `nats-ws-ingress-flap-2026-06`, PR #50) closes the blind spot that let the keyUsage-missing served CA hide. Fail-*closed* was true and still **invisible**: a bad served CA made the connect hang forever (never returned, never raised), so hermes sat pinned at `bridge_register_starting` (`adapters/hermes/src/klodi_hermes/bridge.py:452`) indefinitely — indistinguishable from a network blip. This addendum adds the operator-experience half: a malformed or untrusted served CA now fails **loud, terminal, prompt, and uniform** across all three language families. Verification is still never disabled (the invariant above is unchanged; this only changes *how the rejection surfaces*).
+
+### Structured error contract — one type per language, shared attribution *template*
+
+Every CA-trust failure funnels through **one structured error type per language** — `CaTrustError` (py/ts, pre-existing in `tls.*`) and the NEW `KlodiError::CaTrust { ca_source, message }` variant (rs, `error.rs:51`). The async-nats connect error is **wrapped** into `CaTrust` rather than surfaced bare, so rs is structured + attributable like py/ts.
+
+"Uniform" is **not** byte-identical strings. It is a shared attribution *template* — *"served NATS CA `<source>` could not be trusted: `<reason>`; … verification is never disabled …"* — rendered idiomatically per language. Every surfaced error: (a) reads as a CA-trust / TLS-*verification* failure (not a bare timeout / generic network error); (b) names the CA **source** (`KLODI_NATS_CA_FILE`, the persisted `${KLODI_HOME}/nats-ca.pem`, or the bundled constant) so the operator knows the remedy (re-register, or set `KLODI_NATS_CA_FILE`); (c) carries no verify-off token — the three `verification_never_disabled` ratchets stay green. The rs field is `ca_source`, **not** `source`: `thiserror` treats a `source` field as `#[source]` and won't compile for a `String`.
+
+### Deterministic-CA initial-connect fail-fast vs. transient retry (the actual stall fix)
+
+The swallow was in the shared client's **reconnect policy**, not the hermes bridge. `client.rs`'s `.max_reconnects(None).retry_on_initial_connect()` and `client.py`'s `max_reconnect_attempts=-1, allow_reconnect=True` retry the *first* connect **forever** — correct for a transient flap, catastrophic for a **deterministic** CA/TLS-verify failure that never succeeds on retry (wrong-signer, keyUsage-missing). So the initial-connect failure is now **classified**:
+
+- **Deterministic CA/TLS-verify** → **terminal**: raise the structured `CaTrust*` immediately.
+- **Transient** (refused / DNS / reset / mid-handshake drop) → **still retries** per the unbounded policy — first-connect resilience must not regress.
+
+The classifier is the risk surface, so **every negative test is paired with a transient-refused-port test** proving a transient failure is not misclassified terminal. Per language: **py** raises inside `error_cb` (`_async_error_cb`), which runs *inside* nats-py's connect loop, so the raise propagates straight out of `nc.connect()`; the classifier `_is_ca_verify_error` is `ssl.SSLCertVerificationError`-only (narrow — `SSLEOFError`/timeouts stay transient); the half-open `nc` is dropped **without** `close()` (nats-py's drain blocks on a never-completed handshake — closing would re-introduce the hang). **rs** drops `.retry_on_initial_connect()` and runs the initial connect **foreground**, classifying `ConnectErrorKind::Tls` terminal and retrying only `Io/Dns/TimedOut`; `max_reconnects(None)` still governs *post*-connect reconnects. **ts** makes `connectTcp` async and wraps a deterministic cert-verify rejection (`isCaVerifyError` excludes a transient-code set first). The fix lands once per language in `nats-client-{py,ts,rs}` and covers all six adapters; the hermes bridge's `except BaseException → bridge_register_failed` path already existed — it just never received the exception because the client hung.
+
+### klodi `tls://` is STARTTLS, not implicit TLS (dictated the mechanism *and* a testing gotcha)
+
+nats-py defaults `tls_handshake_first=False` and `KlodiClient` never overrides it (async-nats + transport-node behave identically); the server half is the marketplace `tls_required`-in-INFO transition. So the client connects **plaintext TCP, reads the server's `INFO {…,"tls_required":true}` line, then upgrades TLS** — a bad-CA verify failure surfaces on the client's **own post-INFO upgrade**, not a pre-connect implicit-TLS handshake. Two consequences:
+
+1. **No pre-connect implicit-TLS probe.** An implicit ClientHello against the STARTTLS endpoint would read the plaintext INFO as its ServerHello → `wrong version number` → a *false* `CaTrust` on every connect. The fix intercepts the client's own handshake error instead — which is why the mechanisms above hook the client's connect callback (py) / classify the real connect error (rs/ts) rather than probing.
+2. **Negative TLS-trust tests must model the INFO prologue.** A self-contained *implicit*-TLS test server **deadlocks** a STARTTLS client (client waits for INFO; server waits for a ClientHello) → the client times out with `kind="timeout"`, never a cert error, so the test cannot validate *any* faithful fix. Self-contained negatives must send the plaintext `INFO`/`tls_required` line **then** upgrade (`test_tls_loud_fail.py` / `tls-loud-fail.test.ts` carry an opt-in `starttls` server mode for exactly this; the Pillar-A *positive* keeps a raw-handshake implicit server). The gated klodi-stage bed tests are unaffected — the real NATS is already STARTTLS.
+
 ## Security implications
 
 - **Verification is a hard invariant, ratcheted by tests.** Each language carries a `verification_never_disabled` unit test that greps the source for the insecure flags and asserts their absence, plus that no env var toggles verify off. `KLODI_NATS_CA_FILE` is not a backdoor — it can only change *which* CA is trusted.
@@ -86,6 +112,9 @@ The on-disk file contract (mode `0644` non-secret, atomic write, `KLODI_HOME` de
 - Guard (renamed, shared): `packages/nats-client-py/src/klodi_nats_client/config.py:156`, `packages/nats-client-ts/src/client.ts:105`, `packages/nats-client-rs/src/config.rs:151`
 - Persist guards routed to the shared guard: `adapters/hermes/src/klodi_hermes/register.py`, `adapters/nanobot/nanobot_local_tools.py`, `adapters/openclaw/src/tools/register-poller.ts`, `packages/klodi-rust-host/src/register.rs`
 - CA trust (verify-ON, private-CA-only): `packages/nats-client-py/src/klodi_nats_client/tls.py`, `packages/nats-client-ts/src/tls.ts`, `packages/nats-client-rs/src/tls.rs`
+- Loud-fail structured type: `packages/nats-client-rs/src/error.rs:51` (`KlodiError::CaTrust { ca_source, message }`); `CaTrustError` in `tls.py` / `tls.ts`
+- Loud-fail initial-connect classifier: `packages/nats-client-py/src/klodi_nats_client/client.py` (`_is_ca_verify_error`, `_async_error_cb`, `_connecting_initial`), `packages/nats-client-rs/src/client.rs` (foreground `initial_connect`, drops `retry_on_initial_connect`), `packages/nats-client-ts/src/client.ts` (`connectTcp` / `isCaVerifyError`)
+- Loud-fail tests (STARTTLS-modelled negatives + transient-retry pairs): `packages/nats-client-py/tests/test_tls_loud_fail.py`, `packages/nats-client-ts/tests/tls-loud-fail.test.ts`, `packages/nats-client-rs/tests/tls_loud_fail.rs` (gated on the klodi-stage bed); hermes defect-site witness `adapters/hermes/tests/test_bridge_bad_ca_surfacing.py`
 - TS transport dispatch: `packages/nats-client-ts/src/client.ts:430` (`doConnect`), `:485` (`connectTcp`)
 - Node `ca` replace semantics: `@nats-io/transport-node` `lib/node_transport.js:191-192,220` forwards `ca` into `tls.connect`; Node `tls.createSecureContext` `ca` option (default Mozilla CAs *replaced* when specified)
 - Bundled-CA constant: `packages/tool-catalog/src/index.ts:735` (`KLODI_NATS_CA_PEM`), `:719` (`KLODI_DEFAULT_NATS_URL`)

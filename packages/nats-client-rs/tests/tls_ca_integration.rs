@@ -21,10 +21,33 @@
 //! NEVER weaken; push back to the expert-developer instead.
 
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use klodi_nats_client::client::KlodiClient;
 use serde_json::Value;
+
+/// A bad-CA connect must reach a terminal error within this bound; a hang
+/// (`retry_on_initial_connect` retries the deterministic verify failure
+/// forever) trips the timeout → the assert fails. Card
+/// gate-auto-trust-on-well-formed-ca-loud-fail.
+const TERMINAL_BOUND: Duration = Duration::from_secs(15);
+
+/// A shared local TLS-CA fixture. `CARGO_MANIFEST_DIR` = packages/nats-client-rs,
+/// so the repo-root fixtures live two levels up.
+fn fixture(name: &str) -> PathBuf {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("test-fixtures")
+        .join("tls-ca")
+        .join(name);
+    assert!(
+        p.is_file(),
+        "missing fixture {} (run test-fixtures/tls-ca/gen.sh)",
+        p.display()
+    );
+    p
+}
 
 struct Harness {
     ca_file: String,
@@ -90,20 +113,29 @@ async fn verified_tls_handshake_and_whoami_round_trip() {
 #[tokio::test]
 async fn fails_closed_when_ca_is_wrong() {
     let Some(h) = harness() else { return };
-    // A wrong CA (does not sign the test nats cert). Selecting the wrong CA
-    // must fail closed — it must NOT disable verification.
-    let wrong = h.dir.join("wrong-ca.pem");
-    std::fs::write(
-        &wrong,
-        "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
-    )
-    .unwrap();
-    std::env::set_var("KLODI_NATS_CA_FILE", &wrong);
+    // TIGHTENED by card gate-auto-trust-on-well-formed-ca-loud-fail: a
+    // WELL-FORMED wrong-signer CA (`ca-wrong.pem` — does not sign the test nats
+    // cert, so the failure is a handshake verify at the CONNECT boundary, not a
+    // PEM parse) must fail closed **terminally within a bounded time**, never
+    // the infinite `retry_on_initial_connect` hang. If connect() retries the
+    // deterministic verify failure forever, the timeout elapses → this fails.
+    // The STRUCTURED-type (`KlodiError::CaTrust`) + attribution assertions live
+    // in `tls_loud_fail.rs`. QA-owned — do not relax the bound back to a bare
+    // eventual `is_err`.
+    std::env::set_var("KLODI_NATS_CA_FILE", fixture("ca-wrong.pem"));
     let client = KlodiClient::new(&h.creds, &h.config)
         .await
         .expect("client new");
-    let result = client.connect().await;
-    assert!(result.is_err(), "wrong CA must fail closed (no plaintext fallback)");
+    let outcome = tokio::time::timeout(TERMINAL_BOUND, client.connect()).await;
+    assert!(
+        outcome.is_ok(),
+        "wrong-signer connect HUNG past {TERMINAL_BOUND:?} (retried forever) — a \
+         deterministic CA/TLS-verify failure on the initial connect must be terminal"
+    );
+    assert!(
+        outcome.unwrap().is_err(),
+        "wrong CA must fail closed (no plaintext fallback)"
+    );
     assert!(!client.is_connected().await, "must not be connected with a wrong CA");
     let _ = std::fs::remove_dir_all(&h.dir);
 }
