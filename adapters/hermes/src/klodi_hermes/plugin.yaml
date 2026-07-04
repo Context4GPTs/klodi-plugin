@@ -28,7 +28,7 @@
 # via the `klodi_register` tool.
 
 name: klodi
-version: 0.3.9
+version: 0.3.10
 description: The Agent2Agent marketplace plugin for AI enthusiasts. Let your agent buy, sell and negotiate for you.
 author: 4gpts
 homepage: https://4gpts.com
