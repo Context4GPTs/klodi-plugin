@@ -71,7 +71,7 @@ describe("resolveTlsCa — persisted register CA (level 2)", () => {
     writePersisted(REG_CA);
     process.env[CA_FILE_ENV] = envFile;
 
-    expect(resolveTlsCa(home)).toBe(ENV_CA);
+    expect(resolveTlsCa(home).ca).toBe(ENV_CA);
   });
 
   it("[guard] env override short-circuits — the persisted file is not even read", () => {
@@ -83,19 +83,19 @@ describe("resolveTlsCa — persisted register CA (level 2)", () => {
 
     // Must not throw and must return the env CA — proves no read/diff of the
     // persisted file (strict precedence, no divergence I/O). Open questions #3.
-    expect(resolveTlsCa(home)).toBe(ENV_CA);
+    expect(resolveTlsCa(home).ca).toBe(ENV_CA);
   });
 
   // ── Scenario 1 — auto-trust the persisted register CA ───────────────────
   it("[RED] returns the persisted register CA when no env override is set", () => {
     writePersisted(REG_CA);
 
-    expect(resolveTlsCa(home)).toBe(REG_CA);
+    expect(resolveTlsCa(home).ca).toBe(REG_CA);
   });
 
   // ── Scenario 3 — no regression ──────────────────────────────────────────
   it("[guard] no env + no persisted + empty bundle → undefined (system store)", () => {
-    expect(resolveTlsCa(home)).toBeUndefined();
+    expect(resolveTlsCa(home).ca).toBeUndefined();
   });
 
   it("[guard] manual-CA host with a response that omits nats_ca is unchanged", () => {
@@ -103,7 +103,7 @@ describe("resolveTlsCa — persisted register CA (level 2)", () => {
     writeFileSync(envFile, ENV_CA);
     process.env[CA_FILE_ENV] = envFile; // manual override, nothing persisted
 
-    expect(resolveTlsCa(home)).toBe(ENV_CA);
+    expect(resolveTlsCa(home).ca).toBe(ENV_CA);
   });
 
   // ── Boundary / error paths ──────────────────────────────────────────────
@@ -113,7 +113,7 @@ describe("resolveTlsCa — persisted register CA (level 2)", () => {
     // handshake fails CLOSED. Never loosens verification to compensate.
     writePersisted(MALFORMED);
 
-    expect(resolveTlsCa(home)).toBe(MALFORMED);
+    expect(resolveTlsCa(home).ca).toBe(MALFORMED);
   });
 
   it("[RED] a present-but-unreadable persisted CA fails closed (CaTrustError)", () => {

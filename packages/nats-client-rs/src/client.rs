@@ -15,7 +15,7 @@
 
 use crate::backoff::default_reconnect_delay;
 use crate::config::{KlodiConfig, assert_encrypted_or_localhost, load_config, load_creds};
-use crate::tls::{describe_ca_source, resolve_ca_file};
+use crate::tls::resolve_ca_file;
 use crate::consumers::{
     ActiveSubscription, ChannelHandler, NotificationHandler, subscribe_channels,
     subscribe_notifications,
@@ -161,13 +161,23 @@ impl KlodiClient {
         // ON) trusting only that CA — a missing / wrong CA or SAN
         // mismatch fails closed at the handshake. Verification is never
         // disabled. `wss://` keeps async-nats' default system TLS.
-        if self.config.nats_url.starts_with("tls://") {
+        // `resolve_ca_file` returns the CA path AND the label naming its source.
+        // The source is threaded into `initial_connect` (not stashed on `&self`
+        // — the client is `Arc`/`Mutex`-shared, so a mutable source field would
+        // be a concurrency smell) so the loud-fail `CaTrust` names exactly the
+        // resolver's selection instead of re-deriving the precedence. `wss://`
+        // runs no resolve, so its Tls arm attributes to the system trust store.
+        let ca_source = if self.config.nats_url.starts_with("tls://") {
             options = options.require_tls(true);
-            if let Some(ca_path) = resolve_ca_file(&self.klodi_home)? {
+            let resolved = resolve_ca_file(&self.klodi_home)?;
+            if let Some(ca_path) = resolved.path {
                 options = options.add_root_certificates(ca_path);
             }
-        }
-        let client = self.initial_connect(options).await?;
+            resolved.source
+        } else {
+            "system trust store".to_string()
+        };
+        let client = self.initial_connect(options, ca_source).await?;
         let ctx = jetstream::new(client.clone());
         *state = Some(Connected { client, ctx });
         Ok(())
@@ -185,7 +195,11 @@ impl KlodiClient {
     /// regress. Any other class (auth, server-parse) is terminal but keeps its
     /// own error. Post-connect reconnects remain governed by
     /// `max_reconnects(None)` on the returned client.
-    async fn initial_connect(&self, options: ConnectOptions) -> Result<Client, KlodiError> {
+    async fn initial_connect(
+        &self,
+        options: ConnectOptions,
+        ca_source: String,
+    ) -> Result<Client, KlodiError> {
         let url = self.config.nats_url.as_str();
         let mut attempt: usize = 0;
         loop {
@@ -194,7 +208,7 @@ impl KlodiClient {
                 Err(err) => match err.kind() {
                     ConnectErrorKind::Tls => {
                         return Err(KlodiError::CaTrust {
-                            ca_source: describe_ca_source(&self.klodi_home),
+                            ca_source,
                             message: err.to_string(),
                         });
                     }

@@ -43,7 +43,7 @@ import type {
 } from "@klodi/tool-catalog";
 import { computeBackoffMs } from "./backoff.js";
 import { loadConfig, loadCreds, type KlodiConfig } from "./config.js";
-import { CaTrustError, describeCaSource, resolveTlsCa } from "./tls.js";
+import { CaTrustError, resolveTlsCa } from "./tls.js";
 import {
   subscribeChannels,
   subscribeNotifications,
@@ -529,7 +529,12 @@ export class KlodiClient {
     // (`${KLODI_HOME}/nats-ca.pem`) lives in the same home as the creds, so
     // no upward KLODI_HOME re-resolution happens in this package (layering).
     const klodiHome = dirname(this.args.credsPath);
-    const ca = isTls ? resolveTlsCa(klodiHome) : undefined;
+    // `resolveTlsCa` returns the CA text AND the label naming its source. The
+    // client consumes both — `resolved.ca` to trust, `resolved.source` to
+    // attribute a loud-fail — so the env → persisted → bundled precedence is
+    // never re-derived here. `undefined` for `wss://` (system-default TLS).
+    const resolved = isTls ? resolveTlsCa(klodiHome) : undefined;
+    const ca = resolved?.ca;
     try {
       return await nodeConnect({
         servers: natsUrl,
@@ -543,8 +548,9 @@ export class KlodiClient {
     } catch (err) {
       if (isTls && isCaVerifyError(err)) {
         throw new CaTrustError(
-          `served NATS CA (${describeCaSource(klodiHome)}) could not be `
-          + `trusted: ${err instanceof Error ? err.message : String(err)}. `
+          `served NATS CA (${resolved?.source ?? "bundled KLODI_NATS_CA_PEM"}) `
+          + `could not be trusted: `
+          + `${err instanceof Error ? err.message : String(err)}. `
           + "Re-register to repersist it, or set KLODI_NATS_CA_FILE to a CA "
           + "that signs the endpoint — verification is never disabled to work "
           + "around this.",

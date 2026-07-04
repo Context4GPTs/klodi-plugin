@@ -235,7 +235,7 @@ def test_keyusage_ca_anchors_a_real_handshake_cert_and_hostname(
     persist_nats_ca(home, _fx("ca-good.pem").read_text(encoding="utf-8"))
 
     with _LocalTlsServer(_fx("leaf-good.pem"), _fx("leaf-good.key")) as server:
-        ctx = build_tls_context(f"tls://localhost:{server.port}", klodi_home=home)
+        ctx, _source = build_tls_context(f"tls://localhost:{server.port}", klodi_home=home)
         assert ctx is not None
         # The resolver/build path keeps verification ON.
         assert ctx.check_hostname is True

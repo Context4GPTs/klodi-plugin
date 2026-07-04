@@ -79,23 +79,6 @@ class CaTrustError(RuntimeError):
     """
 
 
-def describe_ca_source(klodi_home: Path | str | None) -> str:
-    """Human-legible label for *which* CA source resolution would pick.
-
-    Names the source (env override → persisted register CA → bundled
-    constant) without reading its contents — used to attribute a
-    connect-time TLS-verify failure to the served CA in the surfaced
-    :class:`CaTrustError` (the operator needs to know which CA to fix). The
-    precedence mirrors :func:`_resolve_ca_pem` exactly.
-    """
-    override = os.environ.get(_CA_FILE_ENV)
-    if override:
-        return f"{_CA_FILE_ENV}={override}"
-    if klodi_home is not None and nats_ca_path(klodi_home).exists():
-        return f"persisted register CA at {nats_ca_path(klodi_home)}"
-    return "bundled KLODI_NATS_CA_PEM"
-
-
 def _resolve_ca_pem(klodi_home: Path | str | None) -> tuple[str, str]:
     """Return ``(ca_pem, source)`` — the CA PEM text to trust (``""`` for the
     system store) and a legible label naming its source.
@@ -169,14 +152,19 @@ def persist_nats_ca(klodi_home: Path | str, pem: str) -> Path | None:
 
 def build_tls_context(
     nats_url: str, *, klodi_home: Path | str | None = None
-) -> ssl.SSLContext | None:
+) -> tuple[ssl.SSLContext, str] | None:
     """Build the verifying ``SSLContext`` for a ``tls://`` URL.
 
     Returns ``None`` for any non-``tls://`` scheme (``wss://`` uses
     nats-py's system-default TLS; ``ws://`` localhost is plaintext). For a
-    ``tls://`` URL, returns a context that trusts the resolved private CA
-    (env override → persisted register CA under ``klodi_home`` → bundled
-    constant → system store). The context keeps ``check_hostname=True`` and
+    ``tls://`` URL, returns ``(ctx, source)`` — a context that trusts the
+    resolved private CA (env override → persisted register CA under
+    ``klodi_home`` → bundled constant → system store) **and** the legible
+    label naming *which* source :func:`_resolve_ca_pem` selected. The
+    ``source`` is the single source of truth for the connect-failure
+    attribution: the client stores it and interpolates it into the surfaced
+    :class:`CaTrustError`, so the precedence is never re-derived elsewhere.
+    The context keeps ``check_hostname=True`` and
     ``verify_mode=CERT_REQUIRED`` — the defaults ``ssl.create_default_context``
     sets; this module never weakens them.
 
@@ -212,12 +200,11 @@ def build_tls_context(
     # invariant.
     ctx.check_hostname = True
     ctx.verify_mode = ssl.CERT_REQUIRED
-    return ctx
+    return ctx, source
 
 
 __all__ = [
     "CaTrustError",
     "build_tls_context",
-    "describe_ca_source",
     "persist_nats_ca",
 ]

@@ -133,7 +133,7 @@ fn env_override_wins_over_persisted_register_ca() {
     std::fs::write(&env_ca, REG_PEM).unwrap();
     std::env::set_var(CA_FILE_ENV, &env_ca);
 
-    let resolved = resolve_ca_file(&home).expect("resolve").expect("some path");
+    let resolved = resolve_ca_file(&home).expect("resolve").path.expect("some path");
     assert_eq!(resolved, env_ca, "explicit override must win over persisted CA");
 
     std::env::remove_var(CA_FILE_ENV);
@@ -151,7 +151,7 @@ fn env_override_short_circuits_persisted_not_returned() {
     std::fs::write(&env_ca, REG_PEM).unwrap();
     std::env::set_var(CA_FILE_ENV, &env_ca);
 
-    let resolved = resolve_ca_file(&home).expect("resolve").expect("some path");
+    let resolved = resolve_ca_file(&home).expect("resolve").path.expect("some path");
     assert_ne!(
         resolved,
         nats_ca_path(&home),
@@ -173,6 +173,7 @@ fn persisted_register_ca_used_when_no_env() {
 
     let resolved = resolve_ca_file(&home)
         .expect("resolve")
+        .path
         .expect("persisted register CA must resolve to a path");
     assert_eq!(resolved, nats_ca_path(&home));
 
@@ -188,8 +189,8 @@ fn no_env_no_persisted_falls_through_to_system_store() {
 
     let resolved = resolve_ca_file(&home).expect("resolve");
     assert!(
-        resolved.is_none(),
-        "no CA source → fall through to the system trust store (None)"
+        resolved.path.is_none(),
+        "no CA source → fall through to the system trust store (path None)"
     );
 
     let _ = std::fs::remove_dir_all(&home);

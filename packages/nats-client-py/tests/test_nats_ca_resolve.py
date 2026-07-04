@@ -148,7 +148,7 @@ def test_env_override_wins_over_persisted_register_ca(
     _write(_persisted_ca_path(klodi_home), _CA_BETA_PEM)
     monkeypatch.setenv(_CA_FILE_ENV, str(env_ca))
 
-    ctx = build_tls_context(_TLS_URL, klodi_home=klodi_home)
+    ctx, _source = build_tls_context(_TLS_URL, klodi_home=klodi_home)
 
     assert ctx is not None
     assert _trusted_cns(ctx) == {_CA_ALPHA_CN}, (
@@ -170,7 +170,7 @@ def test_env_override_short_circuits_persisted_not_even_read(
     monkeypatch.setenv(_CA_FILE_ENV, str(env_ca))
 
     # Must NOT raise — proves the malformed persisted file was never touched.
-    ctx = build_tls_context(_TLS_URL, klodi_home=klodi_home)
+    ctx, _source = build_tls_context(_TLS_URL, klodi_home=klodi_home)
 
     assert ctx is not None
     assert _trusted_cns(ctx) == {_CA_ALPHA_CN}
@@ -185,7 +185,7 @@ def test_persisted_register_ca_is_trusted_when_no_env(klodi_home: Path) -> None:
     'register → done')."""
     _write(_persisted_ca_path(klodi_home), _CA_BETA_PEM)
 
-    ctx = build_tls_context(_TLS_URL, klodi_home=klodi_home)
+    ctx, _source = build_tls_context(_TLS_URL, klodi_home=klodi_home)
 
     assert ctx is not None
     assert _trusted_cns(ctx) == {_CA_BETA_CN}, (
@@ -204,7 +204,7 @@ def test_no_persisted_and_no_env_falls_through_to_system_store(
     """[unit] Env unset, no persisted nats_ca, bundled constant empty → falls
     through to the system trust store (a verifying default context that trusts
     NEITHER test CA). No regression from pre-change."""
-    ctx = build_tls_context(_TLS_URL, klodi_home=klodi_home)
+    ctx, _source = build_tls_context(_TLS_URL, klodi_home=klodi_home)
 
     assert ctx is not None
     trusted = _trusted_cns(ctx)
@@ -223,7 +223,7 @@ def test_manual_ca_host_unchanged_when_response_omits_nats_ca(
     env_ca = _write(tmp_path / "env-ca.pem", _CA_ALPHA_PEM)
     monkeypatch.setenv(_CA_FILE_ENV, str(env_ca))
 
-    ctx = build_tls_context(_TLS_URL, klodi_home=klodi_home)
+    ctx, _source = build_tls_context(_TLS_URL, klodi_home=klodi_home)
 
     assert ctx is not None
     assert _trusted_cns(ctx) == {_CA_ALPHA_CN}
