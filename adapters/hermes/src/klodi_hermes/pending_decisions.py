@@ -169,8 +169,10 @@ def handle_pending_decisions(_args: dict[str, Any], **_kwargs: Any) -> str:
 
 def register_pending_tools(ctx: Any) -> int:
     """Register ``klodi_pending_decisions`` on the host tool surface.
-    Host-local (no NATS subject) — NOT a cross-language catalog tool
-    (see ADR-0014 tool-symmetry axes)."""
+    Host-local (no NATS subject) — but a first-class cross-language catalog
+    tool: ``LOCAL_TOOLS.klodi_pending_decisions`` in ``packages/tool-catalog``
+    (D4 — a tool that ships must exist in the catalog). Its result is the
+    catalog's first top-level array; keep it byte-faithful to that entry."""
     from .tools import tool_emoji
 
     ctx.register_tool(
