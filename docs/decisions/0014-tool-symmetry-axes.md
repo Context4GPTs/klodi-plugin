@@ -3,16 +3,16 @@ id: 0014-tool-symmetry-axes
 title: Three tool-symmetry axes — manifest↔registered, referenced⊆catalog, catalog↔registered-by-name
 tags: [symmetry, drift, manifest, catalog, tools, openclaw, gate, contracts]
 card: fix-openclaw-manifest-tool-drift-add-symmetry-gate
-commit: d7e4a51
-updated_at: 2026-06-23
-updated_by_card: fix-klodi-searches-delete-catalog-drift
+commit: 565243c
+updated_at: 2026-07-04
+updated_by_card: wake-relay-tools-absent-from-tool-catalog
 ---
 
 # ADR-0014 — Three tool-symmetry axes: manifest↔registered, referenced⊆catalog, catalog↔registered-by-name
 
 ## Status
 
-Accepted (2026-06-22). Extended 2026-06-23 (card `fix-klodi-searches-delete-catalog-drift`) with the **third axis** and its gate `scripts/check-catalog-registered.sh` — see the third table row, the "Why a third axis" section, and Alternative #5.
+Accepted (2026-06-22). Extended 2026-06-23 (card `fix-klodi-searches-delete-catalog-drift`) with the **third axis** and its gate `scripts/check-catalog-registered.sh` — see the third table row, the "Why a third axis" section, and Alternative #5. Extended 2026-07-04 (card `wake-relay-tools-absent-from-tool-catalog`): the first-axis D4 gate `check-adapter-tools.sh` turned out to be **detected-but-never-enforced** — see "The first-axis gate was detected-but-not-enforced" below, which corrects the enforcement corollary, plus the `STRICT_ADAPTER_TOOLS=1` precondition it exposes.
 
 Affects the openclaw adapter and the three symmetry gates that guard its tool surface: `scripts/check-openclaw-manifest-tools.sh`, the pre-existing `scripts/check-adapter-tools.sh` (Decision D4), and `scripts/check-catalog-registered.sh`.
 
@@ -54,6 +54,21 @@ The resolution was DROP, not register: the delete capability stays reachable via
 
 Note the openclaw-specificity of this axis: openclaw registers each request/reply tool **individually by name**, whereas the Python adapters (hermes, nanobot) dispatch *all* request/reply tools generically by iterating `TOOL_SCHEMAS`. So the same ghost surfaced non-404 on Python (an accidental byproduct of generic iteration) and 404 on openclaw. The gate keys on the openclaw `name:` literals because openclaw is the in_agent host where by-name resolution is the actual contract.
 
+### The first-axis gate was detected-but-not-enforced (2026-07-04)
+
+The Corollaries below assert the D4 gate `check-adapter-tools.sh` "already has" in-repo vitest enforcement. **For the first axis that was aspirational, not true**, and the gap shipped two un-catalogued tools. Card `wake-relay-tools-absent-from-tool-catalog` found `klodi_message_user` and `klodi_pending_decisions` registered by hermes (`message.py`, `pending_decisions.py`) yet absent from `LOCAL_TOOLS`. The gate **detected** the drift — run live it printed `unknown: klodi_message_user` / `unknown: klodi_pending_decisions` and exited 1 — but nothing **enforced** that signal:
+
+1. **No CI, and the one vitest that shelled the gate ignored its exit.** `match-feedback-additive.test.ts` asserts only a card-scoped `missing:` substring, never exit 0 / no-`unknown` (the same scoping the other axes' wrappers use). So a real `unknown` never failed a test.
+2. **The gate was chronically red from its own deny-list false-positives.** `extract_referenced_names`'s regex did not match what its header claimed to exclude — it leaked `klodi_photos_resolution_failed` (a `*_failed` log event), `klodi_wake_pump_host` (a `bridge.py` dataclass attr), and `klodi_logger` / `klodi_rust_host` (internal package names). A permanently-red gate carries no signal, so genuine `unknown` drift sat buried in the noise.
+
+Second-axis blindness compounded it: Invariant 2 (`required-local ⊆ adapter-source`) derives its required set *from* the catalog, so it structurally **cannot** flag a tool missing from the catalog. Only Invariant 1 (`referenced ⊆ catalog`) covers this class, and its signal was buried.
+
+The fix closed both halves: hardened the deny-list so a clean tree is GREEN (regex brought in line with the header — suffix rule `_(loaded|error|failed|chmod_failed)$` subsumes the old special-cases; internal packages folded into one alternation), then added an **enforced** wrapper `packages/tool-catalog/tests/wake-relay-tools-gate.test.ts` that regenerates codegen, shells the gate, and asserts no `unknown: <wake-tool>` plus a drop-a-tool regression guard. **Lesson: a gate that emits a red exit is not "enforced" until a test asserts that exit; detection ≠ enforcement.**
+
+### `STRICT_ADAPTER_TOOLS=1` has a precondition that is not yet met
+
+The gate hard-fails on `unknown` but treats `missing` (a host that doesn't register a catalog local-tool for its shape) as WARN unless `STRICT_ADAPTER_TOOLS=1` (`check-adapter-tools.sh:221-238`); the gate's own comment invites flipping strict "in a follow-up commit once every in_agent host has the LOCAL_TOOLS registry's full surface implemented." **That precondition is now unmet by exactly these two tools.** `klodi_message_user` / `klodi_pending_decisions` carry `host_shapes: ["in_agent"]` but ship only in hermes — the operator round-trip delivers *out of turn* via hermes' `gateway.delivery.DeliveryRouter` ([[0020-operator-escalation-delivery-binding]]), which openclaw (synchronous in-agent MCP) and nanobot have no equivalent for. So both surface as WARN-only `missing` for openclaw + nanobot — a **true** cross-adapter gap, correctly non-strict today. Flipping strict now would turn these two RED. Before that flip a future card must either implement the wake round-trip in openclaw/nanobot **or** give the catalog a hermes-scoping axis (the `host_shapes` enum has no per-adapter value — declaring `["in_agent"]` was the deliberate, YAGNI-correct choice for two tools). Do not "fix" the warning by narrowing `host_shapes` to a hermes-only hack.
+
 ### Corollaries
 
 - **No deny-list on the manifest gate.** `check-adapter-tools.sh` scans *all* adapters for *any* bare `klodi_*` literal, so it must deny-list non-tool tokens (log-event names like `klodi_plugin_loaded`, env keys like `klodi_home`, package names like `klodi_logger`). The manifest gate scopes extraction to `name:` fields *inside* `registerTool({…})` blocks (a small `-A3` window after the opener), so those tokens are excluded **by construction** — no deny-list needed. The narrower extraction is the reason the two gates cannot share code.
@@ -92,4 +107,5 @@ Note the openclaw-specificity of this axis: openclaw registers each request/repl
 - **The three registrations that had drifted (manifest axis):** `adapters/openclaw/src/tools/discovery.ts:94` (`klodi_searches_create`), `:302` (`klodi_match_feedback`), `adapters/openclaw/src/tools/setup.ts:189` (`klodi_setup_reseed_skill`).
 - **The ghost that hid on the third axis:** `klodi_searches_delete` — declared in `klodiTools` (`packages/tool-catalog/src/index.ts`), consumed only as a `.subject` inside `registerUnwatch`, never registered by name → dropped by card `fix-klodi-searches-delete-catalog-drift`; the `p2p.v1.searches.delete` subject survives under `klodi_unwatch`.
 - **The other axis (should-be-registered):** `scripts/check-adapter-tools.sh` and Decision **D4** in `docs/reviews/2026-04-26-klodi-plugin-multi-lens-review-decisions.md`.
+- **The first-axis enforcement gap this ADR corrects (2026-07-04):** the enforced wrapper `packages/tool-catalog/tests/wake-relay-tools-gate.test.ts` (regen codegen → shell the gate → assert no `unknown: <wake-tool>` + drop-a-tool regression guard + a deny-list over-broadening guard that reads the live `grep -vE` patterns and fails if any swallow a real catalog name); the hardened deny-list in `scripts/check-adapter-tools.sh::extract_referenced_names`; and the two now-catalogued tools `klodi_message_user` / `klodi_pending_decisions` in `packages/tool-catalog/src/local-tools.ts` (`host_shapes: ["in_agent"]`, hermes-only round-trip — see [[0020-operator-escalation-delivery-binding]]).
 - **Test-wrapper precedent:** `packages/tool-catalog/tests/match-feedback-additive.test.ts` — the `execFileSync("bash", [GATE])` pattern the new test mirrors.
