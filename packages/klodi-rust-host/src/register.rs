@@ -58,6 +58,11 @@ struct SessionEnvelope {
     user_id: Option<String>,
     nkey_public: Option<String>,
     nats_url: Option<String>,
+    /// The register-response CA (card `auto-trust-nats-ca-from-register`).
+    /// OPTIONAL — absent / null / empty ⇒ older `@klodi/web`; persist
+    /// nothing, never fail registration. NOT in the required-field chain in
+    /// `persist_session`.
+    nats_ca: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -254,6 +259,24 @@ async fn persist_session(klodi_home: &Path, env: &SessionEnvelope) -> Result<()>
         "nats_url": nats_url,
     }))?;
     write_secret(klodi_home.join("config.json"), config_bytes).await?;
+
+    // Auto-trust the register-response CA (card
+    // auto-trust-nats-ca-from-register): the ONE rust-host persist site
+    // covers moltis + ironclaw + zeroclaw. `nats_ca` is OPTIONAL — it is not
+    // in the `context()?` required-field chain above, so its absence never
+    // fails registration. The shared helper skips an empty / non-PEM-shaped
+    // value and never Errs, and an omission on a later re-register does NOT
+    // delete the persisted file ("no update" ≠ "revoke"). A fresh value
+    // overwrites → re-register is the CA-rotation path.
+    if let Some(nats_ca) = env.nats_ca.clone() {
+        let home = klodi_home.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            klodi_nats_client::persist_nats_ca(&home, &nats_ca)
+        })
+        .await
+        .context("spawn_blocking persist_nats_ca")?
+        .context("persisting register nats_ca")?;
+    }
     Ok(())
 }
 

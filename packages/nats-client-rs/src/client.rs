@@ -29,7 +29,7 @@ use async_nats::jetstream::{self, Context as JetStreamContext};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,6 +74,10 @@ struct Connected {
 pub struct KlodiClient {
     config: Arc<KlodiConfig>,
     creds: Arc<String>,
+    /// `${KLODI_HOME}` — the creds-path parent. Locates the persisted
+    /// register CA (`${KLODI_HOME}/nats-ca.pem`) at connect without any
+    /// upward `KLODI_HOME` re-resolution in this lower-layer package.
+    klodi_home: Arc<PathBuf>,
     state: Arc<Mutex<Option<Connected>>>,
     notifications_sub: Arc<Mutex<Option<ActiveSubscription>>>,
     channels_sub: Arc<Mutex<Option<ActiveSubscription>>>,
@@ -88,9 +92,16 @@ impl KlodiClient {
     pub async fn new(creds_path: &Path, config_path: &Path) -> Result<Self, KlodiError> {
         let config = load_config(config_path)?;
         let creds = load_creds(creds_path)?;
+        // The persisted register CA lives beside the creds; derive the home
+        // from the creds-path parent rather than re-resolving KLODI_HOME.
+        let klodi_home = creds_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
         Ok(Self {
             config: Arc::new(config),
             creds: Arc::new(creds),
+            klodi_home: Arc::new(klodi_home),
             state: Arc::new(Mutex::new(None)),
             notifications_sub: Arc::new(Mutex::new(None)),
             channels_sub: Arc::new(Mutex::new(None)),
@@ -143,7 +154,7 @@ impl KlodiClient {
         // disabled. `wss://` keeps async-nats' default system TLS.
         if self.config.nats_url.starts_with("tls://") {
             options = options.require_tls(true);
-            if let Some(ca_path) = resolve_ca_file()? {
+            if let Some(ca_path) = resolve_ca_file(&self.klodi_home)? {
                 options = options.add_root_certificates(ca_path);
             }
         }

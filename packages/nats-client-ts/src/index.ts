@@ -18,6 +18,8 @@ export {
 
 export {
   CaTrustError,
+  natsCaPath,
+  persistNatsCa,
   resolveTlsCa,
 } from "./tls.js";
 

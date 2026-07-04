@@ -49,6 +49,7 @@ from klodi_nats_client import (
     KlodiRequestError,
     assert_encrypted_or_localhost,
     default_klodi_home,
+    persist_nats_ca,
 )
 from klodi_nats_client.constants import (
     REGISTER_POLL_CEILING_SECONDS,
@@ -646,6 +647,18 @@ def _persist_credentials(result: dict[str, Any]) -> None:
             indent=2,
         ),
     )
+
+    # Auto-trust the register-response CA (card
+    # auto-trust-nats-ca-from-register): `nats_ca` is OPTIONAL — absent from
+    # the required-field loop above, so its absence never fails
+    # registration. The shared helper skips a non-string / empty /
+    # non-PEM-shaped value and never raises; an omission on a later
+    # re-register does NOT delete the persisted file ("no update" ≠
+    # "revoke"). A fresh value overwrites → re-register is the CA-rotation
+    # path.
+    nats_ca = result.get("nats_ca")
+    if isinstance(nats_ca, str):
+        persist_nats_ca(klodi_home, nats_ca)
 
 
 # ── klodi_health ─────────────────────────────────────────────────────

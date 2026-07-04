@@ -3,9 +3,9 @@ id: 0022-tls-nats-transport-private-ca-trust
 title: Client `tls://` NATS transport with private-CA trust — verify-ON, private-CA-only, fail-closed
 tags: [nats, tls, transport, ca, trust, security, guard, vendoring, adapters, parity, railway]
 card: support-tls-nats-transport-with-private-ca-trust
-commit: 357af14
-updated_at: 2026-07-02
-updated_by_card: support-tls-nats-transport-with-private-ca-trust
+commit: 6deaba1
+updated_at: 2026-07-04
+updated_by_card: auto-trust-nats-ca-from-register
 ---
 
 # ADR-0022 — Client `tls://` NATS transport with private-CA trust
@@ -29,7 +29,7 @@ Moving TLS termination from the edge to NATS is **end-to-end better**, not a dow
 
 - **Widen the shared guard to a two-scheme allow-list and rename it.** `assert_wss_or_localhost` → `assert_encrypted_or_localhost` (`assertEncryptedOrLocalhost` in TS), accepting `wss://` **and** `tls://`, still rejecting plaintext `nats://`/`ws://` against non-localhost, still bypassing for localhost. Renamed rather than shimmed because the name was a lie once it accepted `tls://` (CLAUDE.md no-backcompat: no re-export of the old name). All **seven** sites route through the *single* shared guard per language — the four adapter persist paths dropped their inline `startsWith("wss://")` + local `_is_localhost` copies and now call the shared guard (connect-time and persist-time are one control, not two divergent ones).
 
-- **Distribute the private CA via a `tool-catalog` codegen constant, with a file override.** `KLODI_NATS_CA_PEM` (empty placeholder today) is added to `packages/tool-catalog/src/index.ts` alongside `KLODI_DEFAULT_NATS_URL`, so one source flows to py (`schemas.json`), rs (`rust-types.rs`), and the TS export — no three divergent asset-loaders. The CA *certificate* is non-secret, so bundling it is safe and scales to arbitrary NAT'd laptops with zero per-host config. `KLODI_NATS_CA_FILE` (a PEM path) is a higher-priority override for local test CAs and emergency rotation without a client release. **Resolution order (identical in all three langs): `KLODI_NATS_CA_FILE` → bundled `KLODI_NATS_CA_PEM` → system trust store.** The override selects *which* CA to trust, **never *whether* to verify** — a set-but-unreadable `KLODI_NATS_CA_FILE` fails closed (raises `CaTrustError` py/ts, `KlodiError` rs), never a silent plaintext drop.
+- **Distribute the private CA via a `tool-catalog` codegen constant, with a file override.** `KLODI_NATS_CA_PEM` (empty placeholder today) is added to `packages/tool-catalog/src/index.ts` alongside `KLODI_DEFAULT_NATS_URL`, so one source flows to py (`schemas.json`), rs (`rust-types.rs`), and the TS export — no three divergent asset-loaders. The CA *certificate* is non-secret, so bundling it is safe and scales to arbitrary NAT'd laptops with zero per-host config. `KLODI_NATS_CA_FILE` (a PEM path) is a higher-priority override for local test CAs and emergency rotation without a client release. **Resolution order (identical in all three langs): `KLODI_NATS_CA_FILE` → bundled `KLODI_NATS_CA_PEM` → system trust store.** *(A level-2 persisted register-response CA step was inserted 2026-07-04 — see Addendum below for the updated four-level order.)* The override selects *which* CA to trust, **never *whether* to verify** — a set-but-unreadable `KLODI_NATS_CA_FILE` fails closed (raises `CaTrustError` py/ts, `KlodiError` rs), never a silent plaintext drop.
 
 - **Private-CA trust is verify-ON, private-CA-*only*, and consistent across all three languages.** When a CA is configured, each client trusts *only* that CA (system roots replaced), which is the tighter posture for a proxy that presents a private chain:
   - **py** — `ssl.create_default_context(cadata=<pem>)` trusts only the supplied CA; `check_hostname=True` + `verify_mode=CERT_REQUIRED` asserted.
@@ -50,10 +50,29 @@ The `tls://<svc>.proxy.rlwy.net:<port>` endpoint and the real CA don't exist unt
 
 1. **Widen only the three connect guards.** Rejected — the four adapter persist paths would refuse to persist the server's `tls://` URL; registration fails closed. The guard is a two-family control.
 2. **Rip out the WebSocket transport entirely.** Rejected — local dev + all three integration harnesses connect over `ws://localhost`; blast radius far beyond this card. `tls://` is additive.
-3. **Deliver the CA in the `/register` response.** Rejected as baseline — adds an unconfirmed server contract and only trusts the CA *after* registration; bundling works before/without registration and needs no server change. (The `KLODI_NATS_CA_FILE` override covers rotation.)
+3. **Deliver the CA in the `/register` response.** Rejected as baseline — adds an unconfirmed server contract and only trusts the CA *after* registration; bundling works before/without registration and needs no server change. (The `KLODI_NATS_CA_FILE` override covers rotation.) **Reversed 2026-07-04** (card `auto-trust-nats-ca-from-register`, epic `nats-ws-ingress-flap-2026-06`): now the server contract *is* being confirmed (`serve-nats-ca-in-sessions-api`), the register-response CA is added as an **additive** persisted trust source ranked *above* the bundle — not the baseline this alternative warned against (the bundle stays as fallback; onboarding + rotation no longer need a client release). See *Addendum* below.
 4. **Flip `KLODI_DEFAULT_NATS_URL` to the proxy endpoint now.** Rejected — the endpoint isn't provisioned, and it's a fallback constant, not the runtime source.
 5. **Additive CA trust (private CA + system roots).** Rejected — private-CA-only is tighter and the proxy never presents a public chain; keeping the three languages consistent is the point.
 6. **Disable cert verification to "make it connect."** Forbidden — the core invariant. No `rejectUnauthorized:false` / `ssl.CERT_NONE` / `check_hostname=False` / `danger_accept_invalid_certs`, and no env var/flag that can toggle verification off.
+
+## Addendum (2026-07-04) — register-response CA as a persisted trust source
+
+Card `auto-trust-nats-ca-from-register` (epic `nats-ws-ingress-flap-2026-06`, PR #49) adds the marketplace `/register` completed-session response's optional `nats_ca` field as a **new, additive** CA trust source, persisted to `${KLODI_HOME}/nats-ca.pem` and trusted at `tls://` connect — so a host onboards with just "register → done," no manual `KLODI_NATS_CA_FILE`. This **reverses Alt #3** now the server contract is being confirmed by the paired marketplace card `serve-nats-ca-in-sessions-api`, but as an *additive* source ranked above the bundle — not the wire-CA-as-baseline Alt #3 warned against.
+
+**Updated resolution order (identical in py / ts / rs) — level 2 is new:**
+
+1. `KLODI_NATS_CA_FILE` env — explicit operator override. **Short-circuits: when set, the persisted file is not even read.** *(unchanged)*
+2. **`${KLODI_HOME}/nats-ca.pem` — the persisted register-response CA. NEW.** Present-but-unreadable/invalid → fail closed; absent → fall through.
+3. bundled `KLODI_NATS_CA_PEM` catalog constant — static fallback. *(unchanged)*
+4. system trust store — final fallback, verify-ON. *(unchanged)*
+
+Ranked **above** the bundle because it is server-authoritative, endpoint-matched to the served `nats_url`, and rotatable without a client release (re-register overwrites — last-write-wins — so registration *is* the CA-rotation path; the bundle stays a static belt-and-suspenders fallback and `KLODI_NATS_CA_FILE` the emergency hatch). Ranked **below** `KLODI_NATS_CA_FILE` so explicit operator config is never silently overridden — strict short-circuit, no CA union, no divergence read (diffing two CAs purely to log would be needless I/O).
+
+**No net trust-boundary widening.** Accepting `nats_ca` adds no new trust surface: the `/register` response is *already* trusted for `nats_url` + `nats_creds`, and `assert_encrypted_or_localhost` still confines the scheme. The CA rides the *same already-trusted HTTPS channel* as the URL + creds — a compromised `/register` can already redirect `nats_url`, so trusting its CA is strictly within the boundary the register flow already has. Still verify-ON, private-CA-only, fail-closed: a malformed/unreadable persisted CA raises at connect (`CaTrustError` py/ts, async-nats handshake error rs), never a verify-off fallback. The three `verification_never_disabled` ratchets were **extended** to the new `tls.*` / `paths.py` / persist-site surface; no env var *or wire field* can toggle verification off.
+
+**Six-adapter symmetry.** One shared `persist_nats_ca` + `nats_ca_path` per language, and a single `klodi-rust-host::register.rs` persist site (covering moltis + ironclaw + zeroclaw), keep all six adapters byte-for-byte. `nats_ca` is OPTIONAL — never added to a required-field loop, a CA problem never fails registration, and omission on a later re-register never revokes the persisted file. One accepted seam: the TS `persistNatsCa` fs helper does not emit the `nats_ca_persist_skipped` info breadcrumb that py/rs do (no logger injected at that pure-fs helper) — an info-level diagnostic gap only, tracked as optional follow-up, not a verification or persistence divergence.
+
+The on-disk file contract (mode `0644` non-secret, atomic write, `KLODI_HOME` derived from the creds-path parent) lives in `docs/knowledge/environment.md`. **Cross-repo:** the `nats_ca` field name/shape must be reconciled against the *merged* `serve-nats-ca-in-sessions-api` before prod trust; the plugin change is forward-compatible and inert until web emits the field (mirrors the client-before-server cutover ordering above).
 
 ## Security implications
 

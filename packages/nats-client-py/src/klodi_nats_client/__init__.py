@@ -47,7 +47,11 @@ from klodi_nats_client.constants import (
     KLODI_NATS_CA_PEM,
     MAX_CHANNEL_MESSAGE_CHARS,
 )
-from klodi_nats_client.tls import CaTrustError, build_tls_context
+from klodi_nats_client.tls import (
+    CaTrustError,
+    build_tls_context,
+    persist_nats_ca,
+)
 from klodi_nats_client.consumers import (
     ActiveSubscription,
     ChannelHandler,
@@ -64,6 +68,8 @@ from klodi_nats_client.paths import (
     default_config_path,
     default_creds_path,
     default_klodi_home,
+    default_nats_ca_path,
+    nats_ca_path,
 )
 from klodi_nats_client.events import (
     ChannelLifecycleEvent,
@@ -153,8 +159,11 @@ __all__ = [
     "default_config_path",
     "default_creds_path",
     "default_klodi_home",
+    "default_nats_ca_path",
     "is_localhost",
     "load_config",
     "load_creds",
+    "nats_ca_path",
+    "persist_nats_ca",
     "publish_match_feedback",
 ]
