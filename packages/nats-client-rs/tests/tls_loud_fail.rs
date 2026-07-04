@@ -5,7 +5,7 @@
 //! `tls-loud-fail.test.ts` contract, for the async-nats/rustls family.
 //!
 //! ⚠️ COMPILE-RED (intentional, contained). This file references the NEW
-//! `KlodiError::CaTrust { source, message }` variant that is the Rust
+//! `KlodiError::CaTrust { ca_source, message }` variant that is the Rust
 //! deliverable of this card. Until the expert-developer adds it, THIS file
 //! fails to compile — the compiler error naming the missing variant IS the RED
 //! signal for a statically-typed new API. Per repo convention the new-symbol

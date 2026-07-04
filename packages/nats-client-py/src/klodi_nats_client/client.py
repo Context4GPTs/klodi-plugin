@@ -222,9 +222,14 @@ class KlodiClient:
         # so no upward KLODI_HOME re-resolution happens here (layering).
         klodi_home = Path(self._creds_path).parent
         tls_ctx = build_tls_context(config.nats_url, klodi_home=klodi_home)
-        # Attribute a connect-time TLS-verify failure to the served CA. Only
-        # meaningful for `tls://`; `None` otherwise so the classifier stays
-        # inert on the WS path.
+        # Attribution label ONLY — this does not gate the classifier.
+        # `_is_ca_verify_error` keys on the error *type* (`SSLCertVerificationError`),
+        # so the terminal reclassification fires on any transport; a cert-verify
+        # failure is terminal-worthy on `wss://` too. We resolve the served-CA
+        # source string only for `tls://` (where a served CA exists) so the
+        # message names it; `None` elsewhere renders "served NATS CA (None) …",
+        # which is acceptable because a bare `SSLCertVerificationError` on a
+        # `wss://` initial connect is aiohttp-wrapped and does not reach here.
         self._ca_source = (
             describe_ca_source(klodi_home)
             if config.nats_url.startswith("tls://")
