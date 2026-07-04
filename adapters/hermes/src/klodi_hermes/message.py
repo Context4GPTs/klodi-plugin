@@ -267,7 +267,10 @@ def handle_message_user(args: dict[str, Any], **_kwargs: Any) -> str:
 
 def register_message_tools(ctx: Any) -> int:
     """Register ``klodi_message_user`` on the host tool surface. Host-local
-    (no NATS subject) — NOT a cross-language catalog tool (ADR-0014)."""
+    delivery (turn-less send + disk persist, no NATS subject) — but a
+    first-class cross-language catalog tool: ``LOCAL_TOOLS.klodi_message_user``
+    in ``packages/tool-catalog`` (D4 — a tool that ships must exist in the
+    catalog). Its params/result MUST stay byte-faithful to that entry."""
     from .tools import tool_emoji
 
     ctx.register_tool(

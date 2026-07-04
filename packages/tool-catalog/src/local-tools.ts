@@ -319,6 +319,81 @@ export const LOCAL_TOOLS = {
     kind: "publish",
     host_shapes: ["in_agent"],
   },
+
+  klodi_message_user: {
+    name: "klodi_message_user",
+    // Mirrors `_MESSAGE_USER_DESCRIPTION` in
+    // `adapters/hermes/src/klodi_hermes/message.py` byte-for-byte — the
+    // catalog is the cross-language contract, so it must not paraphrase
+    // the shipped registration.
+    description:
+      "Actively reach the human operator from an isolated wake turn — where your"
+      + " closing chat text reaches no one — when the wake cannot be resolved"
+      + " autonomously and needs the operator's decision or input: a decision"
+      + " reserved for them by policy (negotiation_style.md `Always Ask Me First` /"
+      + " `Escalation When Unknown`, or a security.md hard rule), a live"
+      + " counterparty left waiting, or an inbound you declined to act on. Being"
+      + " unsure or stuck is a decision for the human, not an informational note."
+      + " Delivers a real-time, self-contained message into the operator's live"
+      + " session and records a pending-decision so their reply drives the right"
+      + " action. Do NOT ping for decisions the policy authorizes you to handle"
+      + " alone, nor for a purely-informational status wake where no counterparty"
+      + " is waiting and no decision is open.",
+    // Host-local delivery (turn-less send + disk persist), NOT a NATS
+    // publish — but a first-class catalog tool all the same (D4).
+    params: Type.Object(
+      {
+        text: Type.String({
+          minLength: 1,
+          description:
+            "The self-contained message to the operator — name the listing /"
+            + " counterparty, the question, and the options so a natural-language"
+            + " reply is interpretable hours later with no wake context.",
+        }),
+      },
+      { additionalProperties: false },
+    ),
+    result: Type.Object({
+      delivered: Type.Boolean(),
+      platform: Type.String(),
+      chat_id: Type.String(),
+      entity_id: Type.String(),
+      pending_status: Type.String(),
+    }),
+    kind: "local",
+    host_shapes: ["in_agent"],
+  },
+
+  klodi_pending_decisions: {
+    name: "klodi_pending_decisions",
+    // Mirrors `_PENDING_DECISIONS_DESCRIPTION` in
+    // `adapters/hermes/src/klodi_hermes/pending_decisions.py`.
+    description:
+      "List the open human-in-the-loop decisions awaiting the operator's"
+      + " reply. Scan at the start of every operator turn: when their message"
+      + " answers one, re-ground the entity's current state via the klodi read"
+      + " tools, act on the bound entity, then the decision is resolved.",
+    params: Type.Object({}, { additionalProperties: false }),
+    // The FIRST top-level array result in the registry: `handle_pending_decisions`
+    // returns `json.dumps([asdict(record) for record in open_pending()])` — a
+    // JSON array of PendingDecision records, not an object. The `PendingDecision`
+    // dataclass (pending_decisions.py:64-79) is these 8 string fields; `asked_at`
+    // is narrowed to `Iso8601` because `_now_iso()` emits `%Y-%m-%dT%H:%M:%SZ`.
+    result: Type.Array(
+      Type.Object({
+        entity_type: Type.String(),
+        entity_id: Type.String(),
+        event_id: Type.String(),
+        question: Type.String(),
+        asked_at: Iso8601,
+        platform: Type.String(),
+        chat_id: Type.String(),
+        status: Type.String(),
+      }),
+    ),
+    kind: "local",
+    host_shapes: ["in_agent"],
+  },
 } as const satisfies Record<string, LocalToolEntry>;
 
 export type LocalToolName = keyof typeof LOCAL_TOOLS;
