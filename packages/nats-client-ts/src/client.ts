@@ -36,6 +36,7 @@ import {
   type JetStreamManager,
 } from "@nats-io/jetstream";
 import { WebSocket as NodeWebSocket } from "ws";
+import { dirname } from "node:path";
 import type {
   ChannelMessageEvent,
   NotificationEvent,
@@ -487,7 +488,12 @@ export class KlodiClient {
     creds: Uint8Array,
     delayHandler: () => number,
   ): Promise<NatsConnection> {
-    const ca = natsUrl.startsWith("tls://") ? resolveTlsCa() : undefined;
+    // `klodiHome` is the creds-path parent — the persisted register CA
+    // (`${KLODI_HOME}/nats-ca.pem`) lives in the same home as the creds, so
+    // no upward KLODI_HOME re-resolution happens in this package (layering).
+    const ca = natsUrl.startsWith("tls://")
+      ? resolveTlsCa(dirname(this.args.credsPath))
+      : undefined;
     return nodeConnect({
       servers: natsUrl,
       authenticator: credsAuthenticator(creds),

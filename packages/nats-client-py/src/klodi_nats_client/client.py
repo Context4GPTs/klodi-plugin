@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from nats.aio.client import Client as NATSClient
@@ -184,7 +185,12 @@ class KlodiClient:
         # `tls://` → hand nats-py a verifying SSLContext that trusts the
         # private CA (cert + hostname verification stays ON). `None` for
         # `wss://` (nats-py's system-default TLS) and `ws://localhost`.
-        tls_ctx = build_tls_context(config.nats_url)
+        # `klodi_home` is the creds-path parent — the persisted register CA
+        # (`${KLODI_HOME}/nats-ca.pem`) lives in the same home as the creds,
+        # so no upward KLODI_HOME re-resolution happens here (layering).
+        tls_ctx = build_tls_context(
+            config.nats_url, klodi_home=Path(self._creds_path).parent
+        )
 
         nc = NATSClient()
         await nc.connect(

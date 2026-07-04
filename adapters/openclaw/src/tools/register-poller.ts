@@ -11,7 +11,7 @@
 
 import type { PluginAPI } from "openclaw/plugin-sdk";
 import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
-import { assertEncryptedOrLocalhost } from "@klodi/nats-client";
+import { assertEncryptedOrLocalhost, persistNatsCa } from "@klodi/nats-client";
 import {
   REGISTER_POLL_CEILING_SECONDS,
   REGISTER_POLL_INTERVAL_SECONDS,
@@ -196,6 +196,19 @@ async function persistCompleted(
   writeConfig({
     handle, user_id: userId, nkey_public: nkeyPublic, nats_url: natsUrl,
   });
+
+  // Auto-trust the register-response CA (card
+  // auto-trust-nats-ca-from-register): `nats_ca` is OPTIONAL — it is NOT in
+  // the required-field check above, so an absent value never fails
+  // registration. The shared helper skips a non-string / empty /
+  // non-PEM-shaped value and never throws; an omission on a later
+  // re-register does not delete the persisted file ("no update" ≠
+  // "revoke"). A fresh value overwrites → re-register is the CA-rotation
+  // path.
+  const natsCa = data["nats_ca"];
+  if (typeof natsCa === "string") {
+    persistNatsCa(klodiHome, natsCa);
+  }
 
   const negotiationSeeded = seedNegotiationStyleIfAbsent();
   const securitySeeded = seedSecurityPolicyIfAbsent();

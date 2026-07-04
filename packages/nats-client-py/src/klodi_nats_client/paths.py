@@ -63,6 +63,23 @@ def default_config_path() -> Path:
     return default_klodi_home() / "config.json"
 
 
+def nats_ca_path(klodi_home: Path | str) -> Path:
+    """``${KLODI_HOME}/nats-ca.pem`` — the persisted register-response CA.
+
+    Single source of the persisted-CA filename, shared by the register-time
+    write (:func:`klodi_nats_client.tls.persist_nats_ca`) and the
+    connect-time resolve (level 2 of the ``tls://`` CA order) so the two can
+    never disagree on location. Unlike ``nats.creds`` (mode 0600, ADR-0002)
+    this file holds a non-secret CA certificate (ADR-0022 §Security).
+    """
+    return Path(klodi_home) / "nats-ca.pem"
+
+
+def default_nats_ca_path() -> Path:
+    """``${KLODI_HOME}/nats-ca.pem`` under the platform-default home."""
+    return nats_ca_path(default_klodi_home())
+
+
 def default_api_url() -> str:
     """Return the canonical klodi marketplace API URL.
 
@@ -82,4 +99,6 @@ __all__ = [
     "default_config_path",
     "default_creds_path",
     "default_klodi_home",
+    "default_nats_ca_path",
+    "nats_ca_path",
 ]

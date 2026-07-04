@@ -46,7 +46,11 @@ import urllib.request
 import uuid
 from typing import Any, Optional
 
-from klodi_nats_client import KLODI_DEFAULT_API_URL, assert_encrypted_or_localhost
+from klodi_nats_client import (
+    KLODI_DEFAULT_API_URL,
+    assert_encrypted_or_localhost,
+    persist_nats_ca,
+)
 from klodi_nats_client.secret_write import klodi_secret_write
 
 from .local_tools import (
@@ -369,6 +373,18 @@ def _persist_credentials(result: dict[str, Any]) -> None:
             indent=2,
         ),
     )
+
+    # Auto-trust the register-response CA (card
+    # auto-trust-nats-ca-from-register): `nats_ca` is OPTIONAL — it is not
+    # in the required-field loop above, so its absence never fails
+    # registration. The shared helper skips a non-string / empty /
+    # non-PEM-shaped value and never raises, and an omission on a later
+    # re-register does NOT delete the persisted file ("no update" ≠
+    # "revoke"). A fresh value overwrites → re-register is the CA-rotation
+    # path.
+    nats_ca = result.get("nats_ca")
+    if isinstance(nats_ca, str):
+        persist_nats_ca(klodi_home, nats_ca)
 
     # Local imports: avoid a top-level cycle with wake_pump_control and
     # client, both of which transitively pull from local_tools (which
