@@ -1,11 +1,11 @@
 ---
 id: 0022-tls-nats-transport-private-ca-trust
 title: Client `tls://` NATS transport with private-CA trust — verify-ON, private-CA-only, fail-closed
-tags: [nats, tls, transport, ca, trust, security, guard, vendoring, adapters, parity, railway, loud-fail, starttls]
+tags: [nats, tls, transport, ca, trust, security, guard, vendoring, adapters, parity, railway, loud-fail, starttls, precedence, resolver]
 card: support-tls-nats-transport-with-private-ca-trust
-commit: 7ca5b14
+commit: 1759d3b
 updated_at: 2026-07-04
-updated_by_card: gate-auto-trust-on-well-formed-ca-loud-fail
+updated_by_card: consolidate-ca-source-precedence-into-the-resolver
 ---
 
 # ADR-0022 — Client `tls://` NATS transport with private-CA trust
@@ -100,6 +100,14 @@ nats-py defaults `tls_handshake_first=False` and `KlodiClient` never overrides i
 1. **No pre-connect implicit-TLS probe.** An implicit ClientHello against the STARTTLS endpoint would read the plaintext INFO as its ServerHello → `wrong version number` → a *false* `CaTrust` on every connect. The fix intercepts the client's own handshake error instead — which is why the mechanisms above hook the client's connect callback (py) / classify the real connect error (rs/ts) rather than probing.
 2. **Negative TLS-trust tests must model the INFO prologue.** A self-contained *implicit*-TLS test server **deadlocks** a STARTTLS client (client waits for INFO; server waits for a ClientHello) → the client times out with `kind="timeout"`, never a cert error, so the test cannot validate *any* faithful fix. Self-contained negatives must send the plaintext `INFO`/`tls_required` line **then** upgrade (`test_tls_loud_fail.py` / `tls-loud-fail.test.ts` carry an opt-in `starttls` server mode for exactly this; the Pillar-A *positive* keeps a raw-handshake implicit server). The gated klodi-stage bed tests are unaffected — the real NATS is already STARTTLS.
 
+## Addendum (2026-07-04) — precedence + attribution consolidated into the single resolver
+
+Card `consolidate-ca-source-precedence-into-the-resolver` (epic `nats-ws-ingress-flap-2026-06`, PR #51) collapses the loud-fail attribution back into the one CA resolver per language: `resolve_ca_file` (rs) / `resolveTlsCa` (ts) / `build_tls_context` (py) now return the selected CA material **and** the source label *together*, formatted at the branch that selects each level, and the client interpolates that label into the loud-fail `CaTrust*` verbatim. The parallel attribution helper `describe_ca_source` / `describeCaSource` — which independently re-walked env → persisted → bundled and whose own docstring admitted *"precedence mirrors the resolver exactly"* — is **deleted** (no shim, no re-export).
+
+Why it matters: the four-level order above was encoded **twice per language** (resolver + attribution helper) = six drift sites. If the resolver's order changed and a helper wasn't updated in lockstep, the loud-fail named the **wrong** source and misdirected the operator's remedy. Now there is exactly one encoding per language, so **adding or removing a precedence level is a one-function edit and the attribution can never drift** — pinned by a per-language parity test (`ca_source_parity.rs` / `ca-source-parity.test.ts` / `test_ca_source_parity.py`) asserting *resolver-selected source == attributed source* for each level (env / persisted / bundled), plus an exhaustiveness guard. This closes the drift blind spot the loud-fail card (PR #50) shipped as a deferred P3 nit — a *potential*-drift refactor, never a live bug.
+
+Two seams preserved from the loud-fail addendum: (1) the `wss://` (non-`tls://`) path runs no resolve, so its Tls arm now attributes to `"system trust store"` (rs) — slightly more accurate than the old helper's incidental `"bundled KLODI_NATS_CA_PEM"`; verified no `wss://` assertion depended on the old string. (2) `ResolvedCa.source` / `ResolvedTlsCa.source` stays populated even when the CA `path`/`ca` is `None`/`undefined` (the empty-bundle system-store fall-through), so a system-store Tls failure keeps its attribution. The three label strings moved **byte-identical** — the operator-message contract (`served NATS CA (<source>) could not be trusted …`, asserted verbatim by `adapters/hermes/tests/test_bridge_bad_ca_surfacing.py`) is unchanged; rs stays paren-less per the per-language Display divergence.
+
 ## Security implications
 
 - **Verification is a hard invariant, ratcheted by tests.** Each language carries a `verification_never_disabled` unit test that greps the source for the insecure flags and asserts their absence, plus that no env var toggles verify off. `KLODI_NATS_CA_FILE` is not a backdoor — it can only change *which* CA is trusted.
@@ -115,6 +123,7 @@ nats-py defaults `tls_handshake_first=False` and `KlodiClient` never overrides i
 - Loud-fail structured type: `packages/nats-client-rs/src/error.rs:51` (`KlodiError::CaTrust { ca_source, message }`); `CaTrustError` in `tls.py` / `tls.ts`
 - Loud-fail initial-connect classifier: `packages/nats-client-py/src/klodi_nats_client/client.py` (`_is_ca_verify_error`, `_async_error_cb`, `_connecting_initial`), `packages/nats-client-rs/src/client.rs` (foreground `initial_connect`, drops `retry_on_initial_connect`), `packages/nats-client-ts/src/client.ts` (`connectTcp` / `isCaVerifyError`)
 - Loud-fail tests (STARTTLS-modelled negatives + transient-retry pairs): `packages/nats-client-py/tests/test_tls_loud_fail.py`, `packages/nats-client-ts/tests/tls-loud-fail.test.ts`, `packages/nats-client-rs/tests/tls_loud_fail.rs` (gated on the klodi-stage bed); hermes defect-site witness `adapters/hermes/tests/test_bridge_bad_ca_surfacing.py`
+- Consolidated resolver-returns-source (attribution single source of truth): `packages/nats-client-rs/src/tls.rs` (`ResolvedCa`), `packages/nats-client-ts/src/tls.ts` (`ResolvedTlsCa`, `resolveTlsCa`), `packages/nats-client-py/src/klodi_nats_client/tls.py` (`build_tls_context -> (ctx, source)`); parity pins `packages/nats-client-{rs,ts,py}/tests/{ca_source_parity.rs,ca-source-parity.test.ts,test_ca_source_parity.py}`
 - TS transport dispatch: `packages/nats-client-ts/src/client.ts:430` (`doConnect`), `:485` (`connectTcp`)
 - Node `ca` replace semantics: `@nats-io/transport-node` `lib/node_transport.js:191-192,220` forwards `ca` into `tls.connect`; Node `tls.createSecureContext` `ca` option (default Mozilla CAs *replaced* when specified)
 - Bundled-CA constant: `packages/tool-catalog/src/index.ts:735` (`KLODI_NATS_CA_PEM`), `:719` (`KLODI_DEFAULT_NATS_URL`)
