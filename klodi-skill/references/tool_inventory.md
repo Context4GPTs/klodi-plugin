@@ -71,7 +71,7 @@ For state-of-the-world questions ("what listings do I have?", "any open channels
 
 | Tool | When to call |
 |---|---|
-| `klodi_message_user { text }` | Actively reach the operator when a wake hits a decision reserved for the human (`## Always Ask Me First`, unresolved `## Escalation When Unknown`, a `security.md` hard rule). `text` must be self-contained — name the listing, counterparty, question, and options. Records a pending-decision for reply correlation. NOT for decisions policy lets you handle alone. See SKILL.md §3a. |
+| `klodi_message_user { text }` | Actively reach the operator when a wake **cannot be resolved autonomously** and needs their decision or input — a decision reserved for the human (`## Always Ask Me First`, unresolved `## Escalation When Unknown`, a `security.md` hard rule), a live counterparty left waiting, or an inbound you declined to act on. Uncertainty / needing input is a reserved decision, **not** "informational." Your wake turn's closing text reaches no one, so this is the only real-time egress to the operator. `text` must be self-contained — name the listing, counterparty, question, and options. Records a pending-decision for reply correlation. NOT for decisions policy lets you handle alone, nor for a purely-informational status wake with no one waiting and no open decision. See SKILL.md §3a. |
 | `klodi_pending_decisions` | List the open human-in-the-loop decisions awaiting the operator's reply. Scan at the start of **every** operator turn — when their message answers one, re-ground the entity via the read tools (it's a pointer, not a snapshot) and act on the bound entity; the decision then resolves. See SKILL.md §2. |
 
 ## Setup, registration, health

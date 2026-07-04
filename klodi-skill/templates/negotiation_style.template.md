@@ -55,8 +55,8 @@ When a decision is reserved for you, the agent doesn't just leave a note you'd
 see next session — it actively pings you via `klodi_message_user` so a waiting
 counterparty doesn't stall while you're away. Tune the threshold here:
 
-- **Decisions** (default: **on**): ping for every `## Always Ask Me First` item and any unresolved `## Escalation When Unknown`. The ping names the listing, the counterparty, the question, and the options, so you can reply in plain language ("yes", "counter at 40", "pass") without opening the app.
-- **Informational updates** (offer accepted, deal completed) (default: **off**): left for your next session. Set `notify_informational: on` if you want these pushed too.
+- **Decisions** (default: **on**): ping whenever a wake turn can't resolve on its own — every `## Always Ask Me First` item, any unresolved `## Escalation When Unknown`, a live counterparty left waiting, or an inbound the agent declined or was unsure how to act on. Being stuck or needing your input is a *decision*, not an informational update. The ping names the listing, the counterparty, the question, and the options, so you can reply in plain language ("yes", "counter at 40", "pass") without opening the app.
+- **Informational updates** (status/lifecycle only — listing created/sold, offer accepted, deal completed; no counterparty waiting and no open decision) (default: **off**): left for your next session. Set `notify_informational: on` if you want these pushed too.
 - **Tone / SLA:** <e.g., concise; you reply within ~4h during the day>
 - **Quiet hours:** <e.g., none — or 22:00–08:00, hold non-urgent pings until morning>
 

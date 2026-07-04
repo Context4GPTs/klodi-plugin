@@ -111,6 +111,56 @@ _EPHEMERAL_SESSION_PREFIX = "wake-"
 # field) — bounded to one wake, never a marketplace conversation.
 _EPHEMERAL_ENTITY_TYPE = "wake"
 
+# Wake kinds whose turn cannot always reach a resolved terminal state on its
+# own — a live counterparty may be left waiting, or a decision reserved for
+# the human may be open — so the rendered wake carries the terminal-disposition
+# contract below (Lever B, the load-bearing fix for the relay-never-delivers
+# defect). ``channel.message`` is ALWAYS delivery-warranting (a live
+# counterparty is on the other end) and is handled directly in
+# ``format_channel_wake``; this set is the notification-consumer half.
+#
+# Everything NOT listed here is purely-informational — a status/lifecycle
+# notification with no counterparty waiting and no open decision
+# (``listing.*`` lifecycle, ``offer.accepted`` / ``offer.rejected``,
+# ``transaction.completed`` / ``transaction.cancelled``, ``channel.closed``) —
+# and gets NO disposition line, so an informational wake never arms the ping.
+# That absence is the deterministic guard behind the AC3/AC4 over-ping risk:
+# arming every wake to reach the operator would degrade the high-signal
+# operator channel — the "warrants operator delivery vs purely informational"
+# classification (ADR-0023). An unmapped/future kind defaults to
+# informational (no ping) — the conservative direction.
+_DELIVERY_WARRANTING_NOTIFICATION_KINDS: frozenset[str] = frozenset({
+    "channel.opened",
+    "comment.created",
+    "offer.proposed",
+    "transaction.buyer_confirmed",
+    "transaction.seller_confirmed",
+    "search.match",
+})
+
+# Terminal-disposition contract — appended as plugin-authored framing, OUTSIDE
+# the untrusted JSON body, to every delivery-warranting wake. Root cause of the
+# defect: a wake runs in an isolated single-turn session and the turn's closing
+# assistant prose is captured by the bridge and DISCARDED on exit 0
+# (``BridgeCtx.inject_message``), so ending on a bare question ("…What should I
+# do?") reaches no one. Nothing the agent saw told it that. This line does — and
+# steers it to a real disposition: take the marketplace/in-channel action, or
+# call ``klodi_message_user`` to reach the operator when the decision is theirs.
+# Two sentences by design: it rides every warranting wake, so it must not bloat
+# the payload (the token/bloat constraint). It is STATIC plugin text (never
+# derived from the counterparty-controlled payload), so a prompt-injection in
+# the JSON body cannot forge or suppress it (THREAT_MODEL / SKILL §8). The
+# discard-on-exit-0 behavior this compensates for is intentional and
+# load-bearing — see bridge.py's exit-0 branch and ADR-0023.
+_TERMINAL_DISPOSITION_CONTRACT = (
+    "[klodi] Autonomous wake, isolated session: your closing chat text is NOT"
+    " delivered to anyone — it is discarded when the turn ends. End in a real"
+    " disposition — take the marketplace/in-channel action, or call"
+    " klodi_message_user to reach the operator when the decision is theirs (a"
+    " counterparty is waiting, the decision is reserved for the human, or you"
+    " declined/couldn't act) — never a bare question."
+)
+
 # A conversation's terminal events — after these the session is reclaimed
 # (best-effort ``drain_session``). channel.message/opened, offer.*,
 # listing.created etc. are mid-conversation and never drain.
@@ -320,17 +370,27 @@ def _summarize_notification(event: dict[str, Any]) -> str:
 
 
 def format_notification_wake(event: dict[str, Any]) -> str:
-    """Summary + JSON payload below it. The agent reads the summary,
-    then has the full structured payload available without any
-    follow-up tool call."""
+    """Summary + JSON payload below it, plus — for delivery-warranting kinds
+    only — the terminal-disposition contract as plugin framing below the
+    payload. The agent reads the summary, has the full structured payload
+    without any follow-up tool call, and (when the wake warrants operator
+    delivery) is told its closing prose reaches no one so it ends in a real
+    disposition instead of a discarded bare question. Purely-informational
+    kinds get no contract line — they must not arm the ping (over-ping guard;
+    see ``_DELIVERY_WARRANTING_NOTIFICATION_KINDS``)."""
     summary = _summarize_notification(event)
     body = json.dumps(event, indent=2, ensure_ascii=False)
-    return f"{summary}\n\n```json\n{body}\n```"
+    text = f"{summary}\n\n```json\n{body}\n```"
+    if str(event.get("kind", "")) in _DELIVERY_WARRANTING_NOTIFICATION_KINDS:
+        text = f"{text}\n\n{_TERMINAL_DISPOSITION_CONTRACT}"
+    return text
 
 
 def format_channel_wake(event: dict[str, Any]) -> str:
-    """Channel-message wake. The full message body is in ``content`` —
-    the agent doesn't need klodi_channel_history to read it."""
+    """Channel-message wake — ALWAYS delivery-warranting (a live counterparty
+    is on the other end, waiting). The full message body is in ``content`` —
+    the agent doesn't need klodi_channel_history to read it — and the
+    terminal-disposition contract rides below the payload as plugin framing."""
     sender = event.get("sender_handle", "(unknown)")
     channel = event.get("channel_id", "(unknown)")
     content = event.get("content", "")
@@ -338,6 +398,7 @@ def format_channel_wake(event: dict[str, Any]) -> str:
     return (
         f"[klodi] @{sender} on channel {channel}: \"{content}\""
         f"\n\n```json\n{body}\n```"
+        f"\n\n{_TERMINAL_DISPOSITION_CONTRACT}"
     )
 
 

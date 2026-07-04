@@ -108,13 +108,18 @@ _SESSION_SCAN_LIMIT = 50
 _SEND_TIMEOUT_SECONDS = 30
 
 _MESSAGE_USER_DESCRIPTION = (
-    "Actively reach the human operator when a marketplace decision is"
-    " reserved for them by policy (negotiation_style.md `Always Ask Me"
-    " First` / `Escalation When Unknown`, or a security.md hard rule)."
-    " Delivers a real-time, self-contained message into the operator's"
-    " live session and records a pending-decision so their reply drives"
-    " the right action. Do NOT use for decisions the policy authorizes"
-    " you to handle alone, nor for purely informational updates."
+    "Actively reach the human operator from an isolated wake turn — where your"
+    " closing chat text reaches no one — when the wake cannot be resolved"
+    " autonomously and needs the operator's decision or input: a decision"
+    " reserved for them by policy (negotiation_style.md `Always Ask Me First` /"
+    " `Escalation When Unknown`, or a security.md hard rule), a live"
+    " counterparty left waiting, or an inbound you declined to act on. Being"
+    " unsure or stuck is a decision for the human, not an informational note."
+    " Delivers a real-time, self-contained message into the operator's live"
+    " session and records a pending-decision so their reply drives the right"
+    " action. Do NOT ping for decisions the policy authorizes you to handle"
+    " alone, nor for a purely-informational status wake where no counterparty"
+    " is waiting and no decision is open."
 )
 
 
