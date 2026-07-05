@@ -3,9 +3,9 @@ id: 0022-tls-nats-transport-private-ca-trust
 title: Client `tls://` NATS transport with private-CA trust — verify-ON, private-CA-only, fail-closed
 tags: [nats, tls, transport, ca, trust, security, guard, vendoring, adapters, parity, railway, loud-fail, starttls, precedence, resolver]
 card: support-tls-nats-transport-with-private-ca-trust
-commit: 1759d3b
-updated_at: 2026-07-04
-updated_by_card: consolidate-ca-source-precedence-into-the-resolver
+commit: ced6bc6
+updated_at: 2026-07-05
+updated_by_card: collapse-nats-transport-guard-to-tls-only
 ---
 
 # ADR-0022 — Client `tls://` NATS transport with private-CA trust
@@ -108,6 +108,28 @@ Why it matters: the four-level order above was encoded **twice per language** (r
 
 Two seams preserved from the loud-fail addendum: (1) the `wss://` (non-`tls://`) path runs no resolve, so its Tls arm now attributes to `"system trust store"` (rs) — slightly more accurate than the old helper's incidental `"bundled KLODI_NATS_CA_PEM"`; verified no `wss://` assertion depended on the old string. (2) `ResolvedCa.source` / `ResolvedTlsCa.source` stays populated even when the CA `path`/`ca` is `None`/`undefined` (the empty-bundle system-store fall-through), so a system-store Tls failure keeps its attribution. The three label strings moved **byte-identical** — the operator-message contract (`served NATS CA (<source>) could not be trusted …`, asserted verbatim by `adapters/hermes/tests/test_bridge_bad_ca_surfacing.py`) is unchanged; rs stays paren-less per the per-language Display divergence.
 
+## Addendum (2026-07-05) — guard narrows to `tls://`-only; `wss://` rejected off-localhost
+
+Card `collapse-nats-transport-guard-to-tls-only` (epic `nats-tls-only-2026-07`, PR #53, release `0.3.11`) narrows the shared transport guard from the two-scheme `{wss://, tls://}` allow-list this ADR introduced down to **`tls://`-only** off-localhost. This **supersedes** three of the original decisions while leaving the core invariant untouched. No back-compat, no dual-transport window: `wss://` is no longer an accepted production transport. The host population is empty today, so there is nothing to migrate around — the only real constraint is cutover ordering (below), which is what justifies a hard cut over a compatibility shim.
+
+**Superseded:**
+
+1. *"Widen the shared guard to a two-scheme allow-list … accepting `wss://` **and** `tls://`."* → the non-localhost allow-list is now `{tls://}` only; `wss://` / `ws://` / `nats://` are rejected off-localhost. The one-element `_ENCRYPTED_SCHEMES` / `ENCRYPTED_SCHEMES` collection collapsed to a direct `startswith("tls://")` (removed a premature one-element abstraction).
+2. *The rename `assert_wss_or_localhost → assert_encrypted_or_localhost`.* → renamed **again** to `assert_tls_or_localhost` (`assertEncryptedOrLocalhost → assertTlsOrLocalhost` ts; `assert_encrypted_or_localhost → assert_tls_or_localhost` rs). Identical lie-in-a-name discipline that drove the first rename: once `wss://` — itself an *encrypted* scheme — is rejected off-localhost, "encrypted" actively misnames the control. No re-export of the old symbol (CLAUDE.md no-backcompat); all seven call-sites × 3 langs updated in lockstep.
+3. *Deferred: "`KLODI_DEFAULT_NATS_URL` stays `wss://…` until the endpoint exists"* + *Alternative #4 "the endpoint isn't provisioned, and it's a fallback constant."* → the Railway L4 TCP proxy and its private-CA cert were **provisioned 2026-07-04** (cert `CN=klodi-nats`, issuer `CN=Klodi Prod NATS CA`, SAN `*.proxy.rlwy.net` covering the proxy host — verify-ON passes with **no** `tls_hostname` override). The constant now flips `wss://klodi-net.4gpts.com → tls://hayabusa.proxy.rlwy.net:32770` at the codegen source `packages/tool-catalog/src/index.ts:725`, fanned out to the two tracked py `schemas.json` mirrors + the gitignored `rust-types.rs`. It stays a **pre-registration fallback only** — `nats_url` remains server-authoritative.
+
+> **Endpoint footgun (do not repeat).** The ~24 `tls://kodama.proxy.rlwy.net:37360` strings in the test suite (`_TLS_PROD` / `TLS_PROD_URL`) name **pgvector's Postgres TCP proxy**, not NATS — promoting that fixture to the constant would point every client at Postgres. The authoritative NATS value is `hayabusa.proxy.rlwy.net:32770`, sourced live from `RAILWAY_TCP_PROXY_DOMAIN`/`_PORT` on the `@klodi/nats-infra` service (`kodama:37360` is `RAILWAY_TCP_PROXY_*` on `pgvector`). Railway TCP-proxy host/port are stable for the proxy's lifetime but regenerate if it is deleted + recreated — re-pin the one codegen source if so.
+
+**Unchanged (still true — this card touched none of it):**
+
+- **Verify-ON, private-CA-only, no disable toggle.** No `tls.*`, CA resolver, verification, `CaTrustError`/loud-fail, or STARTTLS code changed; the three `verification_never_disabled` ratchets stay green.
+- **Localhost plaintext bypass retained**, unchanged — *any* scheme on a localhost host still passes, so dev + all three integration harnesses (on `ws://localhost`) keep working. Removing it was rejected for the same blast-radius reason as Alt #2. Corollary: the `wss://→wsconnect` dispatch branch is retained too — shared with the surviving `ws://localhost` path; only the guard's accept-list narrowed, not the transport dispatch.
+- **`_ws_transport_patch.py` retained** — the card's original "delete it (inert on `tls://`)" premise was **reversed**: it is inert on `tls://` but still load-bearing on `ws://localhost` (its CLOSE-frame→EOF fix, applied unconditionally at every connect). The retention test stays green.
+
+**Both rejection surfaces are loud + terminal.** A stale persisted `wss://` `nats_url` is rejected synchronously at `connect()` **before** any transport dispatch (the guard fires ahead of scheme selection — py `client.py`, ts `client.ts:460`, rs `client.rs` — so no `wsconnect` attempt and no hang; pinned by new both-transports-mocked tests). A `/register` response carrying a `wss://` `nats_url` fails closed at persist through the same shared guard (the four adapter persist paths carry no adapter-local scheme check). The message names `tls://` as the sole required scheme, lists `wss://` among the rejected, and frames re-register as the normal migration remedy — not compromise-only. This is a synchronous pre-dial URL validation, deliberately **not** routed through the CA-trust loud-fail classifier above.
+
+**Cutover ordering (unchanged, still load-bearing).** This `tls://`-only client must land *before* the marketplace `/register` endpoint emits `tls://`, or a not-yet-updated host rejects the server's scheme at persist and fails closed. The infra half is confirmed ready (proxy + cert provisioned, marketplace carries `NATS_CA`); whether `/register` actually *emits* `tls://hayabusa…:32770` is marketplace-source and invisible from this repo — recorded as a **founder gate on the `0.3.11` release/publish**, never a Discovery assumption. `0.3.11` is a lockstep six-adapter bump; the internal `packages/*` stay pinned (vendored, never published).
+
 ## Security implications
 
 - **Verification is a hard invariant, ratcheted by tests.** Each language carries a `verification_never_disabled` unit test that greps the source for the insecure flags and asserts their absence, plus that no env var toggles verify off. `KLODI_NATS_CA_FILE` is not a backdoor — it can only change *which* CA is trusted.
@@ -117,7 +139,7 @@ Two seams preserved from the loud-fail addendum: (1) the `wss://` (non-`tls://`)
 
 ## References
 
-- Guard (renamed, shared): `packages/nats-client-py/src/klodi_nats_client/config.py:156`, `packages/nats-client-ts/src/client.ts:105`, `packages/nats-client-rs/src/config.rs:151`
+- Guard (shared; `tls://`-only after the 2026-07-05 addendum): `packages/nats-client-py/src/klodi_nats_client/config.py:147` (`assert_tls_or_localhost`), `packages/nats-client-ts/src/client.ts:104` (`assertTlsOrLocalhost`), `packages/nats-client-rs/src/config.rs:148` (`assert_tls_or_localhost`)
 - Persist guards routed to the shared guard: `adapters/hermes/src/klodi_hermes/register.py`, `adapters/nanobot/nanobot_local_tools.py`, `adapters/openclaw/src/tools/register-poller.ts`, `packages/klodi-rust-host/src/register.rs`
 - CA trust (verify-ON, private-CA-only): `packages/nats-client-py/src/klodi_nats_client/tls.py`, `packages/nats-client-ts/src/tls.ts`, `packages/nats-client-rs/src/tls.rs`
 - Loud-fail structured type: `packages/nats-client-rs/src/error.rs:51` (`KlodiError::CaTrust { ca_source, message }`); `CaTrustError` in `tls.py` / `tls.ts`
