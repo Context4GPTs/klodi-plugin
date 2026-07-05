@@ -41,7 +41,7 @@ if str(_SRC_DIR) not in sys.path:
 _register_mod = importlib.import_module("klodi_hermes.register")
 _persist_credentials = _register_mod._persist_credentials
 
-_TLS_PROD_URL = "tls://kodama.proxy.rlwy.net:37360"
+_TLS_PROD_URL = "tls://hayabusa.proxy.rlwy.net:32770"
 
 
 def _tls_claim() -> dict:
@@ -102,7 +102,7 @@ class TestPersistTlsUrl(_KlodiHomeCase):
 
     def test_rejects_plaintext_nats_non_localhost(self) -> None:
         claim = _tls_claim()
-        claim["nats_url"] = "nats://kodama.proxy.rlwy.net:4222"
+        claim["nats_url"] = "nats://hayabusa.proxy.rlwy.net:4222"
         with self.assertRaises(OSError):
             _persist_credentials(claim)
         # Nothing persisted.

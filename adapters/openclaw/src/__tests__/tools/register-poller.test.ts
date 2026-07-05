@@ -27,13 +27,17 @@ import { __resetWakePumpRegistryForTests } from "@klodi/nats-client";
 
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";
 
+// nats_url is the pinned tls:// L4 proxy — the tls-only cutover
+// (collapse-nats-transport-guard-to-tls-only) makes the persist-time shared
+// guard reject a wss://<non-localhost> url, so the happy-path payload must
+// carry the accepted tls:// scheme.
 const COMPLETED_PAYLOAD = {
   status: "completed",
   nats_creds: "creds-bytes",
   handle: "newuser",
   user_id: "uid-new",
   nkey_public: "NKEY",
-  nats_url: "wss://nats.example.test:4443",
+  nats_url: "tls://hayabusa.proxy.rlwy.net:32770",
 };
 
 let temp: TempHome;
@@ -83,7 +87,22 @@ describe("claimRegisterSession (terminal kinds)", () => {
     expect(credsMode & 0o077).toBe(0);
     const cfg = JSON.parse(readFileSync(getConfigPath(), "utf-8"));
     expect(cfg.handle).toBe("newuser");
-    expect(cfg.nats_url).toBe("wss://nats.example.test:4443");
+    expect(cfg.nats_url).toBe("tls://hayabusa.proxy.rlwy.net:32770");
+  });
+
+  it("rejects a wss:// non-localhost nats_url via the shared guard (tls-only cutover)", async () => {
+    // [integration] collapse-nats-transport-guard-to-tls-only: a stale /
+    // compromised /register returning a wss://<non-localhost> nats_url is
+    // now refused at persist by the SHARED guard (no adapter-local scheme
+    // check). Fails closed — nothing on disk.
+    mockFetchOnce(200, {
+      ...COMPLETED_PAYLOAD,
+      nats_url: "wss://klodi-net.4gpts.com",
+    });
+    const result = await claimRegisterSession(api, SESSION_ID);
+    expect(result.kind).toBe("invalid_response");
+    expect(existsSync(getCredsPath())).toBe(false);
+    expect(existsSync(getConfigPath())).toBe(false);
   });
 
   it("rejects a plaintext non-localhost nats_url with invalid_response", async () => {

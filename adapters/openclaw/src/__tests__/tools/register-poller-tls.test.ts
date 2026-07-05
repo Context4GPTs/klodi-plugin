@@ -30,7 +30,7 @@ import { getCredsPath, getConfigPath } from "../../lib/paths.js";
 import { __resetWakePumpRegistryForTests } from "@klodi/nats-client";
 
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";
-const TLS_PROD_URL = "tls://kodama.proxy.rlwy.net:37360";
+const TLS_PROD_URL = "tls://hayabusa.proxy.rlwy.net:32770";
 
 const BASE_PAYLOAD = {
   status: "completed",
@@ -80,7 +80,7 @@ describe("claimRegisterSession — tls:// nats_url", () => {
   it("rejects a plaintext nats:// url with invalid_response — nothing persisted", async () => {
     mockFetchOnce(200, {
       ...BASE_PAYLOAD,
-      nats_url: "nats://kodama.proxy.rlwy.net:4222",
+      nats_url: "nats://hayabusa.proxy.rlwy.net:4222",
     });
     const result = await claimRegisterSession(api, SESSION_ID);
     expect(result.kind).toBe("invalid_response");

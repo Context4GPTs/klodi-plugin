@@ -31,7 +31,7 @@ import { getConfigPath, getCredsPath, getKlodiHome } from "../../lib/paths.js";
 import { __resetWakePumpRegistryForTests } from "@klodi/nats-client";
 
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";
-const TLS_PROD_URL = "tls://kodama.proxy.rlwy.net:37360";
+const TLS_PROD_URL = "tls://hayabusa.proxy.rlwy.net:32770";
 const REG_CA = "-----BEGIN CERTIFICATE-----\nMIICopenclawRegisterCa\n-----END CERTIFICATE-----\n";
 
 const BASE_PAYLOAD = {

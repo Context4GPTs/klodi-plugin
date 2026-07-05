@@ -86,7 +86,7 @@ afterEach(() => {
 
 describe("doConnect scheme dispatch", () => {
   it("routes tls:// to the node TCP transport (not wsconnect)", async () => {
-    const client = makeClient("tls://kodama.proxy.rlwy.net:37360");
+    const client = makeClient("tls://hayabusa.proxy.rlwy.net:32770");
     await client.connect();
     expect(tcpMock).toHaveBeenCalledTimes(1);
     expect(wsMock).not.toHaveBeenCalled();
@@ -99,8 +99,14 @@ describe("doConnect scheme dispatch", () => {
     expect(wsMock).not.toHaveBeenCalled();
   });
 
-  it("routes wss:// to wsconnect (not the node TCP transport)", async () => {
-    const client = makeClient("wss://klodi-net.4gpts.com");
+  it("routes wss://localhost to wsconnect (not the node TCP transport)", async () => {
+    // Retargeted to localhost for the tls-only cutover
+    // (collapse-nats-transport-guard-to-tls-only): the collapsed guard
+    // rejects wss://<non-localhost>, so the surviving wss://→wsconnect
+    // dispatch branch is exercised via the localhost bypass. The routing
+    // contract (wss:// → wsconnect, never the node TCP transport) is
+    // unchanged.
+    const client = makeClient("wss://localhost");
     await client.connect();
     expect(wsMock).toHaveBeenCalledTimes(1);
     expect(tcpMock).not.toHaveBeenCalled();
@@ -114,7 +120,7 @@ describe("doConnect scheme dispatch", () => {
   });
 
   it("passes a tls config (CA object or undefined) — never rejectUnauthorized:false", async () => {
-    const client = makeClient("tls://kodama.proxy.rlwy.net:37360");
+    const client = makeClient("tls://hayabusa.proxy.rlwy.net:32770");
     await client.connect();
     const opts = tcpMock.mock.calls[0]?.[0] as { tls?: unknown } | undefined;
     // The tls field is either a { ca } object or undefined (fall-through to
