@@ -14,7 +14,7 @@
 //! Adapters never touch `async-nats` directly.
 
 use crate::backoff::default_reconnect_delay;
-use crate::config::{KlodiConfig, assert_encrypted_or_localhost, load_config, load_creds};
+use crate::config::{KlodiConfig, assert_tls_or_localhost, load_config, load_creds};
 use crate::tls::resolve_ca_file;
 use crate::consumers::{
     ActiveSubscription, ChannelHandler, NotificationHandler, subscribe_channels,
@@ -130,11 +130,11 @@ impl KlodiClient {
                 return Ok(());
             }
         }
-        // Per **D § D10**: refuse plaintext nats_url unless the host
+        // Per **D § D10**: refuse a non-`tls://` nats_url unless the host
         // resolves to localhost. Closes the compound attack where a
-        // compromised registration endpoint injects a `ws://` URL.
-        // Accepts `wss://` and `tls://`.
-        assert_encrypted_or_localhost(&self.config.nats_url)?;
+        // compromised registration endpoint injects a `ws://` / `wss://`
+        // URL. `tls://` is the sole accepted non-localhost transport.
+        assert_tls_or_localhost(&self.config.nats_url)?;
         // P2-5: replace async-nats's default linear delay with the
         // shared exponential-backoff-with-jitter formula. The callback
         // is `Fn(usize) -> Duration` — translates `attempts` to a
