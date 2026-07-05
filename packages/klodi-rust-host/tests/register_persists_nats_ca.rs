@@ -23,7 +23,7 @@ use tempfile::tempdir;
 use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const TLS_URL: &str = "tls://kodama.proxy.rlwy.net:37360";
+const TLS_URL: &str = "tls://hayabusa.proxy.rlwy.net:32770";
 const CA_ONE: &str =
     "-----BEGIN CERTIFICATE-----\nMIICregisterCaOneFixture\n-----END CERTIFICATE-----\n";
 const CA_TWO: &str =

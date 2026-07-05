@@ -37,7 +37,7 @@ pub use catalog::{
     KLODI_DEFAULT_API_URL, KLODI_DEFAULT_NATS_URL, KLODI_NATS_CA_PEM, MAX_CHANNEL_MESSAGE_CHARS,
 };
 pub use client::{KlodiClient, RequestOptions};
-pub use config::{KlodiConfig, assert_encrypted_or_localhost, is_localhost, load_config, load_creds};
+pub use config::{KlodiConfig, assert_tls_or_localhost, is_localhost, load_config, load_creds};
 pub use consumers::{ActiveSubscription, ChannelHandler, NotificationHandler};
 pub use error::KlodiError;
 pub use events::{

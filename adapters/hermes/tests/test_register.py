@@ -55,14 +55,20 @@ _VALID_SESSION = "550e8400-e29b-41d4-a716-446655440000"
 
 
 def _complete_claim() -> dict:
-    """A valid session-completed envelope as returned by the Klodi API."""
+    """A valid session-completed envelope as returned by the Klodi API.
+
+    nats_url is the pinned tls:// L4 proxy — the tls-only cutover
+    (collapse-nats-transport-guard-to-tls-only) makes the persist-time
+    shared guard reject a wss://<non-localhost> url, so the happy-path
+    fixture must carry the accepted tls:// scheme.
+    """
     return {
         "status": "completed",
         "handle": "alice",
         "user_id": "u-1",
         "nkey_public": "UAAAAAAAAAAAA",
         "nats_creds": "-----BEGIN NATS USER JWT-----\nfake\n",
-        "nats_url": "wss://klodi-net.4gpts.com",
+        "nats_url": "tls://hayabusa.proxy.rlwy.net:32770",
     }
 
 
@@ -234,6 +240,32 @@ class TestPersistCredentials(_KlodiHomeCase):
         # Act + Assert
         with self.assertRaisesRegex(OSError, r"nats_url"):
             _persist_credentials(claim)
+
+    def test_persist_rejects_wss_non_localhost_via_shared_guard(self):
+        # [integration] tls-only cutover
+        # (collapse-nats-transport-guard-to-tls-only): a stale / compromised
+        # /register returning a wss://<non-localhost> nats_url must be
+        # refused at persist by the SHARED client guard (no adapter-local
+        # scheme check reintroduced). Fails closed — nothing lands on disk.
+        claim = _complete_claim()
+        claim["nats_url"] = "wss://klodi-net.4gpts.com"
+        with self.assertRaises(OSError):
+            _persist_credentials(claim)
+        self.assertFalse((self.home / "nats.creds").exists())
+        self.assertFalse((self.home / "config.json").exists())
+
+    def test_persist_accepts_tls_non_localhost_via_shared_guard(self):
+        # [integration] the accept arm: a tls://<host> nats_url passes the
+        # shared guard and persists unchanged into config.json.
+        claim = _complete_claim()
+        claim["nats_url"] = "tls://hayabusa.proxy.rlwy.net:32770"
+        _persist_credentials(claim)
+        written = json.loads(
+            (self.home / "config.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            written["nats_url"], "tls://hayabusa.proxy.rlwy.net:32770"
+        )
 
     def test_raises_oserror_when_field_is_empty_string(self):
         # Arrange — an empty string is not a valid credential payload.

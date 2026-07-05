@@ -72,19 +72,20 @@ const WS_PING_INTERVAL_MS = 20_000;
 const WS_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
- * Per **D § D10**: NATS connections require an encrypted transport by
- * default — `wss://` (NATS-over-WebSocket-over-TLS, the L7 edge path) or
- * `tls://` (raw NATS-over-TLS, the L4 TCP-proxy path). Both terminate TLS
- * at the NATS server with certificate + hostname verification ON (see
- * `tls.ts`). Their plaintext siblings `ws://` / `nats://` are only
- * accepted when the host is localhost / 127.0.0.1 / 0.0.0.0 / *.localhost.
- * There's no env opt-out — if a non-localhost host needs plaintext, the
- * deployment is misconfigured (terminate TLS at the edge).
+ * Per **D § D10**: a non-localhost NATS connection must use `tls://`
+ * (raw NATS-over-TLS, the L4 TCP-proxy path) — the sole accepted
+ * production transport. It terminates TLS at the NATS server with
+ * certificate + hostname verification ON (see `tls.ts`). Every other
+ * scheme (`wss://` / `ws://` / `nats://`) is only accepted when the host
+ * is localhost / 127.0.0.1 / 0.0.0.0 / *.localhost, so dev and the
+ * integration harnesses (all on `ws://localhost`) keep working. There's
+ * no env opt-out — a non-localhost host that needs a different transport
+ * is a misconfiguration (terminate TLS at the edge).
  *
  * Defends against the compound attack: an attacker who controls the API
- * endpoint (DNS hijack) injects a plaintext `nats_url` into the registration
- * response; without this guard the client persists it, then connects in
- * plaintext to attacker-controlled infrastructure.
+ * endpoint (DNS hijack) injects a non-TLS `nats_url` into the registration
+ * response; without this guard the client persists it, then connects to
+ * attacker-controlled infrastructure.
  */
 export function isLocalhost(url: string): boolean {
   try {
@@ -100,16 +101,13 @@ export function isLocalhost(url: string): boolean {
   }
 }
 
-/** The two encrypted transports accepted on non-localhost hosts. */
-const ENCRYPTED_SCHEMES = ["wss://", "tls://"] as const;
-
-export function assertEncryptedOrLocalhost(natsUrl: string): void {
-  if (ENCRYPTED_SCHEMES.some((scheme) => natsUrl.startsWith(scheme))) return;
+export function assertTlsOrLocalhost(natsUrl: string): void {
+  if (natsUrl.startsWith("tls://")) return;
   if (isLocalhost(natsUrl)) return;
   throw new Error(
-    `KlodiClient: nats_url must use wss:// or tls:// (got ${natsUrl}). `
-    + "Plaintext ws:// / nats:// is only allowed when the host resolves to "
-    + "localhost. Re-register if creds came from a compromised source.",
+    `KlodiClient: nats_url must use tls:// (got ${natsUrl}). `
+    + "ws:// / wss:// / nats:// are only accepted when the host resolves to "
+    + "localhost. Re-register to obtain the current tls:// endpoint.",
   );
 }
 
@@ -459,7 +457,7 @@ export class KlodiClient {
 
   private async doConnect(): Promise<NatsConnection> {
     const config = this.loadConfigFromDisk();
-    assertEncryptedOrLocalhost(config.nats_url);
+    assertTlsOrLocalhost(config.nats_url);
     const creds = loadCreds(this.args.credsPath);
     // P2-5: exponential backoff with jitter, base 250ms × 2 capped at
     // 60s ± 25%. The handler runs once per reconnect attempt; we

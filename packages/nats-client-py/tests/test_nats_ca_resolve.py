@@ -93,7 +93,7 @@ _MALFORMED_PEM = (
     "-----END CERTIFICATE-----\n"
 )
 
-_TLS_URL = "tls://kodama.proxy.rlwy.net:37360"
+_TLS_URL = "tls://hayabusa.proxy.rlwy.net:32770"
 _WSS_URL = "wss://klodi-net.4gpts.com"
 _CA_FILE_ENV = "KLODI_NATS_CA_FILE"
 

@@ -47,7 +47,7 @@ from typing import Any, Optional
 from klodi_nats_client import (
     KLODI_DEFAULT_API_URL,
     KlodiRequestError,
-    assert_encrypted_or_localhost,
+    assert_tls_or_localhost,
     default_klodi_home,
     persist_nats_ca,
 )
@@ -618,11 +618,12 @@ def _persist_credentials(result: dict[str, Any]) -> None:
         if not isinstance(value, str) or not value:
             raise OSError(f"session claim missing {field}")
     # Delegates to the single shared client guard so persist-time and
-    # connect-time policy can never drift — accepts `wss://` / `tls://`,
-    # rejects `ws://` / `nats://` off localhost (D § D10, P2-17 closure).
+    # connect-time policy can never drift — accepts only `tls://` off
+    # localhost, rejecting `wss://` / `ws://` / `nats://` (D § D10,
+    # P2-17 closure).
     assert isinstance(nats_url, str)  # narrowed above
     try:
-        assert_encrypted_or_localhost(nats_url)
+        assert_tls_or_localhost(nats_url)
     except ValueError as err:
         raise OSError(
             f"registration response had a plaintext nats_url ({nats_url}); "

@@ -57,7 +57,7 @@ def _write_config(
     handle: str = "alice",
     user_id: str = "u-1",
     nkey_public: str = "UAAAAAAAAAAAA",
-    nats_url: str = "wss://klodi-net.4gpts.com",
+    nats_url: str = "tls://hayabusa.proxy.rlwy.net:32770",
 ) -> Path:
     path = home / "config.json"
     path.write_text(
@@ -339,6 +339,48 @@ class TestRegister(_NanobotHomeCase):
                 lt._IN_FLIGHT.pop(sid, None)
         self.assertEqual(result["status"], "registered")
         self.assertEqual(result["handle"], "alice")
+
+
+# ── _persist_credentials (tls-only persist guard) ─────────────────────
+
+
+def _complete_claim(nats_url: str) -> dict:
+    """A valid session-completed envelope with the given nats_url."""
+    return {
+        "status": "completed",
+        "handle": "alice",
+        "user_id": "u-1",
+        "nkey_public": "UAAAAAAAAAAAA",
+        "nats_creds": "-----BEGIN NATS USER JWT-----\nfake\n",
+        "nats_url": nats_url,
+    }
+
+
+class TestPersistCredentials(_NanobotHomeCase):
+    """[integration] nanobot's register persist path routes nats_url
+    through the SHARED client guard (nanobot_local_tools.py:625). The
+    tls-only cutover (collapse-nats-transport-guard-to-tls-only) makes a
+    wss://<non-localhost> url fail closed while tls://<host> persists."""
+
+    def test_persist_rejects_wss_non_localhost_via_shared_guard(self) -> None:
+        # A stale / compromised /register returning wss://<non-localhost>
+        # is refused by the shared guard — no adapter-local scheme check.
+        claim = _complete_claim("wss://klodi-net.4gpts.com")
+        with self.assertRaises(OSError):
+            lt._persist_credentials(claim)
+        self.assertFalse((self.home / "nats.creds").exists())
+        self.assertFalse((self.home / "config.json").exists())
+
+    def test_persist_accepts_tls_non_localhost_via_shared_guard(self) -> None:
+        claim = _complete_claim("tls://hayabusa.proxy.rlwy.net:32770")
+        lt._persist_credentials(claim)
+        written = json.loads(
+            (self.home / "config.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            written["nats_url"], "tls://hayabusa.proxy.rlwy.net:32770"
+        )
+        self.assertTrue((self.home / "nats.creds").exists())
 
 
 # ── handle_health ─────────────────────────────────────────────────────

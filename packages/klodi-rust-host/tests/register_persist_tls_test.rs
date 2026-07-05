@@ -21,7 +21,7 @@ use tempfile::tempdir;
 use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const TLS_PROD_URL: &str = "tls://kodama.proxy.rlwy.net:37360";
+const TLS_PROD_URL: &str = "tls://hayabusa.proxy.rlwy.net:32770";
 
 fn completed_body(nats_url: &str) -> serde_json::Value {
     serde_json::json!({
@@ -71,7 +71,7 @@ async fn persists_tls_url_unchanged() {
 async fn refuses_plaintext_nats_non_localhost() {
     let dir = tempdir().unwrap();
     let server = MockServer::start().await;
-    mock_completed(&server, "nats://kodama.proxy.rlwy.net:4222").await;
+    mock_completed(&server, "nats://hayabusa.proxy.rlwy.net:4222").await;
 
     let err = run_register(RegisterArgs {
         api_url: server.uri(),
@@ -89,6 +89,35 @@ async fn refuses_plaintext_nats_non_localhost() {
     assert!(
         !dir.path().join("config.json").exists(),
         "nothing may persist when the url is refused"
+    );
+    assert!(!dir.path().join("nats.creds").exists());
+}
+
+/// [integration] tls-only cutover
+/// (collapse-nats-transport-guard-to-tls-only): the ONE rust-host persist
+/// site (moltis + ironclaw + zeroclaw) refuses a wss://<non-localhost>
+/// nats_url via the shared guard — the wss:// scheme was accepted before
+/// the collapse. Fails closed; nothing persisted. Not coupled to the
+/// "plaintext" wording (wss:// is encrypted, just the wrong transport).
+#[tokio::test]
+async fn refuses_wss_non_localhost() {
+    let dir = tempdir().unwrap();
+    let server = MockServer::start().await;
+    mock_completed(&server, "wss://klodi-net.4gpts.com").await;
+
+    let err = run_register(RegisterArgs {
+        api_url: server.uri(),
+        klodi_home: dir.path().to_path_buf(),
+        user_agent: "klodi-test/0".into(),
+        binary_name: "klodi-test".into(),
+        force_register: false,
+    })
+    .await
+    .expect_err("wss:// non-localhost must fail closed under the tls-only guard");
+    let _ = err;
+    assert!(
+        !dir.path().join("config.json").exists(),
+        "nothing may persist when the wss:// url is refused"
     );
     assert!(!dir.path().join("nats.creds").exists());
 }

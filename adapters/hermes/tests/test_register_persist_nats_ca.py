@@ -39,7 +39,7 @@ if str(_SRC_DIR) not in sys.path:
 _register_mod = importlib.import_module("klodi_hermes.register")
 _persist_credentials = _register_mod._persist_credentials
 
-_TLS_URL = "tls://kodama.proxy.rlwy.net:37360"
+_TLS_URL = "tls://hayabusa.proxy.rlwy.net:32770"
 _CA_ONE = (
     "-----BEGIN CERTIFICATE-----\nMIICregisterCaOneFixtureBody\n"
     "-----END CERTIFICATE-----\n"

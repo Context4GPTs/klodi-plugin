@@ -78,8 +78,14 @@ afterEach(() => {
 });
 
 describe("wss:// ignores the persisted nats_ca", () => {
-  it("connects over wss:// despite a poisoned persisted CA (never consulted)", async () => {
-    const client = makeClient("wss://klodi-net.4gpts.com");
+  it("connects over wss://localhost despite a poisoned persisted CA (never consulted)", async () => {
+    // Retargeted to localhost for the tls-only cutover
+    // (collapse-nats-transport-guard-to-tls-only): the collapsed guard
+    // rejects wss://<non-localhost>, so this boundary (wss:// never reads
+    // the persisted CA) is proven via the wss:// localhost bypass. The
+    // property under test — the WS path never consults nats_ca — is
+    // unchanged.
+    const client = makeClient("wss://localhost");
     await client.connect();
     expect(wsMock).toHaveBeenCalledTimes(1);
     expect(tcpMock).not.toHaveBeenCalled();

@@ -38,7 +38,7 @@ from klodi_nats_client._ws_transport_patch import apply_patch as _apply_ws_patch
 from klodi_nats_client.backoff import BackoffPolicy
 from klodi_nats_client.config import (
     KlodiConfig,
-    assert_encrypted_or_localhost,
+    assert_tls_or_localhost,
     load_config,
     load_creds,
 )
@@ -210,7 +210,7 @@ class KlodiClient:
         _apply_ws_patch()
 
         config = self._load_config()
-        assert_encrypted_or_localhost(config.nats_url)
+        assert_tls_or_localhost(config.nats_url)
         creds = load_creds(self._creds_path)
 
         # `tls://` → hand nats-py a verifying SSLContext that trusts the

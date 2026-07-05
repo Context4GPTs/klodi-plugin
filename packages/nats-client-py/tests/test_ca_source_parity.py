@@ -36,7 +36,7 @@ from klodi_nats_client.client import KlodiClient
 from klodi_nats_client.tls import CaTrustError, build_tls_context
 
 _CA_FILE_ENV = "KLODI_NATS_CA_FILE"
-_TLS_URL = "tls://kodama.proxy.rlwy.net:37360"
+_TLS_URL = "tls://hayabusa.proxy.rlwy.net:32770"
 
 # A single valid self-signed test CA — the parity pin cares about the
 # *source label*, not the trusted identity (that is covered by

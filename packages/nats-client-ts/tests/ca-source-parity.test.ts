@@ -39,7 +39,7 @@ const { KlodiClient } = await import("../src/client.js");
 const { CaTrustError, resolveTlsCa } = await import("../src/tls.js");
 
 const CA_FILE_ENV = "KLODI_NATS_CA_FILE";
-const TLS_URL = "tls://kodama.proxy.rlwy.net:37360";
+const TLS_URL = "tls://hayabusa.proxy.rlwy.net:32770";
 const CA_PEM = "-----BEGIN CERTIFICATE-----\nPARITYFIXTUREBODY\n-----END CERTIFICATE-----\n";
 
 let home: string;

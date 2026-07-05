@@ -144,35 +144,29 @@ def is_localhost(url: str) -> bool:
     return host.endswith(".localhost")
 
 
-# The two encrypted transports the guard accepts on non-localhost hosts.
-# `wss://` = NATS-over-WebSocket-over-TLS (the L7 edge path); `tls://` =
-# raw NATS-over-TLS (the L4 TCP-proxy path). Both terminate TLS at the
-# NATS server with certificate + hostname verification ON — see
-# `klodi_nats_client.tls`. Their plaintext siblings `ws://` and `nats://`
-# are only tolerated when the host resolves to localhost.
-_ENCRYPTED_SCHEMES: tuple[str, ...] = ("wss://", "tls://")
-
-
-def assert_encrypted_or_localhost(nats_url: str) -> None:
-    """Refuse `nats_url` if it's plaintext on a non-localhost host.
+def assert_tls_or_localhost(nats_url: str) -> None:
+    """Refuse `nats_url` unless it is `tls://` or resolves to localhost.
 
     Per **D § D10**: the smart-default TLS posture closes the compound
-    attack where a compromised registration endpoint injects a plaintext
+    attack where a compromised registration endpoint injects a non-TLS
     `nats_url` and the next connect goes to attacker-controlled
-    infrastructure. Accepts the two encrypted transports (`wss://` and
-    `tls://`); their plaintext siblings (`ws://` / `nats://`) are only
-    allowed when the host resolves to localhost. There is no env opt-out
-    — if a non-localhost host needs plaintext, the deployment is
-    misconfigured (terminate TLS at the edge).
+    infrastructure. `tls://` (raw NATS-over-TLS, the L4 TCP-proxy path)
+    is the sole accepted non-localhost transport — it terminates TLS at
+    the NATS server with certificate + hostname verification ON (see
+    `klodi_nats_client.tls`). Every other scheme (`wss://` / `ws://` /
+    `nats://`) is only tolerated when the host resolves to localhost, so
+    dev and the integration harnesses (all on `ws://localhost`) keep
+    working. There is no env opt-out — a non-localhost host that needs a
+    different transport is a misconfiguration (terminate TLS at the edge).
     """
-    if nats_url.startswith(_ENCRYPTED_SCHEMES):
+    if nats_url.startswith("tls://"):
         return
     if is_localhost(nats_url):
         return
     raise ValueError(
-        f"KlodiClient: nats_url must use wss:// or tls:// (got {nats_url}). "
-        "Plaintext ws:// / nats:// is only allowed when the host resolves "
-        "to localhost. Re-register if creds came from a compromised source.",
+        f"KlodiClient: nats_url must use tls:// (got {nats_url}). "
+        "ws:// / wss:// / nats:// are only accepted when the host resolves "
+        "to localhost. Re-register to obtain the current tls:// endpoint.",
     )
 
 
@@ -182,7 +176,7 @@ __all__ = [
     "CredsNotFoundError",
     "KlodiConfig",
     "REQUIRED_FIELDS",
-    "assert_encrypted_or_localhost",
+    "assert_tls_or_localhost",
     "is_localhost",
     "load_config",
     "load_creds",

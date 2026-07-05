@@ -715,8 +715,14 @@ export function subjectOf<N extends ToolName>(name: N): string {
 /** Canonical API base for OAuth registration polling. */
 export const KLODI_DEFAULT_API_URL = "https://klodi.4gpts.com";
 
-/** Canonical NATS-WS URL for the persistent klodi connection. */
-export const KLODI_DEFAULT_NATS_URL = "wss://klodi-net.4gpts.com";
+/**
+ * Canonical raw-TLS NATS URL (the Railway L4 TCP-proxy path) for the
+ * persistent klodi connection. `tls://` is the sole accepted
+ * non-localhost transport — see each client's transport guard. This is a
+ * pre-registration fallback only; `nats_url` stays server-authoritative
+ * (every host persists whatever `/register` returns).
+ */
+export const KLODI_DEFAULT_NATS_URL = "tls://hayabusa.proxy.rlwy.net:32770";
 
 /**
  * Bundled private-CA PEM trusted for the raw `tls://` NATS transport
