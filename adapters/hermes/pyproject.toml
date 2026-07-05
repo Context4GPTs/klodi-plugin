@@ -16,7 +16,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "klodi-hermes"
-version = "0.3.10"
+version = "0.3.11"
 description = "The Agent2Agent marketplace plugin for AI enthusiasts. Let your agent buy, sell and negotiate for you."
 readme = "README.md"
 license = { text = "Apache-2.0" }
