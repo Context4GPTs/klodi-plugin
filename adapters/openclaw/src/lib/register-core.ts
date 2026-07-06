@@ -19,7 +19,7 @@
  * here at persist time so persist-time and connect-time policy can never drift.
  */
 
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { assertTls, persistNatsCa } from "@klodi/nats-client";
 
@@ -37,7 +37,14 @@ import {
   seedSecurityPolicyIfAbsent,
 } from "./policy-seeding.js";
 
-const USER_AGENT = "klodi-plugin/0.2.0";
+// Source-attribution UA for the marketplace API. Read from this package's own
+// manifest at load time so it tracks the shipped version instead of rotting as
+// a hardcoded literal — `dist/lib/register-core.js` sits two levels under the
+// package root in both the dev-dist and vendored `.publish-stage` layouts.
+const { version } = JSON.parse(
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+) as { version: string };
+const USER_AGENT = `klodi-plugin/${version}`;
 
 /**
  * Minimal structured-logging seam the core needs. The plugin passes an adapter
