@@ -1,12 +1,12 @@
 //! Loud-fail — malformed/untrusted served CA fails LOUD, TERMINAL, PROMPT,
-//! STRUCTURED (rs). Card: gate-auto-trust-on-well-formed-ca-loud-fail.
+//! STRUCTURED (rs).
 //!
 //! Byte-for-byte port of the Python `test_tls_loud_fail.py` / TS
 //! `tls-loud-fail.test.ts` contract, for the async-nats/rustls family.
 //!
 //! ⚠️ COMPILE-RED (intentional, contained). This file references the NEW
 //! `KlodiError::CaTrust { ca_source, message }` variant that is the Rust
-//! deliverable of this card. Until the expert-developer adds it, THIS file
+//! deliverable. Until the expert-developer adds it, THIS file
 //! fails to compile — the compiler error naming the missing variant IS the RED
 //! signal for a statically-typed new API. Per repo convention the new-symbol
 //! references are contained to THIS single `tests/*.rs` file; every OTHER test
@@ -18,7 +18,7 @@
 //! (There is no cargo workspace at the repo root — run standalone crates by
 //! `--manifest-path`, not `-p`.)
 //!
-//! GATE (dev-pair local TLS harness — NOT the epic Railway proxy). async-nats
+//! GATE (dev-pair local TLS harness — NOT the prod Railway proxy). async-nats
 //! has no in-process TLS-server dev-dep, so the negative handshake is exercised
 //! against the klodi-stage bed's real `tls://` NATS: each test EARLY-RETURNS
 //! unless KLODI_TLS_INTEGRATION=1, KLODI_TLS_NATS_URL, KLODI_TLS_CREDS_PATH are

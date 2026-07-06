@@ -151,7 +151,7 @@ async function persistCompleted(
     };
   }
 
-  // Per epic `nats-tls-only-2026-07`: refuse to persist any non-`tls://`
+  // Refuse to persist any non-`tls://`
   // `nats_url`. Delegates to the single shared client guard (accepts only
   // `tls://`, rejecting `wss://` / `ws://` / `nats://` on every host, with
   // no localhost bypass) so persist-time and connect-time policy can never
@@ -197,8 +197,7 @@ async function persistCompleted(
     handle, user_id: userId, nkey_public: nkeyPublic, nats_url: natsUrl,
   });
 
-  // Auto-trust the register-response CA (card
-  // auto-trust-nats-ca-from-register): `nats_ca` is OPTIONAL — it is NOT in
+  // Auto-trust the register-response CA: `nats_ca` is OPTIONAL — it is NOT in
   // the required-field check above, so an absent value never fails
   // registration. The shared helper skips a non-string / empty /
   // non-PEM-shaped value and never throws; an omission on a later

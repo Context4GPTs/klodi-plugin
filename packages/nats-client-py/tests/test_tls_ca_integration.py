@@ -1,6 +1,5 @@
 """GATED integration — verified tls:// handshake + fail-closed (py).
 
-Card: support-tls-nats-transport-with-private-ca-trust.
 Criteria (Acceptance → "Verified TLS round-trip with private-CA trust"):
 
   * `[integration]` trusted private CA + `nats_url` = tls://… → TLS handshake

@@ -203,5 +203,3 @@ describe("onListingUpdated — floor-secrecy regression (P1-7 / D3)", () => {
     }
   });
 });
-
-// qa-developer: P1-7 / D3 (2026-04-26-klodi-plugin-multi-lens-review)

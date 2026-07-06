@@ -125,7 +125,7 @@ fn non_empty(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    //! card/openclaw-zeroclaw-per-conversation-wake-keying (Item 1, Rust port).
+    //! Per-conversation wake-keying, openclaw + zeroclaw (Item 1, Rust port).
     //!
     //! Spec for `derive_wake_session`. Mirrors the hermes
     //! `test_wake_session_keying` shapes against the frozen ADR-0019 scheme.

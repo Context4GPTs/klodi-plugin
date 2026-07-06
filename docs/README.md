@@ -32,10 +32,8 @@ Each ADR carries the harness frontmatter convention so the distillation skill's 
 id: NNNN-<kebab-slug>
 title: <human-readable>
 tags: [<tag>, ...]
-card: <originating-card>
 commit: <sha>
 updated_at: <YYYY-MM-DD>
-updated_by_card: <this-card-slug>
 ---
 ```
 

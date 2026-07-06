@@ -2,12 +2,12 @@
 //! See ADR-0022 (`docs/decisions/0022-tls-nats-transport-private-ca-trust.md`).
 //!
 //! The Railway L4 TCP proxy terminates TLS at the NATS server with a
-//! **private** CA (epic `nats-ws-ingress-flap-2026-06`). For a `tls://`
+//! **private** CA. For a `tls://`
 //! URL the client trusts that CA via async-nats
 //! [`ConnectOptions::add_root_certificates`], which takes a **path** to a
 //! PEM bundle. This module resolves that path.
 //!
-//! Invariant (the card's core security control): verification is **never**
+//! Invariant (the core security control): verification is **never**
 //! disabled. `add_root_certificates` builds a standard verifying rustls
 //! `ClientConfig` (certificate + SNI-hostname checks ON); there is no
 //! `danger_accept_invalid_certs` / `InsecureSkipVerify` path anywhere.
@@ -26,13 +26,13 @@
 //!   2. `${KLODI_HOME}/nats-ca.pem` — the register-response CA persisted at
 //!      registration (see [`persist_nats_ca`]). Server-authoritative,
 //!      endpoint-matched to the served `nats_url`, rotatable without a client
-//!      release (card `auto-trust-nats-ca-from-register`). Returned as a path
+//!      release. Returned as a path
 //!      that async-nats reads at connect; a present-but-unreadable/invalid
 //!      file fails closed there. Absent falls through.
 //!   3. The bundled [`KLODI_NATS_CA_PEM`] catalog constant — the shipped
 //!      private CA, materialised to a per-process temp file so the
-//!      path-based async-nats API can consume it. Empty until the epic
-//!      mints the real CA; empty means "fall through".
+//!      path-based async-nats API can consume it. Empty until the real CA
+//!      is minted; empty means "fall through".
 //!   4. None present → `None`: the system trust store applies and a
 //!      private-CA cert fails closed (correct).
 

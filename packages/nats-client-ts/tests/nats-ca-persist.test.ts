@@ -1,8 +1,6 @@
 /**
  * RED — persist the register-response CA to ${KLODI_HOME}/nats-ca.pem (ts).
  *
- * Card: auto-trust-nats-ca-from-register.
- *
  * Two shared helpers land in `nats-client-ts/src/tls.ts`:
  *   - `natsCaPath(klodiHome)`  — the single filename source (nats-ca.pem).
  *   - `persistNatsCa(klodiHome, pem)` — atomic write, mode 0644 (non-secret

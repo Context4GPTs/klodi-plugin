@@ -1,8 +1,6 @@
 /**
  * Cross-language param-presence gate for `klodi_list_update.category`.
  *
- * Card: make-category-editable-in-plugin-surface-and-docs (acceptance #5).
- *
  * The real gap this fills: the existing `error-codes-cross-language.test.ts`
  * asserts error-CODE parity only (it greps `error: "<code>"` literals out of
  * the adapter sources). NOTHING in the suite asserts that a *param* added to
@@ -15,7 +13,7 @@
  * ── Which artifact carries the cross-language *param* contract? ──
  *
  * `schemas.json` — NOT `rust-types.rs`. This is load-bearing and was verified
- * against the codegen + consumer sources, because the card's first-draft
+ * against the codegen + consumer sources, because an early-draft
  * instruction named `rust-types.rs`:
  *
  *   - TS  → imports the TypeBox catalog directly; `schemas.json` is generated

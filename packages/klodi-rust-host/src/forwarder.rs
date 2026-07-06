@@ -408,7 +408,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // card/audit-all-adapters-for-silent-wake-inject-failure — RED (qa-developer)
+    // Audit all adapters for silent wake-inject failure — RED (qa-developer)
     //
     // Seam 2 — shared rust-http forwarder (moltis + ironclaw) (ACs 2, 3, 4).
     //
@@ -429,7 +429,7 @@ mod tests {
     // today); the 5xx + transport tests are GUARDS (already `Err`, must stay
     // `Err`).
     //
-    // SEVERITY (card/openclaw-zeroclaw-per-conversation-wake-keying, Item 3) —
+    // SEVERITY (Item 3) —
     // the `with_sink`/`CaptureSink` seam landed (#34), so the deferred ERROR-vs-WARN
     // severity assertion is now writable and lives in `severity_red_tests` below.
     // Because both ERROR and WARN route to `CaptureSink::stderr` (logger-rs:284),
@@ -528,7 +528,7 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// card/openclaw-zeroclaw-per-conversation-wake-keying — Item 3 (qa-developer).
+// Per-conversation wake-keying, openclaw + zeroclaw — Item 3 (qa-developer).
 //
 // rust-http forwarder SEVERITY assertions, wired through `with_sink(CaptureSink)`.
 // The `Ok`/`Err` DISPOSITION is already covered by `mod tests` above; this module

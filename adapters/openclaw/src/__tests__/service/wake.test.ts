@@ -136,7 +136,7 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
     });
   });
 
-  // card/audit-all-adapters-for-silent-wake-inject-failure — RED (qa-developer)
+  // Silent wake-inject failure audit — RED phase.
   //
   // Seam 4a — openclaw enqueue-failure ERROR alarm (AC 2).
   //
@@ -336,7 +336,7 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
       expect(ctx["most_recent_matches_resolved"]).toBe(false);
     });
 
-    // card/openclaw-zeroclaw-per-conversation-wake-keying — OQ-2 (qa-developer RED).
+    // Per-conversation wake keying — OQ-2 (RED).
     //
     // OQ-2 RESOLUTION (supersedes the #34 `wake_dead_session` ERROR alarm): under
     // per-conversation keying a conversation's FIRST wake legitimately lands on a
@@ -348,7 +348,7 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
     // ERROR escalation (wake.ts:99-112) is REMOVED (a clean delete, no shim);
     // `entry_exists`/`store_*` survive only as INFO fields on `wake_enqueued`.
     //
-    // This INVERTS the #34 test (which asserted the alarm fires) per the card's
+    // This INVERTS the #34 test (which asserted the alarm fires) per the
     // confirmed requirement change: the `wake_dead_session` ERROR escalation is
     // removed, so no operator-visible alarm fires on a first-contact session.
     // Distillation updates ADR-0019's openclaw row + the deferred-follow-up note.
@@ -523,7 +523,7 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────
-  // card/add-event-correlator-to-wake-enqueued-log — RED phase.
+  // Event-correlator on wake_enqueued log — RED phase.
   //
   // The wake_enqueued log must carry a `kind` discriminator and an
   // `event_id` correlator, additive to the existing reason/sessionKey/
@@ -722,7 +722,7 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
 
       it("covers every NotificationKind in the catalog union (no kind silently dropped)", () => {
         // The catalog `NotificationEvent` union enumerates 17 kinds (the
-        // card's "16 fails" is the klodi-stage suite's injected count, a
+        // prior "16 fails" note is the klodi-stage suite's injected count, a
         // separate thing). The `Record<NotificationKind, …>` fixture map
         // is exhaustive by type, so this guard is the count the emitter
         // must echo a `kind` for — drift in the union breaks it loudly.
@@ -820,7 +820,7 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
       const ctx = findEnqueued(infoEvents);
       // Pre-existing fields untouched (reason stays the kind). sessionKey is now
       // the per-entity key (Item 1): offer.accepted keys off the LISTING (lst-8),
-      // NOT the shared agent:main:main — updated per the card's keying change.
+      // NOT the shared agent:main:main — updated per the keying change.
       expect(ctx["reason"]).toBe("offer.accepted");
       expect(ctx["sessionKey"]).toBe("agent:main:klodi:lst-8");
       // Session-store diagnostic block still emitted.
@@ -836,7 +836,7 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // card/openclaw-zeroclaw-per-conversation-wake-keying — Item 2 (qa-developer).
+  // Per-conversation wake keying — Item 2.
   //
   // The two deterministic `wake_failed` alarms must carry the in-scope
   // `...correlator` (kind/event_id) so a failed wake is tie-able to its wire
@@ -917,7 +917,7 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
-  // card/openclaw-zeroclaw-per-conversation-wake-keying — Item 1 wiring (qa-developer RED).
+  // Per-conversation wake keying — Item 1 wiring (RED).
   //
   // The relay-level proof: makeNotificationHandler/makeChannelHandler must derive
   // the per-entity key from the typed event and pass it into wakeAgent so the
@@ -1026,6 +1026,6 @@ describe("wakeAgent (Decision 13 — D.2.b3-throw)", () => {
   });
 });
 
-// qa-developer: 0012-gap-fixes-decision-13
-// qa-developer: card/add-event-correlator-to-wake-enqueued-log — RED kind/event_id correlator
-// qa-developer: card/openclaw-zeroclaw-per-conversation-wake-keying — RED keying + Item 2 correlator + OQ-2
+// RED coverage added: gap-fixes decision 13.
+// RED coverage added: kind/event_id correlator on wake_enqueued.
+// RED coverage added: per-conversation keying + Item 2 correlator + OQ-2.

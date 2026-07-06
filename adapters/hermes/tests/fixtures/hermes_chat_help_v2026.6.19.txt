@@ -3,12 +3,12 @@
 # Source:   the chat subcommand help, run inside that image's hermes venv.
 # Capture:  real docker capture on 2026-06-30 (NOT reconstructed).
 #
-# AC-3 (cards/fix-hermes-wake-inject-session-flag-argv.md): the bridge's
+# AC-3: the bridge's
 # wake-inject argv is validated against THIS captured reality, not a stub
 # literal that restates the author's assumption. Any flag the bridge emits
 # that is not a recognized option below must FAIL the surface test.
 #
-# The defective flag this card removes appears NOWHERE in the real surface
+# The defective flag this change removes appears NOWHERE in the real surface
 # below at any version -- that absence is the whole point. The surface test
 # parses recognized options from the captured help body only (lines that do
 # not start with a '#'), so this header can never pollute the recognized set.

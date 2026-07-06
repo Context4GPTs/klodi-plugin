@@ -1,7 +1,7 @@
 /**
  * RED/ratchet — the nats_ca path adds a CA SOURCE, never a verify toggle (ts).
  *
- * Card: auto-trust-nats-ca-from-register — cross-cutting invariant.
+ * Cross-cutting invariant.
  *
  * Extends the verify-off ratchet to the NEW nats_ca surface (tls.ts persist +
  * level-2 resolve, its index.ts export, and the openclaw persist site) so the

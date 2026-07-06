@@ -1,6 +1,6 @@
 /**
  * Catalog-registration + schema-fidelity spec for the two wake-relay tools
- * (card: wake-relay-tools-absent-from-tool-catalog, finding F3).
+ * (finding F3).
  *
  * The bug: `klodi_message_user` and `klodi_pending_decisions` ship in the
  * hermes adapter and the skill, but were ABSENT from the canonical catalog

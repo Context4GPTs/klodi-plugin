@@ -1,11 +1,11 @@
 /**
  * Loud-fail + per-family well-formed-CA trust (ts) — self-contained.
  *
- * Card: gate-auto-trust-on-well-formed-ca-loud-fail. Byte-for-byte port of the
+ * Byte-for-byte port of the
  * Python `test_tls_loud_fail.py` contract.
  *
- * The sibling `auto-trust-nats-ca-from-register` proves a bad PEM *fails closed
- * at trust-context build*. Here the served CA is PEM-valid and the trust
+ * A bad PEM *fails closed at trust-context build* is covered elsewhere. Here
+ * the served CA is PEM-valid and the trust
  * context builds, but it cannot anchor the handshake (wrong-signer). The
  * failure must be LOUD, TERMINAL, PROMPT (bounded), and attributable — a
  * structured `CaTrustError`, never a silent hang / bare TLS error.
@@ -17,7 +17,7 @@
  *
  * Per Open-question #7 (per-stack keyUsage strictness asymmetry) the TS/Node
  * negative anchors on **wrong-signer** only — Node may accept a keyUsage-missing
- * CA and this card does NOT add code to force it to reject (a rejected
+ * CA and this change does NOT add code to force it to reject (a rejected
  * alternative). The keyUsage-missing negative is proven on the strict stacks
  * (py/rs).
  *

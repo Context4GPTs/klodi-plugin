@@ -1,7 +1,7 @@
 /**
  * Schema-validation contract for `klodi_list_update.category`.
  *
- * Card: make-category-editable-in-plugin-surface-and-docs
+ * Acceptance criteria covered:
  *   - acceptance #1 (integration): a VALID Category member is accepted on
  *     update and forwards with no client-side rejection.
  *   - acceptance #2 (unit): a `category` that is NOT a Category union member
@@ -17,7 +17,7 @@
  * "withdraw and relist" clause is GONE here is faithful (it tests the catalog
  * object, the single source of truth) — it is NOT a brittle prose-grep over a
  * markdown doc. The doc/skill prose criteria (#8/#9/#10) are left to the
- * expert + reviewer's `rg` sweep, per the card's Risks section.
+ * expert + reviewer's `rg` sweep.
  *
  * ── The load-bearing RED fact (verified against the live catalog) ──
  *
@@ -32,7 +32,7 @@
  *
  * The reference oracle is `condition`, already an optional enum on update:
  * `condition: "new_item"` validates, `condition: "bogus"` is rejected. After
- * this card `category` must behave identically — "same failure shape as any
+ * the change, `category` must behave identically — "same failure shape as any
  * other bad enum on update".
  *
  * Per the `adversarial-testing` skill: NEVER weaken these asserts. If the bad

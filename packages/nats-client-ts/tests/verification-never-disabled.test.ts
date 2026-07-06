@@ -1,7 +1,7 @@
 /**
  * INVARIANT GUARD — cert/hostname verification is never disabled (ts).
  *
- * Card: support-tls-nats-transport-with-private-ca-trust — the CORE
+ * The CORE
  * security invariant. Fails the build if any insecure-TLS toggle appears in
  * the TS TLS connect path / persist code, or if an env flag can turn
  * verification off. `KLODI_NATS_CA_FILE` selects *which* CA to trust, never

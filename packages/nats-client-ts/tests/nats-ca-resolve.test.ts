@@ -1,8 +1,6 @@
 /**
  * RED — CA resolution consults the persisted register-response CA (ts).
  *
- * Card: auto-trust-nats-ca-from-register.
- *
  * `resolveTlsCa(klodiHome)` gains a NEW level-2 step between the env override
  * and the bundled constant, byte-for-byte with py/rs:
  *   1. KLODI_NATS_CA_FILE env — explicit override; short-circuits (persisted

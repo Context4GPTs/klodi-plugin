@@ -1,6 +1,6 @@
 """RED/ratchet — the nats_ca path adds a CA SOURCE, never a verify toggle (py).
 
-Card: auto-trust-nats-ca-from-register — cross-cutting invariant.
+The CA auto-trust path — a cross-cutting invariant.
 
 The pre-existing ``test_verification_never_disabled.py`` ratchet scans
 ``client.py`` / ``config.py`` and the two Python persist sites. It does NOT

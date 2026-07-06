@@ -2,10 +2,8 @@
 id: 0015-gateway-runtime-load-vs-armed-axis
 title: Load-vs-armed axis — loaded ≠ armed; each adapter detects its wake-pump host by a positive, non-inherited signal (openclaw argv subcommand; hermes BridgeCtx capability marker)
 tags: [openclaw, hermes, wake-pump, gateway, runtime, detection, activation, axis, contracts, adapters, parity, ctx-marker]
-card: openclaw-wake-pump-never-arms-in-real-gateway
 commit: d543efc
 updated_at: 2026-07-03
-updated_by_card: fix-first-wake-after-idle-cold-start-noop
 ---
 
 # ADR-0015 — Load-vs-armed axis: loaded ≠ armed; detect the wake-pump host by a positive, non-inherited signal
@@ -43,11 +41,11 @@ verify/configure it and must **never** open a wake subscription.
 Two bugs in sequence produced the same user-visible symptom (the agent is
 unreachable, with no error, no crash — pure inbound deafness):
 
-- **Root cause A** (merged #17, [`load-openclaw-plugin-at-gateway-startup`]): the
+- **Root cause A** (merged #17): the
   plugin did not load at gateway startup at all. Fixed by the
   `activation.onStartup: true` arm in `openclaw.plugin.json:7-9`. The plugin now
   *loads*.
-- **Root cause B** (this card): the plugin loads but the wake-pump never *arms*.
+- **Root cause B** (this change): the plugin loads but the wake-pump never *arms*.
   `isGatewayRuntime()` gated on `process.title ∈ {"openclaw-gateway",
   "openclaw-gatewa"}`. The real gateway daemon's title is the bare `"openclaw"`
   (the kernel rewrites the long-lived daemon's argv/title; `/proc/PID/cmdline` is
@@ -138,7 +136,7 @@ on the next gate run instead of waiting for someone to bump a hard-coded pin. A
 specific tag can still be passed via `OPENCLAW_TAG` for a one-off reproduction.
 
 This makes two opposite-intent version policies coexist on purpose, and a future
-openclaw card must not collapse them: the **runtime/arming gate floats to
+openclaw change must not collapse them: the **runtime/arming gate floats to
 `latest`** (always prove the *newest* host still arms), while the **compat/install
 `>=` floors and the oldest-host floor smoke stay pinned** (always prove the
 *oldest-supported* host still loads). The floors are `package.json#openclaw`'s
@@ -170,8 +168,7 @@ context; if `argv` is rewritten too, fall back to a gateway-only env marker
 
 ## Cross-adapter realization — hermes: the mirror-image failure, a ctx-marker discriminator
 
-Card `fix-first-wake-after-idle-cold-start-noop` (epic `hermes-wake-relay-2026-06`,
-PR #45) confirmed **loaded ≠ armed is a cross-adapter axis, not an openclaw quirk** —
+PR #45 confirmed **loaded ≠ armed is a cross-adapter axis, not an openclaw quirk** —
 and that its second occurrence is the *mirror image* of the first.
 
 **openclaw's failure** (above) was the pump arming **nowhere**: a fail-CLOSED detection
@@ -216,13 +213,13 @@ again, burning `max_deliver: 5` in rapid succession then dropping anyway (no dea
 The arming gate instead **removes the incapable subscriber entirely**, so the wake only
 ever reaches a ctx that can run it. ADR-0019 (ACK-on-deterministic-failure) and
 [[0020-operator-escalation-delivery-binding]] (marker-on-exit-0) are untouched by this
-card — and the cold-start observable is that `event_id`-keyed **completion marker**, never
+change — and the cold-start observable is that `event_id`-keyed **completion marker**, never
 `sessions.source='klodi'` (v0.17.0 `hermes chat -q` drops `--source`, persisting `cli`).
 
 **Process/supervision topology (context for "arm in exactly one process").** Prod and
 stage co-supervise three daemons — `hermes gateway run`, `hermes dashboard`,
 `klodi-hermes-bridge` — under one bash **`wait -n`** (NOT s6-overlay, correcting the
-card's original framing); any death exits the container and the orchestrator restarts all
+original framing); any death exits the container and the orchestrator restarts all
 three. Keep the arming gate **inside the bridge's `BridgeCtx`**; do **not** move it into
 `hermes gateway run` boot — that recouples wake delivery to gateway boot ordering and
 per-chat plugin lifecycle, the exact coupling the bridge daemon exists to break.
@@ -235,10 +232,10 @@ still not armed (fail-OPEN guard). The two-place name coupling (constant string 
 class-attr name) is locked by `test_arming_gate_keys_off_the_published_capability_attr`.
 The e2e defense is the klodi-stage `integration/hosts/hermes/wake.test.ts` DELIVERED gate
 at a new `WAKE_DELIVER_ATTEMPTS=1` knob (no warm-up retry, cold-since-boot persona) — a
-**cross-repo, lockstep** lever this card does not build; it only makes the cold path pass
+**cross-repo, lockstep** lever this change does not build; it only makes the cold path pass
 at attempts=1.
 
-**Residual (follow-up, not this card).** `register.py::_persist_credentials` still calls
+**Residual (follow-up, not this change).** `register.py::_persist_credentials` still calls
 `start_wake_pump()` directly on the interactive `hermes chat` `klodi_register` success
 path, bypassing the gate. It does not reintroduce the silent drop (an interactive ctx runs
 the turn, so INV-1 holds) and this diff **strictly narrows** the residual — on `main`
@@ -246,7 +243,7 @@ the turn, so INV-1 holds) and this diff **strictly narrows** the residual — on
 subscriber; now only this one `klodi_register`-success path remains ungated. Gating it
 collides with the pinned stop→close→start credential-refresh order
 (`test_register.py::test_persist_calls_close_client_between_stop_and_start_pump`) → a
-follow-up card in epic `hermes-wake-relay-2026-06`.
+follow-up.
 
 ## References
 
@@ -260,13 +257,13 @@ follow-up card in epic `hermes-wake-relay-2026-06`.
   — runtime/CLI/override permutations + fail-OPEN/fail-CLOSED adversarial rows.
 - **Skip/halt contract lock (unit):** `adapters/openclaw/src/__tests__/service/wake-pump-retry.test.ts`
   — gateway-skip via the detection seam; asserts halt-on-null, no busy-retry.
-- **Root cause A (sibling, merged #17):** `openclaw.plugin.json:7-9`
-  (`activation.onStartup`); card `load-openclaw-plugin-at-gateway-startup`.
+- **Root cause A (merged #17):** `openclaw.plugin.json:7-9`
+  (`activation.onStartup`).
 - **The static axes this complements:** [[0014-tool-symmetry-axes]] (manifest /
   catalog, validated by `plugins doctor`).
 - **The wake-event transport this rides on:** [[0001-persistent-websocket-connection]].
 
-### hermes realization (card `fix-first-wake-after-idle-cold-start-noop`, PR #45)
+### hermes realization (PR #45)
 
 - **Discriminator (inline WHY):** `adapters/hermes/src/klodi_hermes/bridge.py` —
   `WAKE_PUMP_HOST_ATTR` constant + `BridgeCtx.klodi_wake_pump_host` class attr; the

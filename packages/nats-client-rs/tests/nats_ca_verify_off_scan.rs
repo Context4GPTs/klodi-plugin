@@ -1,6 +1,6 @@
 //! RED/ratchet — the nats_ca path adds a CA SOURCE, never a verify toggle (rs).
 //!
-//! Card: auto-trust-nats-ca-from-register — cross-cutting invariant.
+//! A cross-cutting invariant.
 //!
 //! Extends the verify-off ratchet to the NEW nats_ca surface: `tls.rs` (persist
 //! + level-2 resolve) and the single rust-host persist site `register.rs` (which

@@ -2,10 +2,8 @@
 id: 0004-preserve-state-on-uninstall
 title: Preserve `$klodi_home` on uninstall
 tags: [uninstall, state, openclaw]
-card: pre-harness
 commit: 7dcda57
 updated_at: 2026-05-04
-updated_by_card: pre-harness
 ---
 
 # ADR-0004 — Preserve `$klodi_home` on uninstall

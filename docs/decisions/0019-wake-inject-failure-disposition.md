@@ -2,10 +2,8 @@
 id: 0019-wake-inject-failure-disposition
 title: Wake-inject failure disposition by class — timeout is swallowed-and-ACKed; a deterministic nonzero exit is a loud correlated alarm, never NAK/redeliver/dead-letter
 tags: [wake, error-handling, observability, alarm, consumer, ack, adapters, parity, hermes, nats]
-card: wake-inject-failures-silent-and-lost-hermes
 commit: 709dd7c
 updated_at: 2026-07-02
-updated_by_card: fix-hermes-wake-inject-session-flag-argv
 ---
 
 # ADR-0019 — Wake-inject failure disposition by failure class
@@ -21,8 +19,7 @@ Member of the wake-path family with **[[0016-wake-log-correlator-contract]]** (t
 transport the wake rides), and **[[0011-adapter-exception-envelope]]** (the *outbound*
 tool-call error contract — distinct axis: that governs what a failed **tool call**
 returns to the agent; this governs how a failed **inbound wake inject** is disposed of).
-The invariants below are written adapter-portable: the sibling card
-`audit-all-adapters-for-silent-wake-inject-failure` (epic `wake-inject-swallow-2026-06`)
+The invariants below are written adapter-portable: the cross-adapter audit
 holds every adapter (openclaw TS, nanobot, moltis/ironclaw/zeroclaw Rust) to this same
 split. Hermes is the reference implementation.
 
@@ -83,7 +80,7 @@ The invariants, held adapter-portable:
 
 ### Wake session model — per-conversation key, fresh `--source klodi` session per wake
 
-> **Corrected 2026-06-30** (card `fix-hermes-wake-inject-session-flag-argv`): the original design
+> **Corrected 2026-06-30**: the original design
 > below shelled `hermes chat` with a `session`-named flag, but **no hermes version defines one**
 > and `hermes chat` cannot mint a session by name (`--continue <name>` errors on first contact).
 > Each wake now runs a **fresh isolated session** tagged `hermes chat … -Q --source klodi`. The
@@ -110,22 +107,20 @@ present", because several kinds carry >1 id (`offer.accepted` has both `listing_
 outbound pending-decision id and its log/alarm correlation line under `klodi:`, keeping it
 distinguishable through the round-trip; the colon also distinguishes it from the retired single
 shared `klodi-wake` (hyphen) session, so the "no shared session" assertion stays meaningful.
-**Outbound exclusion no longer leans on this prefix** (corrected 2026-06-30, card
-`fix-hermes-wake-inject-session-flag-argv`): the sibling outbound resolver
+**Outbound exclusion no longer leans on this prefix** (corrected 2026-06-30): the outbound resolver
 (`message.resolve_operator_target`, per [[0020-operator-escalation-delivery-binding]]) excludes the
 wake-session family **by source** — `SessionDB.list_sessions_rich(exclude_sources=["klodi"])`, since
 each wake now runs `--source klodi`. The earlier id/title-prefix guard (`_is_wake_session`) was
 **deleted**: a fresh `--source`-tagged wake session is untitled, so the prefix never lands on it.
 
-**This keying scheme is the frozen epic template.** The sibling audit card
-`audit-all-adapters-for-silent-wake-inject-failure` makes hermes the reference the 5 other
+**This keying scheme is the frozen cross-adapter template.** The cross-adapter audit makes hermes the reference the 5 other
 adapters (openclaw, zeroclaw, nanobot, moltis, ironclaw) mirror — per-conversation,
 `klodi:`-namespaced sessions, never one shared session. A conversation's terminal event
 (`channel.closed`; `listing.sold/withdrawn/expired`; `transaction.completed/cancelled`) issues a
 best-effort, probe-gated `drain_session` on the same namespaced key (call site ships; hermes
 reclamation is merge-gated).
 
-## Cross-adapter realization (audit `audit-all-adapters-for-silent-wake-inject-failure`)
+## Cross-adapter realization
 
 The audit confirmed this disposition is the **family contract**, not a hermes quirk, and
 applied it across the five non-hermes adapters in three languages. The split is identical
@@ -144,14 +139,13 @@ dashboards stay per-host legible, but the shape is the same.
 | openclaw `adapters/openclaw/src/service/wake.ts` | `wake_failed` (ERROR, `stage:"enqueue"`) — carries `kind`/`event_id` via `...correlator` | `sessionKey` + diagnostic (+ `kind`/`event_id`) | enqueue deterministic → ERROR + **ACK** (early `return`, no heartbeat). The `wake_dead_session` ERROR this row originally carried was **removed** — see the *2026-06-30 amendment* below (OQ-2): under per-conversation keying a no-entry session is legitimate first-contact, so the enqueue-time gate only ever false-fired. `entry_exists`/`store_*` survive as INFO on `wake_enqueued`. |
 
 **Correlator deviation — CLOSED (2026-06-30, see amendment below).** openclaw's deterministic
-ERROR alarm formerly omitted the `kind`/`event_id` correlator the other four adapters carry. Card
-`openclaw-zeroclaw-per-conversation-wake-keying` (PR #35) spread `...correlator` into the
+ERROR alarm formerly omitted the `kind`/`event_id` correlator the other four adapters carry. PR #35 spread `...correlator` into the
 `wake_failed` enqueue ERROR **and** the heartbeat-stage WARN (`null` for a local-origin wake is
 fine — INV per [[0016-wake-log-correlator-contract]]). openclaw is now at full cross-adapter
 correlation parity.
 
-**Realized follow-ups (epic `wake-inject-swallow-2026-06`).** Both items the audit deferred shipped
-in card `openclaw-zeroclaw-per-conversation-wake-keying` (PR #35) — see the amendment below:
+**Realized follow-ups.** Both items the audit deferred shipped
+in PR #35 — see the amendment below:
 
 - ✅ **Bug-3 per-conversation session keying** (openclaw + zeroclaw). Both now mirror the hermes
   *Wake session model* table above: openclaw `deriveWakeSessionKey`
@@ -169,11 +163,11 @@ in card `openclaw-zeroclaw-per-conversation-wake-keying` (PR #35) — see the am
   In the openclaw + zeroclaw sinks the residual risk is lower than hermes' wake-session-key +
   pending-filename sink (openclaw → `enqueueSystemEvent({sessionKey})`; rust →
   `percent_encode_session` onto a WS query param, where `/`→`%2F`), so it was deliberately NOT
-  hardened in PR #35 (doing so would diverge from the frozen scheme that card was mandated to
+  hardened in PR #35 (doing so would diverge from the frozen scheme that change was mandated to
   mirror). Revisit the "safe by construction" assumption for `event_id` across all three adapters
   in one pass if it is ever sunk into a filesystem path.
 
-### Amendment (2026-06-30) — card `openclaw-zeroclaw-per-conversation-wake-keying` (PR #35)
+### Amendment (2026-06-30) — PR #35
 
 Two behaviours this ADR documented as shipped by the audit (PR #34) changed; recorded here
 rather than silently rewritten so the #34 → #35 sequence stays auditable.
@@ -196,7 +190,7 @@ rather than silently rewritten so the #34 → #35 sequence stays auditable.
    as INFO diagnostics on `wake_enqueued`. INV-1 (never *silently* lost) is unaffected: the enqueue
    failure ERROR (`wake_failed`) remains the loud surface for a genuine deterministic failure.
 
-### Amendment (2026-06-30) — card `fix-hermes-wake-inject-session-flag-argv`
+### Amendment (2026-06-30) — hermes wake session flag
 
 The hermes realization of the *Wake session model* above shelled `hermes chat` with a
 `session`-named flag (`hermes chat -q <text> <flag> <key> -Q`), but **no hermes version defines
@@ -230,7 +224,7 @@ bridge emits against the recognized-option set parsed from a **checked-in, versi
 the real `hermes chat --help`** (`fixtures/hermes_chat_help_v2026.6.19.txt`), and fails on any flag
 that surface does not define; `test_hermes_test_files_carry_no_rejected_session_flag` additionally
 forbids re-introducing the rejected flag anywhere in the hermes test tree. The general rule for **any
-adapter that spawns a host CLI** (the sibling `audit-all-adapters-for-silent-wake-inject-failure` is
+adapter that spawns a host CLI** (the cross-adapter audit is
 the propagation vehicle): validate the argv against the shipped binary's captured surface, never a
 literal that restates the author's belief — a stub literal *is* the contract with your own assumption,
 not with the tool.
@@ -295,11 +289,9 @@ line. A future change must not widen the alarm to echo a redacted field
   `_dispatch_message` ACKs on handler return, NAKs on raise. Unchanged: the disposition is chosen
   in the adapter, not the consumer.
 - **Correlator contract:** [[0016-wake-log-correlator-contract]] (`event_id` echo, never mint).
-- **Sibling audit card:** `audit-all-adapters-for-silent-wake-inject-failure`
-  (epic `wake-inject-swallow-2026-06`) — holds every adapter to INV-1/2/3 **and** mirrors the
-  per-conversation `klodi:`-namespaced session scheme (the frozen epic template).
-- **Sibling outbound card:** `wake-outbound-roundtrip-message-and-correlation`
-  (epic `wake-inject-swallow-2026-06`) — **consumes** the `klodi:` namespace: it excludes the
+- **Cross-adapter audit:** holds every adapter to INV-1/2/3 **and** mirrors the
+  per-conversation `klodi:`-namespaced session scheme (the frozen cross-adapter template).
+- **Outbound wake round-trip:** **consumes** the `klodi:` namespace — it excludes the
   wake-session family from operator-session resolution (over `hermes_state.SessionDB`, by the
   id/title prefix). The delivery + resolution binding is [[0020-operator-escalation-delivery-binding]].
 - **Related:** [[0001-persistent-websocket-connection]] (transport),

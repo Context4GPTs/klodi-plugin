@@ -117,7 +117,7 @@ async def _spawned_session(
 
     The key is sourced from the spawn ENV (``klodi:`` + the bare
     ``KLODI_WAKE_ENTITY_ID``), NOT a hermes session argv flag — no hermes
-    version accepts one (the defect this card removes). The key equals
+    version accepts one (the defect this change removes). The key equals
     ``"klodi:" + entity_id`` by construction (both come from the same
     ``derive_wake_entity`` call in the handler), so the keying assertions
     below are unchanged in meaning.

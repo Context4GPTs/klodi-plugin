@@ -2,8 +2,7 @@
  * Cross-language gate for the REMOVAL of listing expiry from the generated
  * `schemas.json` — the artifact Python and Rust actually load.
  *
- * Card: remove-listing-expiry-n-from-the-wire-contract (epic
- *   remove-listing-expiry-2026-06). This is the inverse of
+ * This is the inverse of
  *   `list-update-category-cross-language.test.ts`: that test asserts a param
  *   is PRESENT across the mirrored schemas; this one asserts the listing
  *   expiry fields are ABSENT across them.

@@ -82,8 +82,8 @@ def _optional_str(name: str) -> str:
 
 
 #: Bundled private-CA PEM trusted for the ``tls://`` L4-proxy transport.
-#: Intentionally EMPTY until the epic (`nats-ws-ingress-flap-2026-06`)
-#: mints the real CA — an empty value means "fall through to the
+#: Intentionally EMPTY until the real CA
+#: is minted — an empty value means "fall through to the
 #: ``KLODI_NATS_CA_FILE`` override or the system trust store" (see
 #: ``klodi_nats_client.tls``). Non-strict: unlike the required string
 #: constants above, an empty PEM is a valid pre-cutover state.

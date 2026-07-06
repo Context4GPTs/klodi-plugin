@@ -1,7 +1,5 @@
 """CA-source precedence has ONE encoding — the resolver (py).
 
-Card: consolidate-ca-source-precedence-into-the-resolver.
-
 The precedence walk (env → persisted → bundled) and the operator-facing
 source label are produced in exactly one place — ``build_tls_context`` (via
 ``_resolve_ca_pem``) — and the connect-failure attribution *consumes* that

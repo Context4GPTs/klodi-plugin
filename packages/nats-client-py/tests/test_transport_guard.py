@@ -1,8 +1,7 @@
 """RED — transport guard collapsed to ``tls://`` ONLY, no localhost bypass (py).
 
-Card: remove-dead-ws-localhost-nats-transport-bypass. This flips the prior
-``collapse-nats-transport-guard-to-tls-only`` suite's *localhost-accepts-any-
-scheme* premise to *localhost-is-no-longer-a-bypass*. The guard's sole rule
+Flips the prior *localhost-accepts-any-scheme* premise to
+*localhost-is-no-longer-a-bypass*. The guard's sole rule
 becomes ``scheme == tls://`` — ``tls://localhost`` (dev CA) is accepted
 *because it is* ``tls://``, NOT via a host carve-out.
 
@@ -23,7 +22,7 @@ This file pins the CONNECT-time shared guard in ``klodi_nats_client.config``.
 QA-owned (adversarial-testing). NEVER weaken these asserts to match a
 wider implementation. In particular: do NOT re-widen the guard to accept
 ``ws://localhost`` so an old assertion passes — the localhost bypass is the
-plaintext-transport surface this card deletes.
+plaintext-transport surface this change deletes.
 
 --- COORDINATION NOTE ---------------------------------------------------
 The shared guard is renamed in-dev ``assert_tls_or_localhost`` →
@@ -91,7 +90,7 @@ def test_rejects_bare_ws_non_localhost() -> None:
         assert_tls(_WS_PLAINTEXT)
 
 
-# ── THE FLIP: every non-tls scheme against localhost now REJECTS ─────────
+# ── The behavior flip: every non-tls scheme against localhost now REJECTS ──
 
 
 @pytest.mark.parametrize(

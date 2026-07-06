@@ -30,7 +30,7 @@ make a stack pass. The fixture IS the spec; the implementation must
 match the spec.
 
 See ADR-0011 (envelope golden) for the cross-language fixture
-precedent and the card body for SC-parity.{1,2}.
+precedent and the SC-parity.{1,2} criteria.
 """
 
 from __future__ import annotations
@@ -195,7 +195,7 @@ async def test_klodi_search_payload_parity(
         f" Expected: {json.dumps(case_entry['expected_wire_payload'])}."
         f" Got: {json.dumps(captured.get('payload'))}."
         f" The fixture IS the contract — fix the implementation, never this"
-        f" assertion. See ADR-0011 and the card body's SC-parity.1."
+        f" assertion. See ADR-0011 (SC-parity.1)."
     )
 
 

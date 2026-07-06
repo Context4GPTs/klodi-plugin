@@ -1,12 +1,12 @@
 """Version-aware ``seed_skill_dir`` — the ``${KLODI_HOME}/skill/`` half.
 
-``seed_skill_dir`` had no direct test before this card; it was only
+``seed_skill_dir`` had no direct test before this change; it was only
 exercised transitively through the setup CLI. These tests pin the new
 **unconditional, version-aware** contract:
 
 * The canonical bundle overwrites an older on-disk copy **even when
   ``reseed=False``** — a wrong deploy flag must never strand a stale
-  skill (the bug this card closes).
+  skill (the bug this change closes).
 * An on-disk copy at the same-or-newer version is left untouched (no
   needless clobber, no version regression, no every-boot churn).
 * The user-editable sibling trees (``policies/``, ``sell/``, ``buy/``)
@@ -88,7 +88,7 @@ class TestSeedSkillDirVersionAware(unittest.TestCase):
             )
 
     def test_older_marker_reseeds_even_with_no_reseed(self) -> None:
-        """The crux of this card: ``reseed=False`` must NOT strand an
+        """The crux of this change: ``reseed=False`` must NOT strand an
         older on-disk skill when the bundle is newer."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

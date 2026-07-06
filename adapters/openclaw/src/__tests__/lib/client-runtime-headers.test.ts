@@ -1,10 +1,9 @@
 /**
- * Adapter-wiring unit tests for runtime-analytics header injection —
- * card stamp-plugin-source-and-runtime-headers.
+ * Adapter-wiring unit tests for runtime-analytics header injection.
  *
  * RED-first. `adapters/openclaw/src/lib/client.ts` constructs the shared
  * `KlodiClient` at two sites (`connectClient` L25, `getClient` L54) passing
- * only `{ credsPath, configPath, onError }`. This card requires both sites to
+ * only `{ credsPath, configPath, onError }`. Both sites must
  * also pass `runtimeHeaders` carrying:
  *   - `X-Klodi-Runtime`        = the static adapter literal "openclaw"
  *   - `X-Klodi-Plugin-Source`  = the resolved install source, from

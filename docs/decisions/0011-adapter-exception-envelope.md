@@ -2,10 +2,8 @@
 id: 0011-adapter-exception-envelope
 title: Adapter exception envelope and pre-call guard contract
 tags: [envelope, guards, error-handling, adapters, parity]
-card: adapter-guard-and-exception-parity-with-zeroclaw
 commit: 73dddd3
 updated_at: 2026-06-19
-updated_by_card: fix-skill-error-envelopes-catalog-drift-ghost-tool
 ---
 
 # ADR-0011 — Adapter exception envelope and pre-call guard contract
@@ -18,7 +16,7 @@ Forward-looking placeholder in [`ADR-0006`](./0006-direct-to-storage-photo-uploa
 
 ## Context
 
-Before this card, the six adapters surfaced error responses to agents in three different shapes:
+Before this change, the six adapters surfaced error responses to agents in three different shapes:
 
 - **openclaw (TS)** returned flat strings via `formatError`/`errorResult` — `{content: [{type:"text", text: "<message>"}], isError: true}`.
 - **hermes / nanobot (Python)** returned partial JSON — `json.dumps({"error": "klodi_unavailable", "message": "..."})` — with the catch-all `except BaseException` arm mislabelling every non-Klodi exception as `connection_not_ready`.
@@ -136,18 +134,18 @@ Rust does NOT yet consume `dist/error-codes.rs` — the drift test covers the ga
 
 - The founder's success signal is met: an agent calling any guarded tool against any adapter receives the same `error` code and `recovery_hint` template zeroclaw returns for the same failure (modulo per-host CLI string).
 - 661 tests (Rust 90 lib + 8 envelope_parity + 4 e2e_envelope + 2 zeroclaw mcp_envelope_e2e + openclaw 273 + tool-catalog 90 + hermes 92 + nanobot 60 + nats-client-py 42) gate parity at the wire and the catalog at the source.
-- The skill bundle (`skill/references/error_envelopes.md`) is the agent's documentation; the cross-link audit at `tests/skill-coverage.test.ts` catches **error-code** drift in either direction (catalog code without doc, doc reference without code). A second, distinct direction — a `klodi_`-prefixed token in the bundle that names a **tool** the catalog doesn't ship (a "ghost tool") — was originally caught *only downstream* in klodi-stage's `every_klodi_token_in_bundle_exists_in_catalog`, which runs against the **packed tarball**, so a ghost token went green in klodi-plugin CI and only reddened in the sibling. The `skill bundle ↔ catalog tool symmetry` block in the same `skill-coverage.test.ts` now mirrors that check at source level (identical regex `/\bklodi_[a-z][a-z0-9_]*\b/g`, intersected with `TOOL_NAMES ∪ LOCAL_TOOL_NAMES`), so tool-token drift fails in-repo. Tool-shaped error-code literals that are received-not-called (e.g. the R2 code `klodi_home_missing`) are deliberately allowlisted in a local `KNOWN_NON_TOOLS` rather than promoted to a shared catalog export — two entries do not justify the coupling; promote on the third (card `fix-skill-error-envelopes-catalog-drift-ghost-tool`, Q1).
+- The skill bundle (`skill/references/error_envelopes.md`) is the agent's documentation; the cross-link audit at `tests/skill-coverage.test.ts` catches **error-code** drift in either direction (catalog code without doc, doc reference without code). A second, distinct direction — a `klodi_`-prefixed token in the bundle that names a **tool** the catalog doesn't ship (a "ghost tool") — was originally caught *only downstream* in klodi-stage's `every_klodi_token_in_bundle_exists_in_catalog`, which runs against the **packed tarball**, so a ghost token went green in klodi-plugin CI and only reddened in the sibling. The `skill bundle ↔ catalog tool symmetry` block in the same `skill-coverage.test.ts` now mirrors that check at source level (identical regex `/\bklodi_[a-z][a-z0-9_]*\b/g`, intersected with `TOOL_NAMES ∪ LOCAL_TOOL_NAMES`), so tool-token drift fails in-repo. Tool-shaped error-code literals that are received-not-called (e.g. the R2 code `klodi_home_missing`) are deliberately allowlisted in a local `KNOWN_NON_TOOLS` rather than promoted to a shared catalog export — two entries do not justify the coupling; promote on the third.
 
 **Negative / deferred.**
 
 - **No Rust artifact codegen yet.** `dist/error-codes.rs` does not exist; Rust hand-maintains its envelope-helper string literals. The drift gate at `error-codes-cross-language.test.ts` covers this — the full codegen lands when a second Rust adapter (or shared crate beyond `klodi-rust-host`) needs the vocabulary.
 - **Marketplace-side error vocabulary is collapsed to `marketplace_error`.** The finer-grained `unauthorized` / `not_found` / `conflict` / `validation_failed` / `rate_limited` codes are defined in R2 but the adapter does not yet remap server codes into them (the marketplace's error vocabulary is server-side and not enumerated in this repo). The agent loses finer recovery granularity on server errors until that mapping lands.
 - **`recovery_hint` for server-side rejections is `null` by default.** A hostile-or-malformed agent prompt against a marketplace `unauthorized` response gets `recovery_hint: null` rather than a structured `klodi_<resource>_mine` hint. The conservative-default rationale (open Q2) is that adapters MUST NOT synthesise hints for codes they don't recognise.
-- **Long-running agent sessions need a restart.** CLAUDE.md "no backwards compatibility" was applied — openclaw's `formatError`/`errorResult`/`requireCreds` and the Rust dispatcher's `map_klodi_err` are deleted, not shimmed. Sessions running pre-card adapters that pattern-match on the flat string break on first failure response.
+- **Long-running agent sessions need a restart.** CLAUDE.md "no backwards compatibility" was applied — openclaw's `formatError`/`errorResult`/`requireCreds` and the Rust dispatcher's `map_klodi_err` are deleted, not shimmed. Sessions running older adapters that pattern-match on the flat string break on first failure response.
 
 ## Open questions
 
-1. **`klodi_unavailable` vs `connection_not_ready`.** The Python path emits `connection_not_ready` directly now; `klodi_unavailable` was never load-bearing post-card. The deprecation alias was considered (founder open Q4) but rejected on the dev pair side — no production agent code depended on the old string. The alias does not exist.
+1. **`klodi_unavailable` vs `connection_not_ready`.** The Python path emits `connection_not_ready` directly now; `klodi_unavailable` was never load-bearing after this change. The deprecation alias was considered but rejected during development — no production agent code depended on the old string. The alias does not exist.
 2. **Server-code → recovery_hint mapping table.** Architect open Q2 + PO open Q2. Deferred to an ADR amendment once real session data shows where agents get stuck on marketplace passthrough errors. The conservative `recovery_hint: null` ships today.
 3. **Rate-limit `details.retry_after_seconds`.** The R2 vocabulary defines `rate_limited` but no adapter currently emits it — the marketplace does not surface this code today. Forward-looking; the parity test fixture has no `rate_limited` row.
 

@@ -45,7 +45,7 @@ _PUBLISH_TIMEOUT_SECONDS = 10
 
 # Distinct, operator-alertable ERROR event for the deterministic publish
 # class — the nanobot analogue of hermes's
-# ``wake_inject_deterministic_failure`` (the epic's reconciled alarm
+# ``wake_inject_deterministic_failure`` (the reconciled alarm
 # shape, ADR-0019). Operators alert on this; it is separable from the
 # routine transient (timeout) path, which NAKs and stays a plain log.
 _DETERMINISTIC_ALARM = "nanobot_publish_deterministic_failure"

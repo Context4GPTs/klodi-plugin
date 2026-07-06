@@ -2,10 +2,8 @@
 id: 0021-version-aware-skill-seeding
 title: Skill seeding is unconditionally version-aware (canonical bundle wins when newer); --no-reseed is demoted to accepted-but-inert and sequenced for cross-repo removal
 tags: [skill, bundle, seeding, versioning, reseed, deprecation, cross-repo, hermes, nanobot, installer, parity]
-card: make-skill-reseed-and-index-version-aware
 commit: ff0efa4
 updated_at: 2026-06-30
-updated_by_card: make-skill-reseed-and-index-version-aware
 ---
 
 # ADR-0021 — Version-aware skill seeding; `--no-reseed` demoted to inert
@@ -73,11 +71,11 @@ two repos.** The flag still parses (the `reseed` param is `del`'d in both govern
 functions) but no longer changes behavior; `main()` logs one deprecation line. This
 is the load-bearing cross-repo coordination the code cannot express:
 
-- **klodi-plugin (this card):** version-awareness is unconditional; `--no-reseed`
+- **klodi-plugin (this change):** version-awareness is unconditional; `--no-reseed`
   is accepted-but-inert with a one-line deprecation log.
-- **klodi-stage sibling** (`reseed-klodi-skill-every-deploy-drop-no-reseed`): drops
+- **klodi-stage sibling:** drops
   `--no-reseed` from its boot scripts and inherits the version-aware default.
-- **Follow-up card** deletes the dead flag from both Python CLIs once the sibling
+- **Follow-up change** deletes the dead flag from both Python CLIs once the klodi-stage
   image has shipped.
 
 One consistent meaning across both repos: **`--no-reseed` cannot strand a stale
@@ -95,7 +93,7 @@ script), distinct from the internal-shim prohibition in CLAUDE.md.
   it would clobber a *newer* on-disk copy with an *older* bundle, violating
   no-regression. No-regression is what forces true version-awareness over
   content-awareness.
-- **Hard-remove `--no-reseed` from argparse now — rejected for this card.** A
+- **Hard-remove `--no-reseed` from argparse now — rejected for this change.** A
   transitional caller still passing it (a prod/demo `init.sh` predating the sibling
   change, a third-party PyPI consumer) would get `argparse error: unrecognized
   arguments` → exit 2 → **no skill at all**, strictly worse than the stale skill we
@@ -131,7 +129,6 @@ reseed target is the regression to guard against; it is pinned by
   (DEPRECATED help text, one-line `klodi_no_reseed_deprecated` warning in `main()`).
 - **Force hatch:** `local_tools.py::_handle_setup_reseed_skill` — unconditional
   force, routed through `copy_skill_tree` so the force leaves a correct marker.
-- **Sibling card:** klodi-stage `reseed-klodi-skill-every-deploy-drop-no-reseed`
-  (epic `klodi-message-user-prod-2026-06`) — drops `--no-reseed` from boot scripts.
+- **Cross-repo:** klodi-stage drops `--no-reseed` from its boot scripts.
 - **Related:** [[0018-klodi-skill-bundle-slug]] (bundle naming at build time),
   [[0004-preserve-state-on-uninstall]] (preserve user state principle).

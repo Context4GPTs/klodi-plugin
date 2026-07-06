@@ -1,7 +1,5 @@
 """RED — persist the register-response CA to ${KLODI_HOME}/nats-ca.pem (py).
 
-Card: auto-trust-nats-ca-from-register.
-
 Two shared helpers land in the Python nats-client:
 
   * ``paths.nats_ca_path(klodi_home)`` — the single source of the persisted-CA

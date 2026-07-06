@@ -1,8 +1,6 @@
 """RED [unit] — ``KLODI_DEFAULT_NATS_URL`` pinned to the tls:// L4 proxy
 across the source constant and BOTH tracked py codegen mirrors.
 
-Card: collapse-nats-transport-guard-to-tls-only.
-
 The constant is codegen'd from ``tool-catalog/src/index.ts`` into two
 tracked ``schemas.json#constants`` mirrors (nats-client-py + logger-py).
 This pins the cutover value ``tls://hayabusa.proxy.rlwy.net:32770``

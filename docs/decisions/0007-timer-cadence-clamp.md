@@ -2,10 +2,8 @@
 id: 0007-timer-cadence-clamp
 title: Timer cadences with parse clamps and silent auto-reject
 tags: [timers, validation, superseded]
-card: pre-harness
 commit: d365332
 updated_at: 2026-04-30
-updated_by_card: pre-harness
 ---
 
 # ADR-0007 — Timer cadences with parse clamps and silent auto-reject

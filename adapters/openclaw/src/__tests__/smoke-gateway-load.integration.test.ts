@@ -1,7 +1,7 @@
 /**
  * Integration proof for: "Load openclaw plugin at gateway startup".
  *
- * Acceptance criteria (card → Discovery findings, [integration] AC-2/3/4/6):
+ * Acceptance criteria ([integration] AC-2/3/4/6):
  *   AC-2 — "Given a stock latest alpine/openclaw gateway with the
  *           freshly-packed klodi tarball installed, when the gateway
  *           boots, then `openclaw gateway health --json` returns
@@ -24,7 +24,7 @@
  * via `gateway health --json` plugins.loaded, proves the fix loads the
  * plugin. (AC-3 — tools + wake-pump register as a consequence of load —
  * rides on the same boot; the load assertion is its precondition and the
- * authoritative user-observable signal the card names.)
+ * authoritative user-observable signal.)
  *
  * The assertion is the conjunction that flips on the expert's edit:
  *   1. the gateway-load script exists, AND
@@ -38,13 +38,13 @@
  * goes GREEN only when the `.activation` fix lands AND the script exists,
  * the same shape as the sibling's "model-less fixture AND it loads".
  *
- * HARD CONSTRAINTS (card Intent + product-owner notes — do not relax):
+ * HARD CONSTRAINTS (Intent + product-owner notes — do not relax):
  *   - The sole authoritative load signal is `openclaw gateway health
  *     --json` → plugins.loaded. NOT `/v1/models` (serves Control UI HTML
  *     on the latest openclaw regardless of load — false green). NOT the
  *     `klodi_plugin_loaded` log marker (can fire on a lazy/capability
  *     path while klodi is still absent from the startup plugins.loaded
- *     set — the exact gap this card closes). NOT `plugins doctor` (a
+ *     set — the exact gap this closes). NOT `plugins doctor` (a
  *     static manifest lint that passed clean while the plugin failed to
  *     load). So this wrapper keys its assertion off the script's
  *     plugins.loaded report — never a model endpoint, never a log marker.
@@ -65,7 +65,7 @@
  *
  * DO NOT weaken this test to make it pass while the plugin doesn't load.
  * Fix `.activation` so the plugin actually loads at gateway startup; that
- * is the whole point of the card.
+ * is the whole point of this change.
  */
 
 import { describe, it, expect } from "vitest";
@@ -159,7 +159,7 @@ describe("smoke-gateway-load.sh loads klodi at gateway startup on the latest ope
       //     The script emits the loaded set; the plugin's id MUST appear
       //     in it. We deliberately do NOT accept the klodi_plugin_loaded
       //     log marker or a /v1/models response as proof — they are
-      //     forbidden by the card (a marker can fire on a lazy path while
+      //     forbidden by the constraints (a marker can fire on a lazy path while
       //     klodi is absent from the startup plugins.loaded set; /v1/models
       //     is Control-UI HTML on the latest openclaw). Belt-and-braces on the
       //     plugin id the criterion names directly, in case the script's
@@ -173,7 +173,7 @@ describe("smoke-gateway-load.sh loads klodi at gateway startup on the latest ope
       ).toContain("klodi");
       expect(log).toContain("plugins.loaded");
 
-      // (4) Axis-4 arm assertion (this card — wake-pump-never-arms). Loaded
+      // (4) Axis-4 arm assertion (wake-pump-never-arms). Loaded
       //     is necessary but not sufficient: root cause B is a loaded plugin
       //     that misclassifies the gateway runtime and stays inert. The
       //     script asserts the gateway DAEMON phase of the boot log carries

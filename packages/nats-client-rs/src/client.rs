@@ -130,7 +130,7 @@ impl KlodiClient {
                 return Ok(());
             }
         }
-        // Per epic `nats-tls-only-2026-07`: refuse any non-`tls://` nats_url.
+        // Refuse any non-`tls://` nats_url.
         // Closes the compound attack where a compromised registration
         // endpoint injects a `ws://` / `wss://` / `nats://` URL. `tls://` is
         // the sole accepted transport — no localhost bypass.
@@ -143,8 +143,7 @@ impl KlodiClient {
         // NB: NO `.retry_on_initial_connect()`. That flag backgrounds the
         // initial connect and swallows a deterministic CA/TLS-verify failure
         // into an infinite retry loop (the caller gets an `Ok` client that
-        // never connects — the stall card
-        // `gate-auto-trust-on-well-formed-ca-loud-fail` closes). Instead the
+        // never connects). Instead the
         // initial connect runs foreground via `initial_connect`, which fails
         // fast + structured on a `Tls` verify error and retries only transient
         // (Io/Dns/TimedOut) errors. `max_reconnects(None)` still governs

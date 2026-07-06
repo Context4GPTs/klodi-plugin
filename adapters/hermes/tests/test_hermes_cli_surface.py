@@ -24,7 +24,7 @@ from typing import Any
 
 from klodi_hermes.bridge import BridgeCtx
 
-# The corrected source tag the bridge must add (the card's fixed contract:
+# The corrected source tag the bridge must add (the fixed contract:
 # argv == [hermes, "chat", "-q", text, "-Q", "--source", "klodi"]).
 _EXPECTED_SOURCE = "klodi"
 
@@ -161,7 +161,7 @@ def test_bridge_source_carries_no_rejected_session_flag() -> None:
 def test_hermes_test_files_carry_no_rejected_session_flag() -> None:
     """AC-7: no hermes test file may bake the rejected session flag back in
     either — a stub literal restating the broken assumption is the exact
-    anti-pattern this card removes. Regression guard against re-introduction."""
+    anti-pattern this change removes. Regression guard against re-introduction."""
     offenders = [
         path.name
         for path in sorted(_TESTS_DIR.rglob("*.py"))

@@ -1,12 +1,10 @@
 /**
  * RED — klodi-skill rename contract: residual-slug grep guard.
  *
- * Card: rename-skill-folder-and-frontmatter-to-klodi-skill.
- *
  * FOUNDER SCOPE EXPANSION (2026-06-25): the canonical build-time source
  * dir `klodi-plugin/skill/` is ALSO renamed to `klodi-plugin/klodi-skill/`.
  * The original PR #27 already renamed openclaw's published DESTINATION
- * slug; this card now *adds* the canonical SOURCE rename and every
+ * slug; this change now *adds* the canonical SOURCE rename and every
  * build-input consumer of it across all six adapters + the registry.
  *
  * The latch polarity INVERTS from the original contract:

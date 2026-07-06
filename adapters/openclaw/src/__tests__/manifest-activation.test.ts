@@ -8,10 +8,10 @@
  * runs and klodi is absent from `gateway health --json` `plugins.loaded`.
  * Today `.activation` is `{ "onCapabilities": ["tool"] }` — a
  * capability-demand trigger that never fires at gateway boot — so klodi
- * does not load. (See the card root-cause section + ADR-0014's
+ * does not load. (See the root-cause analysis + ADR-0014's
  * "2026.4.15 tolerant / 2026.5.27 enforcing" version-gate class.)
  *
- * Acceptance criterion (card → Discovery findings, [unit] AC-1):
+ * Acceptance criterion ([unit] AC-1):
  *   "Given adapters/openclaw/openclaw.plugin.json, when its `.activation`
  *    block is read, then it declares a startup-firing trigger
  *    (`onStartup: true`) such that a tool-providing plugin is activated
@@ -30,7 +30,7 @@
  *
  * DO NOT weaken this test to match the current manifest. Fix the
  * manifest — making the plugin actually load at gateway startup is the
- * whole point of the card.
+ * whole point of this change.
  */
 
 import { describe, it, expect } from "vitest";
@@ -85,7 +85,7 @@ describe("openclaw.plugin.json declares startup activation (loads at gateway boo
     // `onCapabilities: ["tool"]` is a capability-demand trigger that
     // never fires at gateway boot on 2026.5.27 — it is the exact bug.
     // The chosen fix drops it (a single unambiguous startup trigger
-    // removes the double-activation surface; see card Risks: `register()`
+    // removes the double-activation surface; note that `register()`
     // is not idempotent against `api.registerTool`). Keeping it alongside
     // `onStartup` is ruled out unless the expert proves the live host
     // needs it AND adds a register-once guard — which would be a
@@ -103,7 +103,7 @@ describe("openclaw.plugin.json declares startup activation (loads at gateway boo
   });
 
   it("does not fall back to `onCapabilities` as the only trigger when onStartup is absent", () => {
-    // Defends the precise failure mode the card names: a manifest whose
+    // Defends the precise failure mode: a manifest whose
     // ONLY activation key is `onCapabilities` reads, to the 2026.5.27
     // host, as "activate me only when a tool capability is demanded" —
     // and at gateway boot nothing demands it. This assertion fails fast

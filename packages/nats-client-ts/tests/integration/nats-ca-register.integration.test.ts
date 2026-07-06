@@ -1,7 +1,6 @@
 /**
  * GATED e2e — register-supplied CA, no env override, connects tls:// (ts).
  *
- * Card: auto-trust-nats-ca-from-register.
  * Criteria:
  *   - [e2e] private-CA NATS over tls:// + a register response supplying that CA
  *     as nats_ca → a host that persists it then connects using ONLY the
@@ -9,7 +8,7 @@
  *   - [integration] a persisted register CA that does not match the proxy chain
  *     → connect fails CLOSED, never a plaintext / verify-off fallback.
  *
- * GATE (dev-pair local TLS harness — NOT the epic Railway proxy): SKIPS unless
+ * GATE (dev-pair local TLS harness — NOT the Railway proxy): SKIPS unless
  * KLODI_TLS_INTEGRATION=1, KLODI_TLS_NATS_URL (tls://…), KLODI_NATS_CA_FILE
  * (the CA that signs the test nats cert), KLODI_TLS_CREDS_PATH.
  *
@@ -29,8 +28,7 @@ import { KlodiClient } from "../../src/client.js";
 import { CaTrustError, persistNatsCa } from "../../src/tls.js";
 
 /** A bad persisted CA must reach a terminal error within this bound; a hang
- *  trips the race → the assertion fails. Card
- *  gate-auto-trust-on-well-formed-ca-loud-fail. */
+ *  trips the race → the assertion fails. */
 const TERMINAL_BOUND_MS = 12_000;
 
 const ON = process.env["KLODI_TLS_INTEGRATION"] === "1";
@@ -104,7 +102,7 @@ describe.skipIf(!SHOULD_RUN)("tls:// with register-supplied CA", () => {
   });
 
   it("fails closed (terminal, bounded, structured) when the persisted CA does not match", async () => {
-    // TIGHTENED by card gate-auto-trust-on-well-formed-ca-loud-fail from a bare
+    // TIGHTENED from a bare
     // `.rejects.toThrow()`: the wrong-signer persisted register CA must fail
     // loud + terminal + prompt with a structured `CaTrustError`, not merely
     // "not connected". A hang trips the race → this fails. QA-owned.

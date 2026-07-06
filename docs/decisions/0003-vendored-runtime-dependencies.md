@@ -2,10 +2,8 @@
 id: 0003-vendored-runtime-dependencies
 title: Runtime dependencies vendored into `dist/node_modules/`
 tags: [publish, vendoring, superseded]
-card: pre-harness
 commit: d365332
 updated_at: 2026-04-30
-updated_by_card: pre-harness
 ---
 
 # ADR-0003 — Runtime dependencies vendored into `dist/node_modules/`

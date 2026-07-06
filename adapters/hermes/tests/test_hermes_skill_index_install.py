@@ -27,7 +27,7 @@ Filesystem contract (the **version-aware** contract these tests pin):
   version (a dotfile ``.klodi-skill-version`` marker), NOT by the
   ``reseed`` flag. A stale or unmarked index is rebuilt even when
   ``reseed=False`` — a wrong deploy flag must never strand a stale
-  index (the bug this card closes). The marker is stamped LAST, after
+  index (the bug this change closes). The marker is stamped LAST, after
   a successful copytree.
 * An index already at the same-or-newer version is left untouched and
   the existing path is returned (idempotent — no every-boot churn, no

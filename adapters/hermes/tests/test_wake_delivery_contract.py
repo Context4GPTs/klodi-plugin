@@ -1,6 +1,6 @@
 """RED net — the terminal-delivery contract on the wake surface.
 
-Card: ``relay-wake-turn-never-delivers-to-operator``. A relay wake runs a
+A relay wake runs a
 full agent turn, the agent ends with plain assistant prose (".. What should
 I do?") and never calls ``klodi_message_user``; the bridge captures that
 final text and discards it on exit 0, so the operator is never reached.
@@ -16,7 +16,7 @@ regression must fail, but a re-worded-but-correct fix must pass) — the
 same "pin the contract, not the wording" style as
 ``test_skill_outbound_policy.py``.
 
-Coverage (from the card's "Architect-added — deterministic net"):
+Coverage (the "Architect-added — deterministic net"):
   * U1 — ``format_channel_wake`` / ``format_notification_wake`` on a
           delivery-warranting wake (``channel.opened`` / ``channel.message``)
           carry an explicit terminal-disposition instruction: end in a
@@ -90,7 +90,7 @@ def _framing_outside_json(text: str) -> str:
     ```json ... ``` event body stripped out.
 
     The terminal-disposition instruction MUST live here (plugin framing),
-    never inside the JSON a counterparty controls: the card's risk section
+    never inside the JSON a counterparty controls: the risk analysis
     requires the instruction stay "plugin-authored framing wrapping the
     untrusted payload ... placed outside the untrusted JSON body" so a
     prompt-injection (the Wake-B class) can't forge or suppress it.
@@ -378,7 +378,7 @@ def test_no_operator_target_is_surfaced_loudly_never_silent(
     pinned in test_message.py's resolver tests.)
 
     This is a STANDING GUARD: the loud path exists today; it must not regress
-    to a swallow when the egress is broadened by this card's fix."""
+    to a swallow when the egress is broadened by this change's fix."""
     monkeypatch.setattr(message, "resolve_operator_target", lambda: None)
 
     with caplog.at_level("ERROR", logger="klodi_hermes.message"):

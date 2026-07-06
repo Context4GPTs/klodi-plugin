@@ -68,8 +68,7 @@ const RegisterPollOutcome = Type.Object({
  * (`4gpts-p2p-marketplace/packages/schemas/src/match-feedback.ts`) — NOT a
  * UUID. The id rides in the publish *body*, not a subject path, so it carries
  * the slug pattern rather than the strict `Uuid` descriptor (which the
- * channel-message subject-injection guard needs). See the card
- * emit-standing-search-accept-dismiss-feedback.
+ * channel-message subject-injection guard needs).
  */
 const MatchFeedbackSlug = Type.String({
   pattern: "^[a-z0-9][a-z0-9._-]{0,119}$",

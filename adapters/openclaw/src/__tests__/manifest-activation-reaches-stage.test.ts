@@ -6,13 +6,13 @@
  * tarball. `scripts/vendor.mjs` stages the publish-ready tree at
  * `.publish-stage/` and copies `openclaw.plugin.json` verbatim
  * (`TOP_LEVEL_FILES` → `cpSync`). This test proves that contract holds for
- * the field this card depends on: after vendoring, the staged manifest's
+ * the field this change depends on: after vendoring, the staged manifest's
  * `.activation` is byte-identical to source. If a future change to
  * vendor.mjs ever rewrote/stripped/mangled the manifest, the fix would be
  * green in source yet absent from the tarball users install — the exact
  * "source-fixed but artefact-broken" gap this asserts against.
  *
- * Acceptance criterion (card → Discovery findings, [unit] AC-1b):
+ * Acceptance criterion ([unit] AC-1b):
  *   "Given the publish stage produced by scripts/vendor.mjs, when
  *    .publish-stage/openclaw.plugin.json `.activation` is compared to the
  *    source manifest's `.activation`, then they are identical — the
@@ -20,7 +20,7 @@
  *
  * Mirrors the structural-assert discipline already in
  * scripts/smoke-plugin-load.sh (which proves vendored sources reach the
- * tarball), at the unit tier and scoped to the one field this card moves.
+ * tarball), at the unit tier and scoped to the one field this change moves.
  *
  * Placement / runnability. The publish stage only exists after the real
  * build path produces it: vendor.mjs preflight requires the adapter's

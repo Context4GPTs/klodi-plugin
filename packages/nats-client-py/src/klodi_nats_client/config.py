@@ -131,7 +131,7 @@ def load_creds(path: str | Path) -> Path:
 def assert_tls(nats_url: str) -> None:
     """Refuse `nats_url` unless it uses the `tls://` transport.
 
-    Per epic ``nats-tls-only-2026-07``: ``tls://`` (raw NATS-over-TLS, the
+    ``tls://`` (raw NATS-over-TLS, the
     L4 TCP-proxy path) is the **sole** accepted transport. It terminates
     TLS at the NATS server with certificate + hostname verification ON
     (see `klodi_nats_client.tls`). Every other scheme (`wss://` / `ws://`

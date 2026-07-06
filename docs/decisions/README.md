@@ -17,10 +17,8 @@ Each ADR has YAML frontmatter matching the harness `distillation` contract (`.cl
 id: NNNN-<kebab-slug>       # matches filename, no `.md` suffix
 title: <human-readable>
 tags: [<tag>, ...]          # add `superseded` for retired ADRs
-card: <originating-card>    # `pre-harness` for ADRs introduced before the kanban harness
 commit: <sha>               # last commit that meaningfully changed the body
 updated_at: <YYYY-MM-DD>
-updated_by_card: <this-card-slug>
 ---
 ```
 

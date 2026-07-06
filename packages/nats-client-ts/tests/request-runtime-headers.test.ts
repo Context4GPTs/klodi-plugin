@@ -1,6 +1,6 @@
 /**
  * Boundary unit tests for runtime-analytics header stamping on the
- * tool-call request path — card stamp-plugin-source-and-runtime-headers.
+ * tool-call request path.
  *
  * RED-first. `KlodiClient.request()` today builds `hdrs` with ONLY the two
  * auth headers (`X-User-Id`, `X-Nkey-Public`) — see `src/client.ts:238-240`.
@@ -20,7 +20,7 @@
  * first call. The shared client must stamp *whatever keys it was handed* and
  * know nothing about adapters or install sources.
  *
- * Seam (confirmed with the card handoff): `request()` calls
+ * Seam (confirmed): `request()` calls
  * `requireConnection()` (`client.ts:456`) and `requireConfig()` /
  * `loadConfigFromDisk()`. We inject the fake `nc` and a cached `config`
  * directly via the private fields so neither performs real I/O — this is a

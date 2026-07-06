@@ -1,8 +1,6 @@
 /**
  * Catalog-request/reply ↔ registered-by-name symmetry gate (the THIRD axis).
  *
- * Card: fix-klodi-searches-delete-catalog-drift.
- *
  * The contract (from Discovery — DO NOT relitigate in this test):
  *   Every request/reply catalog key (`Object.keys(klodiTools)` in
  *   packages/tool-catalog/src/index.ts) MUST be registered under that same
@@ -18,7 +16,7 @@
  *   Neither reads `klodiTools` to assert a request/reply key is *registered by
  *   its own name on the gateway*. A `klodiTools` entry consumed only as a
  *   `.subject` (never as a `registerTool` name) — exactly the
- *   `klodi_searches_delete` ghost this card removes — is invisible to both.
+ *   `klodi_searches_delete` ghost being removed — is invisible to both.
  *   This gate closes that third axis: a future catalog-only ghost fails CI.
  *
  *   The compared set is the CATALOG side, not the registered side. The openclaw
@@ -77,7 +75,7 @@ const REAL_TOOLS_SRC = join(REPO_ROOT, "adapters", "openclaw", "src", "tools");
 
 /**
  * The lone request/reply catalog key with no openclaw registration — the ghost
- * this card removes. After the DROP it is gone from `klodiTools`, so the
+ * removed here. After the DROP it is gone from `klodiTools`, so the
  * real-tree case below goes GREEN.
  */
 const GHOST = "klodi_searches_delete";

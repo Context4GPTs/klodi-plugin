@@ -1,15 +1,14 @@
 /**
- * E2E acceptance — flywheel loop-closure, in-repo arm (card:
- * emit-standing-search-accept-dismiss-feedback, SC8).
+ * E2E acceptance — flywheel loop-closure, in-repo arm (SC8).
  *
- * The card's e2e criterion spans THREE repos:
+ * The e2e criterion spans THREE repos:
  *   klodi-plugin (emit) → 4gpts-p2p-marketplace (capture into
  *   search_match_examples) → klodi-stage (`flywheel:curate`) →
  *   flywheel.json != [].
  *
  * That full loop is the GOAL-level acceptance gate (SC8), verified by the
  * orchestrator across the three siblings — it CANNOT run inside klodi-plugin's
- * own suite, and per the card we do NOT spin up three repos here.
+ * own suite, and we do NOT spin up three repos here.
  *
  * What we CAN and MUST verify in-repo is the publish-contract conformance:
  * the body the plugin emits is EXACTLY what the marketplace's SC8a capture

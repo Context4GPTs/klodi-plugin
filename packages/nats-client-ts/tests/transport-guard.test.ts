@@ -1,7 +1,7 @@
 /**
  * Transport guard collapsed to `tls://` ONLY, no localhost bypass (ts).
  *
- * Card: remove-dead-ws-localhost-nats-transport-bypass. The ts arm of the
+ * The ts arm of the
  * py/rs guard matrix — flips the prior *localhost-accepts-any-scheme*
  * premise to *localhost-is-no-longer-a-bypass*. The guard's sole rule is
  * now `scheme === tls://`; `tls://localhost` (dev CA) is accepted because
@@ -25,7 +25,7 @@
  *
  * QA-owned (adversarial-testing). NEVER weaken these asserts. In particular:
  * do NOT re-widen the guard to accept `ws://localhost` so an old assertion
- * passes — the localhost bypass is the plaintext surface this card deletes.
+ * passes — the localhost bypass is the plaintext surface being deleted.
  */
 
 import { describe, expect, it } from "vitest";
@@ -67,7 +67,7 @@ describe("assertTls — every non-tls scheme rejects off-localhost", () => {
   });
 });
 
-describe("assertTls — THE FLIP: localhost is no longer a bypass", () => {
+describe("assertTls — localhost is no longer a bypass", () => {
   it.each([
     "ws://localhost:8080",
     "wss://localhost",

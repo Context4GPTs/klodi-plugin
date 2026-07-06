@@ -1,7 +1,6 @@
 /**
  * Publish-boundary tests for `publishMatchFeedback` (TS half) — the
- * flywheel-emit helper added by card
- * emit-standing-search-accept-dismiss-feedback (SC8).
+ * flywheel-emit helper (SC8).
  *
  * RED-first: `publishMatchFeedback` is not exported from `../src/publish.js`
  * yet, so the import fails to resolve until the expert-developer adds the
@@ -215,7 +214,7 @@ describe("publishMatchFeedback — body ids are validated as slug/bounded-string
   it("ACCEPTS a non-UUID listing_id (the helper must NOT reuse the channel-message UUID guard)", async () => {
     const captures: CapturedPublish[] = [];
     const js = jsStub(captures);
-    // This is the explicit card assertion: a non-UUID listing_id must NOT be
+    // This is the explicit assertion: a non-UUID listing_id must NOT be
     // rejected — it rides in the body, not a subject path, and the
     // marketplace accepts a bounded string.
     await expect(

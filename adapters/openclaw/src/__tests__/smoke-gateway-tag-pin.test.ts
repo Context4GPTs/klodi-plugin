@@ -1,14 +1,14 @@
 /**
  * Tag-hygiene guard for the gateway-load smoke gate.
  *
- * Card: openclaw-wake-pump-never-arms-in-real-gateway — founder review on
+ * Founder review on
  * PR #19. The wake-pump DETECTION fix (argv[2] === "gateway") is accepted
  * and not in question. What is wrong is VERSION PINNING: the gateway smoke
  * gate hard-pinned `alpine/openclaw:2026.5.27`, and the latest published
  * openclaw is 2026.6.9. Founder policy: we always align with the LATEST
  * openclaw image — no fixed image pins on the gateway gate.
  *
- * The bug already reproduces on 2026.6.9 (card Symptom/Repro), so the
+ * The bug already reproduces on 2026.6.9, so the
  * argv-subcommand detection still holds on latest — this is a pin /
  * version-hygiene rework, not a logic change.
  *
@@ -82,7 +82,7 @@ const GATEWAY_SMOKE_SCRIPT = join(
  * free unit test that runs in the default `pnpm test` loop. Pre-existing
  * 2026.5.27 references OUTSIDE this PR (ADR-0014, check-openclaw-manifest-
  * tools.sh, manifest-activation.test.ts) are out of scope — they belong to
- * other cards and are not this PR's to rewrite.
+ * other work and are not this PR's to rewrite.
  */
 const PR_DIFF_FILES: string[] = [
   "adapters/openclaw/scripts/smoke-gateway-load.sh",

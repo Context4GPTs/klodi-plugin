@@ -90,7 +90,7 @@ def register(ctx: Any) -> None:
     # WAKE_PUMP_HOST_ATTR marker. A non-host loader (the `hermes gateway run`
     # daemon, a transient `hermes chat -q` wake subprocess) must NOT subscribe
     # the shared durable consumers: its ctx no-ops any wake it pulls and the
-    # consumer ACKs the drop — the first-wake-after-idle split-brain this card
+    # consumer ACKs the drop — the first-wake-after-idle split-brain this
     # fixes. The discriminator is a positive, NON-inherited ctx attribute
     # (never an env var: inject_message merges {**os.environ} into its
     # children, so an env flag would leak and fail OPEN). See ADR-0015.

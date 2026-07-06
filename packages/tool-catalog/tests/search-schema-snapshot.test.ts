@@ -35,7 +35,7 @@ import { describe, expect, it } from "vitest";
 
 import { klodiTools, TOOL_NAMES } from "../src/index.js";
 
-// ─── Known params surfaces — frozen per the card's stable-contract gate ─
+// ─── Known params surfaces — frozen per the stable-contract gate ─
 
 /**
  * Every catalog field the agent already calls today on `klodi_search`.
@@ -275,8 +275,8 @@ describe("klodi_searches_create — stable contract (SC-contract.2 + SC-additive
 describe("golden/search-schemas.json snapshot exists alongside the contract", () => {
   // Per PO Open Q2 + architect answer: the golden directory is the
   // canonical home of frozen schema snapshots. The JSON snapshot is
-  // human-readable documentation of the catalog surface at this card's
-  // RED phase. This test pins the snapshot file's existence so a future
+  // human-readable documentation of the catalog surface at the RED
+  // phase. This test pins the snapshot file's existence so a future
   // catalog edit cannot silently delete it.
   it("loads the JSON-Schema snapshot from packages/tool-catalog/tests/golden/", async () => {
     const { readFileSync } = await import("node:fs");

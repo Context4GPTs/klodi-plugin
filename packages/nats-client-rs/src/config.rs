@@ -103,7 +103,7 @@ pub fn load_creds(path: &Path) -> Result<String, KlodiError> {
 
 /// Refuse `nats_url` unless it uses the `tls://` transport.
 ///
-/// Per epic `nats-tls-only-2026-07`: `tls://` (raw NATS-over-TLS, the L4
+/// `tls://` (raw NATS-over-TLS, the L4
 /// TCP-proxy path) is the **sole** accepted transport. It terminates TLS
 /// at the NATS server with certificate + hostname verification ON (see
 /// [`crate::tls`]). Every other scheme (`wss://` / `ws://` / `nats://`) is

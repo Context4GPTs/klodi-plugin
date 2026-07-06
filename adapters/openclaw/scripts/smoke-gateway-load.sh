@@ -27,7 +27,7 @@
 # trigger and the host treats `.activation` as an authoritative load gate. The
 # signal that observes
 # axis 3 is a live gateway boot read via `gateway health --json`
-# plugins.loaded. Axis 4 — the gap THIS card (wake-pump-never-arms) closes —
+# plugins.loaded. Axis 4 — the gap THIS change (wake-pump-never-arms) closes —
 # is observed in the gateway's own startup log: a loaded plugin that
 # misclassifies the gateway runtime (root cause B) still logs
 # `wake_pump_skip_non_gateway` and never arms, so klodi is "loaded but inert".

@@ -2,10 +2,8 @@
 id: 0016-wake-log-correlator-contract
 title: wake_enqueued correlator — echo the producer's event_id, never mint one; the contract is codegen'd into 3 loggers but emitter-satisfied only in openclaw
 tags: [logging, correlator, wake, observability, catalog, contracts, adapters, parity, openclaw]
-card: add-event-correlator-to-wake-enqueued-log
 commit: a608937
 updated_at: 2026-06-23
-updated_by_card: add-event-correlator-to-wake-enqueued-log
 ---
 
 # ADR-0016 — `wake_enqueued` correlator: echo the producer's `event_id`, never mint one; contract codegen'd into all three loggers but emitter-satisfied only in openclaw
@@ -29,7 +27,7 @@ what a wake, once fired, *logs* so it can be correlated back to its wire event.
 ## Context
 
 `wake_enqueued` exists so an operator can tie a *wake* (the local act of waking the
-agent) back to the *wire event* that caused it. Before this card the openclaw
+agent) back to the *wire event* that caused it. Before this change the openclaw
 emitter (`wake.ts`, the only `wake_enqueued` emitter in the whole repo) logged
 `{ reason, sessionKey, ...store-diag }` — no `event_id`, and `kind` only smuggled
 in through the overloaded `reason`. Two same-kind wakes to one persona were
@@ -96,8 +94,8 @@ overloaded `reason`.**
   (`events.ts:10-11`) and makes redeliveries look distinct. The id must be the
   producer's.
 - **Thread the id through `wake-pump.ts` / `nats-client-ts` — rejected.** The pump
-  is event-agnostic; the handler already holds `event.event_id`. (This was the
-  card's provisional guess; Discovery overturned it.)
+  is event-agnostic; the handler already holds `event.event_id`. (This was an
+  initial provisional guess; investigation overturned it.)
 - **Make the correlator required — rejected.** Breaks the five synthetic
   `register-poller.ts` callers at build time; they legitimately have no wire id.
   Optional param + nullable field instead.
@@ -133,6 +131,6 @@ the event payload already rides the wake *text* to the agent (per
   [[0012-tool-request-payload-parity]] (parity family);
   [[0015-gateway-runtime-load-vs-armed-axis]] (does the pump arm at all);
   [[0001-persistent-websocket-connection]] (the wake-event transport).
-- **Out of scope (sibling cards):** hermes/nanobot/rust wake paths emit no
+- **Out of scope (sibling adapters):** hermes/nanobot/rust wake paths emit no
   `wake_enqueued` line yet; the referenced `tests/integration/log-contract.test.ts`
   is absent.

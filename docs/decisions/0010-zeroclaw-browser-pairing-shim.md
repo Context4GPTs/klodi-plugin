@@ -2,10 +2,8 @@
 id: 0010-zeroclaw-browser-pairing-shim
 title: Browser-pairing helper for klodi-zeroclaw (auto-mint + loopback HTTP shim)
 tags: [zeroclaw, pairing, auth]
-card: pre-harness
 commit: 93a536e
 updated_at: 2026-05-10
-updated_by_card: pre-harness
 ---
 
 # ADR-0010 — Browser-pairing helper for klodi-zeroclaw

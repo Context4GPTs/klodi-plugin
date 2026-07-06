@@ -726,9 +726,9 @@ export const KLODI_DEFAULT_NATS_URL = "tls://hayabusa.proxy.rlwy.net:32770";
 
 /**
  * Bundled private-CA PEM trusted for the raw `tls://` NATS transport
- * (the Railway L4 TCP-proxy path — epic `nats-ws-ingress-flap-2026-06`).
+ * (the Railway L4 TCP-proxy path).
  *
- * Intentionally EMPTY until the epic mints the real CA and the gated
+ * Intentionally EMPTY until the real CA is minted and the gated
  * cutover drops it in here. An empty value means "no bundled CA yet":
  * clients fall through to the `KLODI_NATS_CA_FILE` env override (a PEM
  * path — how local/self-signed tests trust their CA) and, absent that,

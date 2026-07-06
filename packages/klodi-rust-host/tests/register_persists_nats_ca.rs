@@ -1,6 +1,5 @@
 //! RED — the rust host persists the register-response nats_ca.
 //!
-//! Card: auto-trust-nats-ca-from-register.
 //! The ONE rust-host persist site (`register.rs::persist_session`) covers
 //! moltis + ironclaw + zeroclaw — the Rust third of the six-adapter symmetry
 //! audit (Scenario 1 persist + Scenario 3 no-regression + rotation):

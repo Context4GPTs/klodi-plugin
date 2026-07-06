@@ -2,10 +2,9 @@
  * openclaw persists a server-sent `tls://` nats_url and refuses non-tls
  * (register-poller.ts).
  *
- * Cards: support-tls-nats-transport-with-private-ca-trust (tls:// persist +
- * non-localhost refusal, verify-only) AND
- * remove-dead-ws-localhost-nats-transport-bypass (the NEW `ws://localhost`
- * refusal — RED today, since localhost is still a bypass on current `main`).
+ * Two behaviors: `tls://` persist + non-localhost refusal (verify-only), AND
+ * the NEW `ws://localhost` refusal — RED today, since localhost is still a
+ * bypass on current `main`.
  *
  * Criteria (Acceptance → D "each adapter persist path rejects a non-tls:// url"):
  *
@@ -15,8 +14,8 @@
  *   - marketplace returns ANY non-`tls://` url — nats:// / ws:// non-localhost,
  *     OR `ws://localhost` (the flip) → `invalid_response`; nothing persisted.
  *
- * `register-poller.ts` delegates to the shared guard (`assertTls` after this
- * card's rename) — all four adapters delegate now, none carry an inline scheme
+ * `register-poller.ts` delegates to the shared guard (`assertTls` after the
+ * rename) — all four adapters delegate now, none carry an inline scheme
  * copy. Mirrors the existing `register-poller.test.ts` harness (fetch mocked,
  * temp KLODI_HOME).
  *
@@ -108,7 +107,7 @@ describe("claimRegisterSession — tls:// nats_url", () => {
   });
 
   it("rejects a ws://localhost url with invalid_response (the flip)", async () => {
-    // THE FLIP (remove-dead-ws-localhost-nats-transport-bypass):
+    // The behavior flip:
     // ws://localhost was accepted while localhost was a plaintext bypass.
     // After the guard collapse the shared guard rejects it, so the openclaw
     // persist path returns invalid_response and writes nothing.

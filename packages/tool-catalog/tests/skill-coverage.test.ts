@@ -176,12 +176,12 @@ describe("skill bundle ↔ catalog tool symmetry (local mirror of klodi-stage)",
   // (integration/skill/skill-catalog-symmetry.test.ts) — moved into klodi-plugin
   // so the same drift fails in-repo at source level, not only downstream against
   // the packed tarball. Identical regex + identical union; if these diverge the
-  // local guard gives false confidence (see card risk note).
+  // local guard gives false confidence.
   const TOKEN_RE = /\bklodi_[a-z][a-z0-9_]*\b/g;
 
   // Frozen ADR-0011 §R2 error-code literals, not tools. An agent receives these
   // verbatim in an envelope `error` field; it never calls them. Two entries only —
-  // kept local rather than promoted to a shared export (card Q1).
+  // kept local rather than promoted to a shared export.
   const KNOWN_NON_TOOLS = new Set(["klodi_home", "klodi_home_missing"]);
 
   function bundleText(): string {

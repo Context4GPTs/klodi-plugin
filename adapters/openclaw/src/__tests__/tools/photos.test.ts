@@ -2,7 +2,7 @@
  * Tests for the photo-resolution behaviour folded into klodi_list_create
  * and klodi_list_update.
  *
- * The card "fold-uploads-into-listing-tools" replaces the standalone
+ * Folding uploads into the listing tools replaces the standalone
  * klodi_assets_upload_url tool with adapter-internal handling: each
  * element of `params.photos` can be either an `http(s)://` URL (passed
  * through verbatim) or an absolute local filesystem path (validated,
@@ -951,12 +951,12 @@ describe("klodi_list_create — non-array photos rejection (P2.4)", () => {
 // when photo resolution fails. CQG round 1 found three divergent shapes
 // (openclaw flat string, hermes/nanobot 3-key JSON, Rust McpError).
 //
-// Base-drift reconciliation (round 3) folds the sibling card's
-// `fold-uploads-into-listing-tools` photo pipeline under ADR-0011. The
+// Base-drift reconciliation (round 3) folds the photo-upload
+// pipeline under ADR-0011. The
 // pre-fold per-stage `error` vocabulary (`absolute_path`, `missing`,
 // `content_type`, `size`, `count`, `type`, `put`) is NOT in ADR-0011's
 // closed R2 code set — those codes would let an agent see a value outside
-// the frozen vocabulary, the exact drift this card eliminates.
+// the frozen vocabulary, the exact drift eliminated here.
 //
 // Canonical reconciled shape (R1 four keys, R2 closed code):
 //   {

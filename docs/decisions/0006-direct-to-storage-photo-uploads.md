@@ -2,10 +2,8 @@
 id: 0006-direct-to-storage-photo-uploads
 title: Direct-to-storage photo uploads via signed URLs
 tags: [uploads, r2, marketplace]
-card: pre-harness
 commit: d365332
 updated_at: 2026-05-23
-updated_by_card: adapter-guard-and-exception-parity-with-zeroclaw
 ---
 
 # ADR-0006 — Direct-to-storage photo uploads via signed URLs
@@ -54,7 +52,7 @@ The standalone `klodi_assets_upload_url` agent tool is removed. The NATS subject
 - **Content-type and size enforced before the client can upload.** A client that tries to upload 100MB of executable wrapped as image/jpeg gets EACCES from R2, because the presigned URL was cut for `image/jpeg` at 10MB.
 - **Bounded URL lifetime.** A leaked signed URL expires; the equivalent persistent upload endpoint would remain exploitable.
 - **Single code path for all binary.** Every photo-bearing tool (`klodi_list_create`, `klodi_list_update`) runs photo inputs through the adapter's resolution pipeline before the listing request is dispatched. Auditors verify one flow.
-- **Content-sniff closes the format-confusion gap.** The pre-card flow trusted the agent's `content_type` argument; the new flow rejects any file whose bytes do not match an allowlisted magic-number prefix, regardless of what the extension claims.
+- **Content-sniff closes the format-confusion gap.** The previous flow trusted the agent's `content_type` argument; the new flow rejects any file whose bytes do not match an allowlisted magic-number prefix, regardless of what the extension claims.
 - **Path-traversal defence.** Absolute-path-only inputs, `realpath()`-based symlink resolution, and a sensitive-directory reject list bound the surface a prompt-injected agent can address. The agent cannot point the adapter at `/etc/passwd`, the klodi creds dir, or `~/.ssh/`.
 
 ## References

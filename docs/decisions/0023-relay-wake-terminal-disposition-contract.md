@@ -2,10 +2,8 @@
 id: 0023-relay-wake-terminal-disposition-contract
 title: A relay wake turn carries a terminal-disposition contract in the wake text itself (the only surface unconditionally in-context) so the agent reaches a delivery disposition instead of ending on discarded prose; four plugin surfaces must stay coherent, and "warrants operator delivery vs purely informational" is a hand-curated classification
 tags: [wake, escalation, message-user, terminal-disposition, contract, guidance, skill, over-ping, classification, prompt-injection, hermes, openclaw, parity]
-card: relay-wake-turn-never-delivers-to-operator
 commit: 62c6f09
 updated_at: 2026-07-03
-updated_by_card: relay-wake-turn-never-delivers-to-operator
 ---
 
 # ADR-0023 — The relay wake carries a terminal-disposition contract so the agent actually delivers
@@ -122,10 +120,10 @@ mechanism already works (ADR-0020); the agent just has to *call* the tool.
 - **openclaw parity is now DIVERGENT — follow-up owed.**
   `adapters/openclaw/src/service/wake-handlers.ts` mirrors the hermes wake text by design
   (`wake_handlers.py:9-13` cites the parity) but does **not** yet carry the contract. The two
-  hosts diverge until a parity card ships. The durable fix is likely to **hoist the contract
+  hosts diverge until a parity change ships. The durable fix is likely to **hoist the contract
   and classification into the shared `klodi-skill/` bundle** so both hosts inherit one source
   rather than duplicating per-host formatter text — but that is a design call for the
-  follow-up card, not decided here.
+  follow-up change, not decided here.
 - **Behavioral ACs are non-deterministic.** Whether the LLM pings on a given wake is
   emergent; the deterministic regression net is the artefact-level unit tests (contract
   present on warranting kinds, absent on informational, tool description reframed) plus the

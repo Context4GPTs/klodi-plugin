@@ -1,7 +1,6 @@
 /**
  * GATED integration — verified tls:// handshake + fail-closed (ts).
  *
- * Card: support-tls-nats-transport-with-private-ca-trust.
  * Criteria (Acceptance → "Verified TLS round-trip with private-CA trust"):
  *   - [integration] trusted private CA + tls:// nats_url → handshake completes
  *     (cert + hostname verification pass) and a whoami round-trip succeeds.
@@ -10,7 +9,7 @@
  *   - [integration] wrong / absent CA → connect() rejects: fails CLOSED, never
  *     a plaintext / unverified fallback.
  *
- * GATE (Do-NOW #3 dev-pair local TLS harness — NOT the epic Railway proxy):
+ * GATE (Do-NOW #3 dev-pair local TLS harness — NOT the Railway proxy):
  * SKIPS unless a local tls:// nats + self-signed test CA is provided via env:
  *   KLODI_TLS_INTEGRATION=1, KLODI_TLS_NATS_URL (tls://…),
  *   KLODI_NATS_CA_FILE (PEM path), KLODI_TLS_CREDS_PATH (nats.creds).
@@ -36,7 +35,7 @@ const CREDS = process.env["KLODI_TLS_CREDS_PATH"] ?? "";
 const SHOULD_RUN = ON && NATS_URL !== "" && CA_FILE !== "" && CREDS !== "";
 
 /** A bad-CA connect must reach a terminal error within this bound; a hang trips
- *  the race → the assertion fails. Card gate-auto-trust-on-well-formed-ca-loud-fail. */
+ *  the race → the assertion fails. */
 const TERMINAL_BOUND_MS = 12_000;
 
 function fx(name: string): string {
@@ -95,7 +94,7 @@ describe.skipIf(!SHOULD_RUN)("tls:// with private-CA trust", () => {
     try {
       await client.connect();
       await client.subscribeChannels(async () => undefined);
-      // Idle past the WS-close→EOF window this epic exists to fix.
+      // Idle past the WS-close→EOF window this change exists to fix.
       await new Promise((r) => setTimeout(r, 25_000));
       expect(client.isConnected()).toBe(true);
     } finally {
@@ -104,7 +103,7 @@ describe.skipIf(!SHOULD_RUN)("tls:// with private-CA trust", () => {
   }, 40_000);
 
   it("fails closed (terminal, bounded, structured) on a wrong-signer CA", async () => {
-    // TIGHTENED by card gate-auto-trust-on-well-formed-ca-loud-fail from a bare
+    // TIGHTENED from a bare
     // `.rejects.toThrow()`. Uses a WELL-FORMED wrong-signer CA (does not sign
     // the test nats cert → a handshake-verify failure at the CONNECT boundary,
     // not a PEM parse) and asserts the structured `CaTrustError` within a

@@ -197,7 +197,7 @@ describe("klodi_unwatch", () => {
     expect(data.slug).toBe(slug);
     expect(listBuySlugs()).toHaveLength(0);
 
-    // Card fix-klodi-searches-delete-catalog-drift: registerUnwatch sources the
+    // registerUnwatch sources the
     // subject from the bare literal "p2p.v1.searches.delete" after the catalog
     // key klodiTools.klodi_searches_delete is dropped. The composite must still
     // dispatch to that exact subject with a { slug } payload — proving the

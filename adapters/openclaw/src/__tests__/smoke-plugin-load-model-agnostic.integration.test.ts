@@ -2,7 +2,7 @@
  * Integration proof for: "Decouple openclaw smoke test from any model
  * pin".
  *
- * Acceptance criterion (card → Discovery findings, [integration]):
+ * Acceptance criterion ([integration]):
  *   "Given the openclaw plugin-load smoke fixture with the concrete
  *    model pin removed/abstracted, when scripts/smoke-plugin-load.sh runs
  *    and installs the freshly-packed tarball into the OpenClaw image,
@@ -42,7 +42,7 @@
  * CI sets KLODI_SMOKE_INTEGRATION=1 to exercise it for real.
  *
  * DO NOT weaken this test to make it pass against the pinned fixture.
- * Remove the model block; that is the whole point of the card.
+ * Remove the model block; that is the whole point of this change.
  */
 
 import { describe, it, expect } from "vitest";

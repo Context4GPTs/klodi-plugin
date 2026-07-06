@@ -1,10 +1,10 @@
-# TLS-CA test fixtures — `gate-auto-trust-on-well-formed-ca-loud-fail`
+# TLS-CA test fixtures
 
 Locally-generated X.509 fixtures for the cross-family TLS-trust tests
 (`nats-client-{py,ts,rs}`). They let the unit/integration tiers prove the
-auto-trust loud-fail contract **without** blocking on the marketplace
-`regenerate-nats-ca-with-keyusage-for-all-adapters` card (that card is only
-required for *prod* correctness — the real served CA carrying keyUsage).
+auto-trust loud-fail contract **without** blocking on the marketplace-side
+CA regeneration (only required for *prod* correctness — the real served CA
+carrying keyUsage).
 
 Regenerate with `./gen.sh <outdir>` (needs `openssl`). Certs are valid 3650
 days. These are **throwaway test keys** — no marketplace value.

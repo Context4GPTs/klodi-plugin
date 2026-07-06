@@ -40,8 +40,8 @@ import {
 } from "./synthetic-publisher.js";
 
 const INTEGRATION = process.env["INTEGRATION"] === "1";
-// Re-homed off ws://localhost onto the surviving tls:// transport
-// (remove-dead-ws-localhost-nats-transport-bypass). Requires a dev-CA
+// Re-homed off ws://localhost onto the surviving tls:// transport.
+// Requires a dev-CA
 // tls://localhost NATS + the CA PEM path in KLODI_NATS_CA_FILE.
 const NATS_TLS_URL = process.env["TEST_NATS_TLS_URL"] ?? "tls://localhost:4222";
 const CA_FILE = process.env["KLODI_NATS_CA_FILE"] ?? "";
@@ -215,5 +215,3 @@ describe.skipIf(!SHOULD_RUN)("KlodiClient reconnect + drain (D.8)", () => {
     expect(allUnique.size).toBe(5);
   }, 90_000);
 });
-
-// qa-developer: 0012-gap-fixes-decision-13
