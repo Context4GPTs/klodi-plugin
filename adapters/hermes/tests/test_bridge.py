@@ -97,7 +97,7 @@ def test_inject_spawns_source_tagged_chat(caplog: Any) -> None:
     pollutes the operator's live session (no rejected session flag, no
     --continue/--resume). The session key is still threaded down for
     env-keying + logging, but it is NO LONGER a hermes argv flag: no hermes
-    version accepts the rejected flag — that is the defect this card removes.
+    version accepts the rejected flag — that is the defect this change removes.
     The fixed argv is the bridge's verifiable contract."""
     runner = _RecordingRunner(returncode=0)
     ctx = BridgeCtx(hermes_bin="/opt/hermes/.venv/bin/hermes", runner=runner)
@@ -236,7 +236,7 @@ def test_inject_serializes_concurrent_calls_on_same_session() -> None:
 
 # ── Wake completion marker WIRING (proof-of-turn for the AC1 gate) ──────
 #
-# Card: distinguish-wake-sessions-from-operator-sessions. hermes v0.17.0's
+# hermes v0.17.0's
 # ``-q`` create drops ``--source``, so ``sessions.source='klodi'`` no longer
 # marks a completed wake — AC1 loses its proof-of-turn signal. The fix gives
 # AC1 a DURABLE, klodi-owned artifact: the ``klodi_hermes.wake_completions``

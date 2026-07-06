@@ -159,7 +159,7 @@ describe("klodi_search payload parity — openclaw (SC-parity.1)", () => {
         + ` Expected (raw catalog-shaped): ${JSON.stringify(entry.expected_wire_payload)}.`
         + ` Got (after openclaw's compactPayload): ${JSON.stringify(actualPayload)}.`
         + ` Fix: strip compactPayload from the klodi_search arm in`
-        + ` adapters/openclaw/src/tools/discovery.ts:60. See ADR-0011 and the card body.`,
+        + ` adapters/openclaw/src/tools/discovery.ts:60. See ADR-0011.`,
       ).toEqual(entry.expected_wire_payload);
     });
   }
@@ -184,7 +184,7 @@ describe("klodi_searches_create payload parity — openclaw (SC-parity.2)", () =
   // `klodi_searches_create` directly (hermes + nanobot already do; the
   // Rust shared host's `dispatch_passthrough` accepts the name). The
   // RED state below — `Error: Tool "klodi_searches_create" not
-  // registered` — is the architectural drift this card closes. The
+  // registered` — is the architectural drift closed here. The
   // green-phase fix in openclaw is a small `registerSearchesCreate(api)`
   // adjacent to `registerSearch(api)` in
   // `adapters/openclaw/src/tools/discovery.ts`, mirroring the existing

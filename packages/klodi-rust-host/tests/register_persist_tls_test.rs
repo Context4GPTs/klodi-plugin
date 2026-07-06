@@ -1,9 +1,8 @@
 //! The rust host persists a server-sent `tls://` nats_url and refuses non-tls.
 //!
-//! Cards: support-tls-nats-transport-with-private-ca-trust (tls:// persist +
-//! non-localhost refusal, verify-only) AND
-//! remove-dead-ws-localhost-nats-transport-bypass (the NEW `ws://localhost`
-//! refusal — RED today, since localhost is still a bypass on current `main`).
+//! Two behaviours: tls:// persist + non-localhost refusal (verify-only), AND
+//! the NEW `ws://localhost` refusal — RED today, since localhost is still a
+//! bypass on current `main`.
 //!
 //! Criteria (Acceptance → D "each adapter persist path rejects a non-tls:// url"):
 //!
@@ -13,7 +12,7 @@
 //!     OR `ws://localhost` (the flip) — registration fails closed; nothing
 //!     persisted.
 //!
-//! `register.rs` delegates to the shared guard (`assert_tls` after this card's
+//! `register.rs` delegates to the shared guard (`assert_tls` after the
 //! rename) — all four adapters delegate now, none carry an inline scheme copy.
 //! This drives the full public `run_register` flow against a wiremock
 //! marketplace — mirrors the existing `run_register_*` tests, no private-item
@@ -99,8 +98,7 @@ async fn refuses_plaintext_nats_non_localhost() {
     assert!(!dir.path().join("nats.creds").exists());
 }
 
-/// [integration] tls-only cutover
-/// (collapse-nats-transport-guard-to-tls-only): the ONE rust-host persist
+/// [integration] tls-only cutover: the ONE rust-host persist
 /// site (moltis + ironclaw + zeroclaw) refuses a wss://<non-localhost>
 /// nats_url via the shared guard — the wss:// scheme was accepted before
 /// the collapse. Fails closed; nothing persisted. Not coupled to the
@@ -128,7 +126,7 @@ async fn refuses_wss_non_localhost() {
     assert!(!dir.path().join("nats.creds").exists());
 }
 
-/// [integration] THE FLIP (remove-dead-ws-localhost-nats-transport-bypass):
+/// [integration] The transport-guard flip:
 /// a `/register` response carrying `ws://localhost` was accepted while
 /// localhost was a plaintext bypass. After the guard collapse the shared
 /// guard rejects it — the rust-host persist site fails closed, nothing

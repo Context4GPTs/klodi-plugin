@@ -1,12 +1,11 @@
 """nanobot persists a server-sent ``tls://`` nats_url and refuses non-tls.
 
-Cards: support-tls-nats-transport-with-private-ca-trust (the tls:// persist +
-non-localhost refusal, verify-only) AND
-remove-dead-ws-localhost-nats-transport-bypass (the NEW ``ws://localhost``
-refusal — RED today, since localhost is still a bypass on current ``main``).
+Two transport policies: the tls:// persist + non-localhost refusal
+(verify-only) AND the NEW ``ws://localhost`` refusal — RED today, since
+localhost is still a bypass on current ``main``.
 
 nanobot does NOT carry an inline scheme check — ``_persist_credentials``
-delegates to the single shared client guard (``assert_tls`` after this card's
+delegates to the single shared client guard (``assert_tls`` after this change's
 rename) and wraps the ``ValueError`` into ``OSError``, so persist-time and
 connect-time policy can never drift. This file pins that delegated contract
 as part of the adapter-family audit unit (criterion D: "test all persist
@@ -93,7 +92,7 @@ class TestNanobotPersistTlsUrl(_KlodiHomeCase):
         self.assertFalse((self.home / "config.json").exists())
 
     def test_rejects_ws_localhost(self) -> None:
-        # THE FLIP (remove-dead-ws-localhost-nats-transport-bypass):
+        # The behavior flip:
         # ws://localhost was accepted while localhost was a plaintext
         # bypass. After the guard collapse the shared guard rejects it.
         claim = _tls_claim()

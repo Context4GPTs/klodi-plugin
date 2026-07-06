@@ -1,9 +1,7 @@
 """Loud-fail + per-family well-formed-CA trust (py) — self-contained.
 
-Card: gate-auto-trust-on-well-formed-ca-loud-fail.
-
-This suite closes the blind spot the sibling `auto-trust-nats-ca-from-register`
-does NOT cover. The sibling proves a bad PEM *fails closed at trust-context
+This suite closes the blind spot the auto-trust-CA suite
+does NOT cover. That suite proves a bad PEM *fails closed at trust-context
 build*; here the served CA is **PEM-valid and the trust context builds**, but it
 cannot anchor the handshake (wrong-signer / keyUsage-missing). The failure must
 be **LOUD, TERMINAL, PROMPT (bounded-time), and attributable** — never the

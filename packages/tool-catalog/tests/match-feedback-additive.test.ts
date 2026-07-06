@@ -1,8 +1,8 @@
 /**
  * Additive-contract gate for the `klodi_match_feedback` flywheel-emit tool
- * (card: emit-standing-search-accept-dismiss-feedback, SC8).
+ * (SC8).
  *
- * The card's hardest constraint: this change is PURELY ADDITIVE. The only
+ * The hardest constraint: this change is PURELY ADDITIVE. The only
  * mutation to any adapter's tool surface is one new `LOCAL_TOOLS` key with
  * `host_shapes: ["in_agent"]`. No existing tool's name/params/result moves;
  * the daemon (Rust trio) allowlist stays empty so moltis/ironclaw/zeroclaw
@@ -17,7 +17,7 @@
  *      keys) so ANY edit to an existing entry trips the test, and asserts
  *      the in_agent set grows by EXACTLY `klodi_match_feedback`.
  *   2. The static symmetry gate `scripts/check-adapter-tools.sh` run under
- *      STRICT_ADAPTER_TOOLS=1 (the card's explicit ask). It is the backstop
+ *      STRICT_ADAPTER_TOOLS=1 (an explicit requirement). It is the backstop
  *      for the intermediate state — once the catalog entry exists but a host
  *      forgot to register the literal, strict mode fails RED rather than
  *      warning. Generates dist/schemas.json first, exactly as CI does.
@@ -73,11 +73,11 @@ function schemaKeys(schema: unknown): { props: string[]; required: string[] } {
  * that MUST NOT move.
  *
  * `klodi_match_feedback` is deliberately ABSENT — it is the one permitted
- * addition this card proves. If a future edit changes any listed entry, the
+ * addition proven here. If a future edit changes any listed entry, the
  * byte-identity test below fails for the right reason.
  *
- * NOTE (card: wake-relay-tools-absent-from-tool-catalog): `klodi_message_user`
- * and `klodi_pending_decisions` were added to `LOCAL_TOOLS` by a LATER card
+ * NOTE: `klodi_message_user`
+ * and `klodi_pending_decisions` were added to `LOCAL_TOOLS` later
  * (finding F3) and are therefore part of the established surface here — their
  * own registration + fidelity spec lives in `wake-relay-tools-catalog.test.ts`.
  * They are pinned below so this test's byte-identity guard covers them too.
@@ -112,7 +112,7 @@ const PRE_EXISTING_SURFACE: Record<
   klodi_setup_reseed_policies: { kind: "local", host_shapes: ["in_agent"], params: [], result: ["reseeded_files", "timestamp"] },
   klodi_setup_reseed_skill: { kind: "local", host_shapes: ["in_agent"], params: [], result: ["reseeded_files", "timestamp"] },
   klodi_channel_message: { kind: "publish", host_shapes: ["in_agent"], params: ["channel_id", "content"], result: ["created_at", "event_id", "message_id", "sequence"] },
-  // Added by card wake-relay-tools-absent-from-tool-catalog (F3). result of
+  // Added later (finding F3). result of
   // klodi_pending_decisions is a top-level ARRAY, so it has no top-level
   // `properties` — schemaKeys() reports [] here by design (its item-shape is
   // pinned in wake-relay-tools-catalog.test.ts).
@@ -168,7 +168,7 @@ describe("klodi_match_feedback — additive: the in_agent set grows by EXACTLY o
 });
 
 describe("klodi_match_feedback — catalog↔adapter symmetry gate (STRICT_ADAPTER_TOOLS=1)", () => {
-  // The card's explicit ask: run scripts/check-adapter-tools.sh strict and
+  // The explicit ask: run scripts/check-adapter-tools.sh strict and
   // assert the ONLY addition is klodi_match_feedback (in_agent), daemon stays
   // empty. The gate's invariant 2 requires every in_agent local tool to
   // appear as a literal in all three in-agent adapter sources (openclaw,
@@ -176,15 +176,15 @@ describe("klodi_match_feedback — catalog↔adapter symmetry gate (STRICT_ADAPT
   //
   // SCOPING NOTE (important — read before "fixing" this test): on this
   // worktree the gate ALSO emits pre-existing `unknown` findings unrelated to
-  // this card — `klodi_photos_resolution_failed` (a log-event name),
+  // this change — `klodi_photos_resolution_failed` (a log-event name),
   // `klodi_logger` / `klodi_rust_host` (package names) — which its name-
   // extraction deny-list does not cover. Those make the gate exit non-zero on
-  // the BASE tree, before this card touches anything. So we do NOT assert the
+  // the BASE tree, before this change touches anything. So we do NOT assert the
   // gate's overall exit code (that would demand the expert fix unrelated
-  // breakage to go GREEN). Instead we assert the CARD-SCOPED signal: the gate
+  // breakage to go GREEN). Instead we assert the change-scoped signal: the gate
   // reports no `missing: klodi_match_feedback` under strict mode, i.e. all
   // three in-agent adapters carry the literal. (The pre-existing `unknown`
-  // noise is flagged to the expert in the card's In-Dev test-notes, not gated
+  // noise is flagged to the expert in the dev test-notes, not gated
   // here.)
   //
   // We regenerate dist/schemas.json first (the gate reads it), exactly as CI

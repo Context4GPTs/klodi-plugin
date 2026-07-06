@@ -3,12 +3,12 @@
  * See ADR-0022 (`docs/decisions/0022-tls-nats-transport-private-ca-trust.md`).
  *
  * The Railway L4 TCP proxy terminates TLS at the NATS server with a
- * **private** CA (epic `nats-ws-ingress-flap-2026-06`). For a `tls://`
+ * **private** CA. For a `tls://`
  * URL the client trusts that CA via `@nats-io/transport-node`'s
  * `connect({ tls: { ca } })`, keeping certificate + hostname
  * verification ON.
  *
- * Invariant (the card's core security control): verification is **never**
+ * Invariant (the core security control): verification is **never**
  * disabled. `rejectUnauthorized` is never set to `false` anywhere;
  * `KLODI_NATS_CA_FILE` selects *which* CA to trust, never *whether* to
  * verify — a missing / wrong CA fails **closed** (the handshake rejects).
@@ -28,10 +28,10 @@
  *   2. `${KLODI_HOME}/nats-ca.pem` — the register-response CA persisted at
  *      registration (see `persistNatsCa`). Server-authoritative,
  *      endpoint-matched to the served `nats_url`, rotatable without a client
- *      release (card `auto-trust-nats-ca-from-register`). Present-but-
+ *      release. Present-but-
  *      unreadable fails closed; absent falls through.
  *   3. The bundled `KLODI_NATS_CA_PEM` catalog constant — the shipped
- *      private CA. Empty until the epic mints the real CA; empty means
+ *      private CA. Empty until the real CA is minted; empty means
  *      "fall through".
  *   4. None present → `undefined`: the system trust store applies and
  *      a private-CA cert fails closed (correct).

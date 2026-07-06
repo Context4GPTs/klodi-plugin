@@ -10,7 +10,7 @@
  * already stale scaffolding the plugin never reads (wake.ts only reads
  * `agents.list`).
  *
- * Acceptance criterion (card → Discovery findings, [unit]):
+ * Acceptance criterion ([unit]):
  *   "Given the openclaw smoke fixture's checked-in config, when its
  *    contents are statically inspected, then it contains no concrete
  *    model identifier ... so a stale pin cannot silently ride back in."
@@ -98,7 +98,7 @@ describe("openclaw smoke fixture (openclaw.json heredoc) is model-agnostic", () 
   });
 
   it("contains no `gpt-5.3-codex` literal (the exact stale pin)", () => {
-    // The card names this value explicitly — the account-rejected pin
+    // This value is named explicitly — the account-rejected pin
     // that escaped into the fixture during the multi-host reshape.
     expect(body).not.toMatch(/gpt-5\.3-codex/i);
   });

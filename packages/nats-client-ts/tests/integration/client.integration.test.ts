@@ -40,8 +40,8 @@ import { makeSyntheticPublisher, type SyntheticPublisher } from "./synthetic-pub
 // NATS won't exist, and these tests can't run.
 const INTEGRATION = process.env["INTEGRATION"] === "1";
 
-// Re-homed off ws://localhost onto the surviving tls:// transport
-// (remove-dead-ws-localhost-nats-transport-bypass). Requires a dev-CA
+// Re-homed off ws://localhost onto the surviving tls:// transport.
+// Requires a dev-CA
 // tls://localhost NATS + the CA PEM path in KLODI_NATS_CA_FILE (same env
 // the KlodiClient resolves its CA from).
 const NATS_TLS_URL = process.env["TEST_NATS_TLS_URL"] ?? "tls://localhost:4222";
@@ -294,5 +294,3 @@ describe.skipIf(!SHOULD_RUN)("KlodiClient integration (D.1.ts)", () => {
     expect(received.map((e) => e["event_id"])).toEqual(publishedIds);
   }, 30_000);
 });
-
-// qa-developer: 0012-gap-fixes-decision-13

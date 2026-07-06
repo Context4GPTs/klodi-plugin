@@ -2,10 +2,8 @@
 id: 0013-match-feedback-trust-boundary
 title: Match-feedback emit — action-not-label trust boundary, body-id validation
 tags: [trust-boundary, feedback, flywheel, publish, adapters, catalog, nats]
-card: emit-standing-search-accept-dismiss-feedback
 commit: 68f3f83
 updated_at: 2026-05-30
-updated_by_card: emit-standing-search-accept-dismiss-feedback
 ---
 
 # ADR-0013 — Match-feedback emit: action-not-label trust boundary, body-id validation
@@ -18,7 +16,7 @@ Builds directly on the `klodi_channel_message` publish precedent established in 
 
 ## Context
 
-SC8's self-reinforcement flywheel (goal: robust-agentic-search) needs accept/dismiss signals to build a `ranking` golden-dataset slice. The marketplace capture (`search_match_examples`, SC8a) and the klodi-stage curation (`flywheel:curate`, SC8b) both shipped, but nothing emitted the signal — `flywheel.json` stayed `[]`. This card added the emit half: when an agent reaches a pursue-or-dismiss verdict on a `search.match` wake, the plugin publishes a feedback signal over NATS for the marketplace to record.
+SC8's self-reinforcement flywheel (goal: robust-agentic-search) needs accept/dismiss signals to build a `ranking` golden-dataset slice. The marketplace capture (`search_match_examples`, SC8a) and the klodi-stage curation (`flywheel:curate`, SC8b) both shipped, but nothing emitted the signal — `flywheel.json` stayed `[]`. This change added the emit half: when an agent reaches a pursue-or-dismiss verdict on a `search.match` wake, the plugin publishes a feedback signal over NATS for the marketplace to record.
 
 Two design questions on this path have non-obvious answers that a future contributor would otherwise get wrong by cloning the nearest precedent (`klodi_channel_message`) too faithfully:
 
@@ -72,7 +70,7 @@ The tool is a single `LOCAL_TOOLS` entry (`klodi_match_feedback`, `kind: "publis
 
 4. **Fold this into ADR-0012 as a publish-path section.** Rejected per the one-topic-per-ADR rule. 0012 is scoped around raw request-payload pass-through for `klodi_search`; this is a one-way publish emit with its own trust-boundary rules. Cross-referenced, not merged — the same call 0012 made when it declined to fold into 0011.
 
-5. **Request/reply tool, or piggyback the emit on `klodi_channel_create` / `klodi_unwatch`.** Rejected at discovery — request/reply implies a round-trip the write-only signal does not need; piggybacking couples the signal to channel/unwatch lifecycles and silently drops the hard-negative case (a dismiss with no follow-up would emit nothing). The signal is orthogonal and stands alone.
+5. **Request/reply tool, or piggyback the emit on `klodi_channel_create` / `klodi_unwatch`.** Rejected — request/reply implies a round-trip the write-only signal does not need; piggybacking couples the signal to channel/unwatch lifecycles and silently drops the hard-negative case (a dismiss with no follow-up would emit nothing). The signal is orthogonal and stands alone.
 
 ## Security implications
 

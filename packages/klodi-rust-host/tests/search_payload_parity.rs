@@ -143,8 +143,8 @@ fn klodi_search_payload_parity_across_every_fixture_case() {
              Expected (raw catalog-shaped): {expected}. Got: {actual}. \
              The fixture IS the contract — fix the implementation, never this \
              assertion. The pass-through site is `dispatch_passthrough` at \
-             packages/klodi-rust-host/src/mcp/tools.rs:271. See ADR-0011 and \
-             the card body's SC-parity.1.",
+             packages/klodi-rust-host/src/mcp/tools.rs:271. See ADR-0011 \
+             (SC-parity.1).",
         );
         seen.insert(case_name);
     }

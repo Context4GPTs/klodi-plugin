@@ -1,6 +1,5 @@
 """RED — nanobot persists the register-response nats_ca (nanobot_local_tools.py).
 
-Card: auto-trust-nats-ca-from-register.
 nanobot half of the six-adapter symmetry audit. Same contract as hermes:
 
   * response carries a PEM nats_ca → ${KLODI_HOME}/nats-ca.pem written.

@@ -1,8 +1,6 @@
 /**
  * RED [unit] — the catalog default NATS URL is the pinned tls:// L4 proxy.
  *
- * Card: collapse-nats-transport-guard-to-tls-only.
- *
  * `KLODI_DEFAULT_NATS_URL` is the single codegen source of truth
  * (tool-catalog/src/index.ts:719) that fans out to the py/rs mirrors. The
  * cutover flips it from the legacy `wss://klodi-net.4gpts.com` WS edge to the

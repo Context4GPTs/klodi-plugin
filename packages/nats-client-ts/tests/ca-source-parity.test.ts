@@ -1,8 +1,6 @@
 /**
  * CA-source precedence has ONE encoding — the resolver (ts).
  *
- * Card: consolidate-ca-source-precedence-into-the-resolver.
- *
  * `resolveTlsCa` returns the CA text AND the label naming *which* source it
  * selected (env → persisted → bundled). The connect-failure attribution
  * consumes that label instead of re-deriving the order; the parallel

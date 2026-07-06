@@ -1,7 +1,5 @@
 //! RED — persist + resolve the register-response CA (rs).
 //!
-//! Card: auto-trust-nats-ca-from-register.
-//!
 //! Three shared helpers land in `nats-client-rs/src/tls.rs`, byte-for-byte
 //! with the py/ts halves:
 //!   * `nats_ca_path(klodi_home)`      — the single filename source (nats-ca.pem).

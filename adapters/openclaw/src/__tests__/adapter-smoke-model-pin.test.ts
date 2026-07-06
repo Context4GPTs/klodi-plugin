@@ -8,7 +8,7 @@
  * must not carry a value that goes stale the moment a provider renames a
  * model.
  *
- * Acceptance criterion (card → Discovery findings, [unit]):
+ * Acceptance criterion ([unit]):
  *   "Given every adapter's smoke fixture/script (adapters/*\/scripts/
  *    smoke*.sh), when all are statically swept for model-id literals,
  *    then none hardcodes a concrete codex (or other provider) model that

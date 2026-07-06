@@ -1,6 +1,6 @@
 /**
  * Schema contract for the new `klodi_match_feedback` local-publish tool
- * (card: emit-standing-search-accept-dismiss-feedback, SC8 flywheel emit
+ * (SC8 flywheel emit
  * half). RED-first: this entry does NOT exist in `LOCAL_TOOLS` yet — every
  * assertion below fails until the expert-developer adds it.
  *
@@ -201,12 +201,12 @@ describe("klodi_match_feedback — outcome is a closed {pursued,dismissed} set",
 });
 
 describe("klodi_match_feedback — listing_id/search_slug are body ids, NOT UUID-v4", () => {
-  // The card's load-bearing divergence from klodi_channel_message: those ids
+  // The load-bearing divergence from klodi_channel_message: those ids
   // ride in the BODY, not a subject path, so the strict UUID-v4 guard must
   // NOT be reused. The catalog schema must accept a bounded string for
   // listing_id and a slug pattern for search_slug — exactly the marketplace
   // schema's constraints. A test asserting the schema does NOT pin UUID-v4
-  // format is explicitly valuable per the card.
+  // format is explicitly valuable.
 
   it("listing_id is a bounded string (1..64), not a UUID-format pin", () => {
     const params = asSchema(feedbackEntry().params);

@@ -86,7 +86,7 @@ describe("the canonical phrase covers what photos accepts", () => {
   // Per the product-marketer's lock: every agent-facing surface that
   // documents the photos parameter uses the phrase
   // "image URLs or absolute local file paths". One canonical phrase
-  // across surfaces prevents the drift bug this card is closing.
+  // across surfaces prevents the drift bug this change closes.
   const CANONICAL = /image URLs? or absolute local file paths?/i;
 
   it("appears in klodi-skill/references/tool_inventory.md", () => {

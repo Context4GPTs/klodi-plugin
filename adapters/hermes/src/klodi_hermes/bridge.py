@@ -215,7 +215,7 @@ class BridgeCtx:
         # most two concurrent wakes, so the lock COULD narrow to per-session
         # (same key serializes, different keys parallelize). Deferred: a
         # per-key lock map is itself an unbounded-growth vector — the very
-        # bug class this card removes — and would need its own GC, all for a
+        # bug class this removes — and would need its own GC, all for a
         # max-two-concurrent-wake workload. The global lock is the correct
         # default (correctness over throughput); revisit only under load.
         self._inject_lock = threading.Lock()

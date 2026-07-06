@@ -157,7 +157,7 @@ class KlodiClient:
         # P2-5 — exponential backoff cursor; resets on successful connect.
         self._backoff = BackoffPolicy()
 
-        # Loud-fail (card gate-auto-trust-on-well-formed-ca-loud-fail): a
+        # Loud-fail: a
         # deterministic CA/TLS-verify failure on the INITIAL connect must be
         # terminal, not swallowed by nats-py's unbounded reconnect
         # (``max_reconnect_attempts=-1`` + ``allow_reconnect=True``, which
@@ -234,7 +234,7 @@ class KlodiClient:
         # transport from the failed handshake is dropped with `nc` when this
         # method unwinds — deliberately NOT `await nc.close()`d here: nats-py's
         # drain blocks on a connection that never completed its handshake
-        # (it would re-introduce the very hang this card removes).
+        # (it would re-introduce the very hang this removes).
         self._connecting_initial = True
         try:
             await nc.connect(

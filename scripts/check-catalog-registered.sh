@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Enforce catalog-request/reply ↔ registered-by-name symmetry (the THIRD axis).
 #
-# Card: fix-klodi-searches-delete-catalog-drift.
-#
 # Why this gate exists: the `klodiTools` catalog (packages/tool-catalog/src/index.ts)
 # is the advertised request/reply capability surface — every name it declares is a
 # promise "call this name and it resolves on the gateway". The openclaw adapter
@@ -10,7 +8,7 @@
 # so a `klodiTools` key consumed only as a `.subject` (never claimed as a registerTool
 # name) is a ghost: declared in the catalog, never exposed on the gateway, 404s when
 # called. The standalone searches-delete catalog tool was exactly that ghost (this
-# card removed it; the p2p.v1.searches.delete subject survives under klodi_unwatch).
+# since removed; the p2p.v1.searches.delete subject survives under klodi_unwatch).
 #
 # The two existing gates cannot see this axis (ADR-0014):
 #   - check-openclaw-manifest-tools.sh : manifest ↔ registered  (is-declared)
@@ -47,7 +45,7 @@
 # klodi_home object keys, stray name: fields in unrelated object literals) BY
 # CONSTRUCTION — no deny-list needed.
 #
-# STATIC-LITERAL ASSUMPTION (documented per Discovery, mirrors ADR-0014): every
+# STATIC-LITERAL ASSUMPTION (documented in ADR-0014): every
 # openclaw tool is registered with a static `name: "klodi_…"` literal — there are NO
 # dynamically-named / interpolated tool names. If a future tool were registered with
 # a computed name, this static gate could not see it — but that omission is itself the

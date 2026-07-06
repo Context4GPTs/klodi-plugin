@@ -2,10 +2,8 @@
 id: 0012-tool-request-payload-parity
 title: Tool→service request-payload parity (raw catalog pass-through)
 tags: [parity, payload, adapters, catalog, search, request-path]
-card: tool-service-search-parity-verification
 commit: f198e85
 updated_at: 2026-05-29
-updated_by_card: tool-service-search-parity-verification
 ---
 
 # ADR-0012 — Tool→service request-payload parity (raw catalog pass-through)
@@ -52,11 +50,11 @@ The request-payload oracle is `packages/tool-catalog/tests/fixtures/search-paylo
 
 A frozen schema snapshot at `packages/tool-catalog/tests/golden/search-schemas.json` (gated by `packages/tool-catalog/tests/search-schema-snapshot.test.ts`) holds the no-breaking-change line: the `params` / `result` shapes of both tools may only change additively (no removed / renamed / retyped fields, no `Type.Optional` → required promotions). The single-entry-point invariant is asserted in `packages/tool-catalog/tests/search-payload-golden.test.ts`.
 
-The headline end-to-end parity proof (same query through the tool and through `p2p.v1.listings.search` yields identical ranked results) lives in the `klodi-stage` sibling repo against the golden eval dataset — a separate card consuming this fixture as its contract. This ADR governs the per-stack request-payload tier that proves no stack mutates the payload before it leaves the tool layer.
+The headline end-to-end parity proof (same query through the tool and through `p2p.v1.listings.search` yields identical ranked results) lives in the `klodi-stage` sibling repo against the golden eval dataset, consuming this fixture as its contract. This ADR governs the per-stack request-payload tier that proves no stack mutates the payload before it leaves the tool layer.
 
 ## Alternatives considered
 
-1. **Extend ADR-0011 with an input-parity section instead of a new ADR.** Recommended by the card's dev + review handoffs, and seriously considered. Rejected: ADR-0011's title, framing, and every section govern the *exception envelope* and pre-call guards (the response/error path). Request-payload parity is the opposite direction of the call with its own oracle fixture; appending it would dilute ADR-0011's single topic and make its title misdescribe its contents. The two are siblings, cross-linked, not one decision. (Per the `distillation` skill's "one topic per doc" rule.)
+1. **Extend ADR-0011 with an input-parity section instead of a new ADR.** Recommended during dev + review, and seriously considered. Rejected: ADR-0011's title, framing, and every section govern the *exception envelope* and pre-call guards (the response/error path). Request-payload parity is the opposite direction of the call with its own oracle fixture; appending it would dilute ADR-0011's single topic and make its title misdescribe its contents. The two are siblings, cross-linked, not one decision. (Per the `distillation` skill's "one topic per doc" rule.)
 
 2. **Assert parity on the response shape only, not the request payload.** Rejected — a faithful pass-through tool faithfully transmits service drift, so response-only parity passes silently even when an adapter mangles the request. The request payload is the one place the tool layer can transform input and break parity unobservably from outside. Both are checked (response equality end-to-end in klodi-stage; request payload here), but the request tier is where the architectural risk lives.
 

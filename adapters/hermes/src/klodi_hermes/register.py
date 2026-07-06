@@ -331,7 +331,7 @@ def _persist_credentials(result: dict[str, Any]) -> None:
         if not isinstance(value, str) or not value:
             raise OSError(f"session claim missing {field}")
 
-    # Per epic `nats-tls-only-2026-07`: refuse to persist any non-`tls://`
+    # Refuse to persist any non-`tls://`
     # `nats_url`. Delegates to the single shared client guard (`assert_tls`)
     # so persist-time and connect-time policy can never drift — it accepts
     # only `tls://`, rejecting `wss://` / `ws://` / `nats://` on every host
@@ -373,8 +373,7 @@ def _persist_credentials(result: dict[str, Any]) -> None:
         ),
     )
 
-    # Auto-trust the register-response CA (card
-    # auto-trust-nats-ca-from-register): `nats_ca` is OPTIONAL — it is not
+    # Auto-trust the register-response CA: `nats_ca` is OPTIONAL — it is not
     # in the required-field loop above, so its absence never fails
     # registration. The shared helper skips a non-string / empty /
     # non-PEM-shaped value and never raises, and an omission on a later

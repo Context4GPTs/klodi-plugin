@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Enforce openclaw manifest ↔ registered-tool symmetry.
 #
-# Card: fix-openclaw-manifest-tool-drift-add-symmetry-gate.
-#
 # Why this gate exists: openclaw `2026.5.27 plugins doctor` rejects the klodi
 # plugin unless `openclaw.plugin.json` `.contracts.tools` declares EVERY tool the
 # adapter actually registers. The hand-maintained JSON list had drifted (32
@@ -21,7 +19,7 @@
 # A registered-but-undeclared tool OR a declared-but-unregistered tool fails it,
 # naming the offender(s) and the direction.
 #
-# STATIC-LITERAL ASSUMPTION (documented per Discovery): every openclaw tool is
+# STATIC-LITERAL ASSUMPTION (documented in ADR-0014): every openclaw tool is
 # registered with a static `name: "klodi_…"` literal — there are NO
 # dynamically-named / interpolated tool names. Verified true today (35 grep hits
 # == 35 runtime registrations). If a future tool is registered with a computed
@@ -103,7 +101,7 @@ declared_names > "$declared_file"
 registered_names > "$registered_file"
 
 # registered − declared: tools the adapter registers but the manifest omits
-# (the load-rejection drift this card exists to catch).
+# (the load-rejection drift this check exists to catch).
 undeclared="$(comm -13 "$declared_file" "$registered_file" || true)"
 # declared − registered: tools the manifest lists that no src file registers
 # (reverse drift — a stale/typo'd manifest entry).

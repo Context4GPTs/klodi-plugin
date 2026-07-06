@@ -1,6 +1,5 @@
 /**
- * Enforced catalog↔adapter gate spec for the two wake-relay tools
- * (card: wake-relay-tools-absent-from-tool-catalog).
+ * Enforced catalog↔adapter gate spec for the two wake-relay tools.
  *
  * The bug survived because `scripts/check-adapter-tools.sh` — the one gate that
  * could catch a referenced-but-uncatalogued tool (Invariant 1) — was never
@@ -10,9 +9,9 @@
  * gate reads the live catalog.
  *
  * Four guards:
- *   1. CARD-SCOPED — the gate reports NO `unknown: klodi_message_user` /
+ *   1. TOOL-SCOPED — the gate reports NO `unknown: klodi_message_user` /
  *      `unknown: klodi_pending_decisions`. This is the exact drift the bug was.
- *      Asserted card-scoped (not the overall exit code), per the
+ *      Asserted tool-scoped (not the overall exit code), per the
  *      match-feedback precedent: the tree can carry unrelated gate findings.
  *   2. DENY-LIST COVERAGE (behavioral) — the documented non-tool klodi_* names
  *      (log-event / package / dataclass-attr) are filtered, so a real new
@@ -114,7 +113,7 @@ function dropTool(schemas: Schemas, name: string): void {
   }
 }
 
-describe("wake-relay gate — card-scoped: the referenced-but-uncatalogued drift is closed", () => {
+describe("wake-relay gate — tool-scoped: the referenced-but-uncatalogued drift is closed", () => {
   it.each(WAKE_RELAY_TOOLS)(
     "the gate reports NO `unknown: %s` (the tool is now in the catalog)",
     (name) => {
@@ -240,12 +239,12 @@ describe("wake-relay gate — deny-list must NOT over-broaden (real tools surviv
   });
 });
 
-describe("wake-relay gate — cross-adapter scope is documented behavior, not a card failure", () => {
+describe("wake-relay gate — cross-adapter scope is documented behavior, not a regression", () => {
   it("under STRICT, openclaw + nanobot are `missing` the wake-relay tools (in_agent gap, EXPECTED)", () => {
     // host_shapes: ["in_agent"] makes all three in-agent hosts required to
     // register the tools; only hermes ships the wake round-trip. This is the
     // ADR-0014 / D4 legitimate cross-adapter gap — WARN by default, RED only
-    // under STRICT — NOT a regression this card introduces. Must not be
+    // under STRICT — NOT a regression this change introduces. Must not be
     // "fixed" by weakening host_shapes to a hermes-only hack.
     regenCodegen();
     const { out } = runGate({ STRICT_ADAPTER_TOOLS: "1" });

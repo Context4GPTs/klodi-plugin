@@ -28,7 +28,7 @@ import { __resetWakePumpRegistryForTests } from "@klodi/nats-client";
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";
 
 // nats_url is the pinned tls:// L4 proxy — the tls-only cutover
-// (collapse-nats-transport-guard-to-tls-only) makes the persist-time shared
+// makes the persist-time shared
 // guard reject a wss://<non-localhost> url, so the happy-path payload must
 // carry the accepted tls:// scheme.
 const COMPLETED_PAYLOAD = {
@@ -91,7 +91,7 @@ describe("claimRegisterSession (terminal kinds)", () => {
   });
 
   it("rejects a wss:// non-localhost nats_url via the shared guard (tls-only cutover)", async () => {
-    // [integration] collapse-nats-transport-guard-to-tls-only: a stale /
+    // [integration] tls-only cutover: a stale /
     // compromised /register returning a wss://<non-localhost> nats_url is
     // now refused at persist by the SHARED guard (no adapter-local scheme
     // check). Fails closed — nothing on disk.

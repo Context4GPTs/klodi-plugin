@@ -1,15 +1,14 @@
 //! RED [unit] — a stale persisted non-`tls://` nats_url is rejected at
 //! `KlodiClient::connect()` BEFORE any transport dispatch (rs client).
 //!
-//! Cards: collapse-nats-transport-guard-to-tls-only (the `wss://`-non-localhost
-//! case, verify-only) AND remove-dead-ws-localhost-nats-transport-bypass (the
+//! Two cases: the `wss://`-non-localhost case (verify-only) AND the
 //! NEW `ws://localhost` / `wss://localhost` cases — RED today, since localhost
-//! is still a bypass on current `main`).
+//! is still a bypass on current `main`.
 //!
 //! Scenario: `config.json` still carries a non-`tls://` nats_url — either a
 //! `wss://<non-localhost>` (persisted before the cutover) or a stale
 //! `ws://localhost` / `wss://localhost` (persisted while localhost was a
-//! plaintext bypass, before this card removed it). The host is upgraded to the
+//! plaintext bypass, before it was removed). The host is upgraded to the
 //! guard-collapsed client without re-registering. `connect()` runs the shared
 //! guard (`client.rs:137`) BEFORE building `ConnectOptions` or entering
 //! `initial_connect`, so the stale url must fail closed synchronously with a
@@ -97,7 +96,7 @@ async fn connect_rejects_stale_wss_before_transport_dispatch() {
 
 #[tokio::test]
 async fn connect_rejects_stale_ws_localhost_before_transport_dispatch() {
-    // THE FLIP (remove-dead-ws-localhost-nats-transport-bypass): a stale
+    // The transport-guard flip: a stale
     // `ws://localhost` / `wss://localhost` was accepted at connect while
     // localhost was a bypass. After the collapse the guard rejects it with
     // `InvalidConfig` BEFORE any `ConnectOptions` / dial — no hang against a

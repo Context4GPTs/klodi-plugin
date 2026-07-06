@@ -1,17 +1,15 @@
 """RED [unit] — a stale persisted non-``tls://`` nats_url is rejected at
 ``KlodiClient.connect()`` BEFORE any transport dispatch (py client).
 
-Cards: collapse-nats-transport-guard-to-tls-only (the ``wss://``-non-localhost
-case, unchanged here — verify-only) AND
-remove-dead-ws-localhost-nats-transport-bypass (the NEW ``ws://localhost`` /
-``wss://localhost`` cases — RED today, since localhost is still a bypass on
-current ``main``).
+Two transport cases: the ``wss://``-non-localhost case (unchanged here —
+verify-only) AND the NEW ``ws://localhost`` / ``wss://localhost`` cases —
+RED today, since localhost is still a bypass on current ``main``.
 
 Scenario (product-owner "connect-time / stale persisted URL"): a host whose
 ``config.json`` still carries a non-``tls://`` nats_url — either a
 ``wss://<non-localhost>`` (persisted before the tls-only cutover) or a stale
 ``ws://localhost`` / ``wss://localhost`` (persisted while localhost was a
-plaintext bypass, before this card removed it). The host is upgraded to the
+plaintext bypass, before this change removed it). The host is upgraded to the
 guard-collapsed client without re-registering. ``connect()`` runs the shared
 guard in ``client.py`` before selecting a transport — so the stale url must
 raise **synchronously**, with NO ``nats.aio.client.Client.connect`` dispatch
@@ -42,8 +40,8 @@ import klodi_nats_client.client as client_mod
 from klodi_nats_client.client import KlodiClient
 
 # The whole stale-non-tls family the collapsed guard must reject at connect.
-# ``wss://<non-localhost>`` was already rejected by the collapse card
-# (verify-only); the localhost forms are the flip this card introduces.
+# ``wss://<non-localhost>`` was already rejected by the earlier tls-only collapse
+# (verify-only); the localhost forms are the flip this change introduces.
 _STALE_NON_TLS = [
     "wss://klodi-net.4gpts.com",
     "ws://localhost:8080",

@@ -2,10 +2,8 @@
 id: 0017-golden-corpus-cross-language-contract
 title: Golden corpus is the cross-language wake-event contract (Decision 7) — fixtures mirror the publisher wire body, not the enriched event
 tags: [golden, contract, drift, cross-language, events, codegen, nats, gate, fixtures]
-card: fix-nats-client-ts-golden-contract-drift
 commit: 720077a
 updated_at: 2026-06-25
-updated_by_card: fix-nats-client-ts-golden-contract-drift
 ---
 
 # ADR-0017 — Golden corpus is the cross-language wake-event contract (Decision 7)
@@ -45,7 +43,7 @@ Consequences a future agent must respect:
 
 3. **Fix only the TS suite, leave Python red.** Rejected — Python reads the *same* shared corpus and was failing the identical two cases. The contract is cross-language by construction; a one-language fix leaves a known-red mirror and the same drift class live.
 
-4. **Harden the gate to field-level conformance in this same card.** Deferred to a follow-up, not rejected. Layering TypeBox `Value.Check` onto a gate whose presence semantics are already broken on a clean tree (and which runs in no CI) is a distinct design change, not "a few lines": it requires first repairing the per-kind-vs-per-variant fixture policy and excluding the non-`kind` snapshot file, then guarding the TypeBox import so a fresh-worktree resolution miss can't hard-block CI, then wiring it into CI at all. The cross-language contract is in lockstep across all three languages without it.
+4. **Harden the gate to field-level conformance in this same change.** Deferred to a follow-up, not rejected. Layering TypeBox `Value.Check` onto a gate whose presence semantics are already broken on a clean tree (and which runs in no CI) is a distinct design change, not "a few lines": it requires first repairing the per-kind-vs-per-variant fixture policy and excluding the non-`kind` snapshot file, then guarding the TypeBox import so a fresh-worktree resolution miss can't hard-block CI, then wiring it into CI at all. The cross-language contract is in lockstep across all three languages without it.
 
 ## Security implications
 

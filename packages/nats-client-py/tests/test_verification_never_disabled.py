@@ -1,7 +1,6 @@
 """INVARIANT GUARD — certificate/hostname verification is never disabled (py).
 
-Card: support-tls-nats-transport-with-private-ca-trust — the CORE security
-invariant. The one real risk of this change is someone disabling cert
+The CORE security invariant. The one real risk of this change is someone disabling cert
 verification to "make it connect". This guard fails the build if any
 insecure TLS toggle appears in the Python TLS connect path or the
 credential-persist code, or if an env var / flag can turn verification off.
@@ -95,7 +94,7 @@ def test_no_insecure_ssl_context_toggle() -> None:
         ):
             assert needle not in body, (
                 f"{path.name} disables/weakens TLS verification "
-                f"(found {needle!r}) — forbidden by the card invariant"
+                f"(found {needle!r}) — forbidden by the verification invariant"
             )
 
 

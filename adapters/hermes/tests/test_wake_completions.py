@@ -1,6 +1,6 @@
 """Spec — the bounded, atomic, ``event_id``-keyed wake-completion marker.
 
-Card: ``distinguish-wake-sessions-from-operator-sessions``. hermes v0.17.0's
+hermes v0.17.0's
 one-shot ``hermes chat -q … -Q`` create path silently drops ``--source`` and
 persists the default ``source='cli'`` on the new ``sessions`` row, so a
 completed wake session is byte-indistinguishable from a genuine operator CLI

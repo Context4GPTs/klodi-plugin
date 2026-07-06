@@ -2,8 +2,6 @@
  * RED — klodi-skill rename contract: manifest<->dir agreement + build
  * materialization.
  *
- * Card: rename-skill-folder-and-frontmatter-to-klodi-skill.
- *
  * Two integration acceptance criteria, settled against the REAL build:
  *
  *  [integration] manifest<->dir agreement: openclaw.plugin.json#skills[0]

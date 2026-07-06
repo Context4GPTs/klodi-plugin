@@ -1,6 +1,6 @@
 //! INVARIANT GUARD — cert/hostname verification is never disabled (rs).
 //!
-//! Card: support-tls-nats-transport-with-private-ca-trust — the CORE
+//! The CORE
 //! security invariant. Fails the build if any insecure-TLS toggle appears
 //! in the Rust TLS connect path, or if an env var / flag can turn
 //! verification off. `KLODI_NATS_CA_FILE` selects *which* CA to trust,
@@ -60,7 +60,7 @@ fn no_insecure_tls_toggle() {
             assert!(
                 !code.contains(needle.as_str()),
                 "{f} disables/weakens TLS verification (found {needle}) — \
-                 forbidden by the card invariant"
+                 forbidden by the verification invariant"
             );
         }
     }

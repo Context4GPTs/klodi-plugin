@@ -15,7 +15,7 @@
  * loop) lives in `consumers.ts` and `publish.ts`.
  *
  * Transport: `tls://` only (raw NATS-over-TLS via `@nats-io/transport-node`),
- * the sole accepted scheme (epic `nats-tls-only-2026-07`). The `ws://` /
+ * the sole accepted scheme. The `ws://` /
  * `wss://` WebSocket transport — and the `ws`-package `wsFactory` it needed —
  * are gone; git history is the recovery path if a WS edge ever returns.
  */
@@ -69,7 +69,7 @@ const WS_PING_INTERVAL_MS = 20_000;
 const WS_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
- * Per epic `nats-tls-only-2026-07`: a NATS connection must use `tls://`
+ * A NATS connection must use `tls://`
  * (raw NATS-over-TLS, the L4 TCP-proxy path) — the **sole** accepted
  * transport. It terminates TLS at the NATS server with certificate +
  * hostname verification ON (see `tls.ts`). Every other scheme (`wss://` /
@@ -456,7 +456,7 @@ export class KlodiClient {
    * wrong CA fails closed. When no CA is configured (`resolved.ca` undefined)
    * the connection uses the system trust store — still fully verified.
    *
-   * Loud-fail (card `gate-auto-trust-on-well-formed-ca-loud-fail`): a
+   * Loud-fail: a
    * deterministic CA/TLS-verify failure on the initial connect is reclassified
    * into the structured, attributable {@link CaTrustError} (transport-node
    * rejects such a handshake promptly with a bare Node TLS error). A transient

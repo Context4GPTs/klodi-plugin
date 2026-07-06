@@ -1,8 +1,8 @@
 """RED spec — the arming gate: loaded != armed (hermes parity port of ADR-0015).
 
-Card: ``fix-first-wake-after-idle-cold-start-noop``. In-Dev RED locks (unit tier).
+RED locks (unit tier).
 
-Root cause (solutions-architect, CONFIRMED — overturns the card's lazy-bind
+Root cause (solutions-architect, CONFIRMED — overturns the earlier lazy-bind
 hypothesis): ``klodi_hermes.register()`` arms the wake pump UNCONDITIONALLY
 (``__init__.py:101-103`` -> ``start_wake_pump()``) in EVERY process that loads the
 plugin through the ``hermes_agent.plugins`` entry point — the always-on
@@ -15,7 +15,7 @@ returns normally, and the consumer ACKs -> the wake is silently dropped and
 JetStream never redelivers. This is the "loaded != armed" class ADR-0015 already
 fixed for openclaw; hermes never got the arming gate.
 
-The fix (this card): arm the pump in EXACTLY ONE process — the bridge — and
+The fix: arm the pump in EXACTLY ONE process — the bridge — and
 load-but-don't-arm everywhere else, gated on a POSITIVE, NON-INHERITED signal (a
 wake-pump-host capability marker on the bridge's ctx, or argv — NEVER an env var,
 which ``BridgeCtx.inject_message`` merges into its ``{**os.environ}`` children and

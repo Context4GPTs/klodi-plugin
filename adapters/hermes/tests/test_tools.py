@@ -25,7 +25,7 @@ Tests are QA-owned during RED. NEVER weaken these asserts; if the
 production catch-all routes a non-connection exception back to
 ``connection_not_ready``, fix the catch-all, never this file.
 
-See ADR-0011 and the card body's `## Review round 1 — code-quality-guardian`.
+See ADR-0011.
 """
 
 from __future__ import annotations

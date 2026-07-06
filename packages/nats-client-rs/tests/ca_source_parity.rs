@@ -1,7 +1,5 @@
 //! CA-source precedence has ONE encoding — the resolver (rs).
 //!
-//! Card: consolidate-ca-source-precedence-into-the-resolver.
-//!
 //! `resolve_ca_file` returns the CA path AND the label naming *which* source it
 //! selected (env → persisted → bundled), packed in `ResolvedCa { path, source }`.
 //! The connect-failure attribution threads `resolved.source` into
@@ -26,7 +24,7 @@
 //!
 //! ⚠️ COMPILE-RED (intentional, contained). References the NEW `ResolvedCa`
 //! struct + the `resolve_ca_file -> Result<ResolvedCa, _>` shape that are the
-//! Rust deliverable of this card. Until the expert-developer lands them THIS
+//! Rust deliverable. Until the expert-developer lands them THIS
 //! file (and `nats_ca_resolve_persist.rs`) fails to compile — the compiler
 //! error naming the missing symbol IS the RED signal. Every OTHER test target
 //! still compiles + runs, e.g.:

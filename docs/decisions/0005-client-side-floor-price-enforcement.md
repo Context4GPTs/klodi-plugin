@@ -2,10 +2,8 @@
 id: 0005-client-side-floor-price-enforcement
 title: Floor-price enforcement client-side only
 tags: [pricing, marketplace]
-card: pre-harness
 commit: d365332
 updated_at: 2026-04-30
-updated_by_card: pre-harness
 ---
 
 # ADR-0005 — Floor-price enforcement client-side only
@@ -30,7 +28,7 @@ The plugin must enforce floor discipline against two adversaries:
 - 0.2.0 retired the per-listing client cron that previously enforced `auto_reject_below` locally. The reason: the server already saw the offer; running a second check on the client added latency without changing the visible outcome. Server-side enforcement keeps the secrecy guarantee (the server sees the threshold *the seller chose to declare* — not the strategic floor) and removes a whole class of "what if the laptop is asleep" failure modes.
 - The bundled `skill/policies/security.md` is a hard-rule file that blocks private-to-public promotion even when the user's negotiation style is permissive. It is copied verbatim into `$klodi_home/policies/security.md` on first run and is the single authoritative list of price-protection rules the agent honors.
 - The listing `description` field is clamped at ~8 bullets in the skill guidance to prevent slow-drip leakage of private facts disguised as Q&A enrichment.
-- Listing fields are editable in place via `klodi_list_update` — including `category` (correct a mis-bucketed listing without a destructive withdraw + relist) and fulfillment (the `delivery_method` flat field was retired for the `fulfillment` discriminated union, editable since commit 25bd933). State-smuggling through an edited field is not defended by freezing the field; it is defended by the controls that actually hold: the ~8-bullet description clamp (above), the `skill/policies/security.md` private→public hard rule, and — for after-the-fact visibility of any edit — the server-side edit audit trail tracked in the sibling marketplace card `listing-edit-audit-trail-and-re-confirm` (forward-looking; not shipped here).
+- Listing fields are editable in place via `klodi_list_update` — including `category` (correct a mis-bucketed listing without a destructive withdraw + relist) and fulfillment (the `delivery_method` flat field was retired for the `fulfillment` discriminated union, editable since commit 25bd933). State-smuggling through an edited field is not defended by freezing the field; it is defended by the controls that actually hold: the ~8-bullet description clamp (above), the `skill/policies/security.md` private→public hard rule, and — for after-the-fact visibility of any edit — the server-side edit audit trail owned by the marketplace (forward-looking; not shipped here).
 
 ## Alternatives considered
 

@@ -1,7 +1,6 @@
 /**
  * RED — openclaw persists the register-response nats_ca (register-poller.ts).
  *
- * Card: auto-trust-nats-ca-from-register.
  * openclaw half of the six-adapter symmetry audit (Scenario 1 persist +
  * Scenario 3 no-regression):
  *

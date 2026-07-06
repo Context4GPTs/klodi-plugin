@@ -305,4 +305,3 @@ describe("channel.message", () => {
     expect(evt.created_at.endsWith("Z")).toBe(true);
   });
 });
-// qa-developer: golden-corpus-decision-7

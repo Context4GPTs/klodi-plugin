@@ -1,6 +1,5 @@
 """GATED e2e — register-supplied CA, no env override, connects tls:// (py).
 
-Card: auto-trust-nats-ca-from-register.
 Criteria:
   * [e2e] private-CA NATS over tls:// + a register response supplying that CA
     as nats_ca → a host that persists it then connects using ONLY the

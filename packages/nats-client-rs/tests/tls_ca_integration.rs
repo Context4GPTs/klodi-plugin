@@ -1,6 +1,5 @@
 //! GATED integration — verified tls:// handshake + fail-closed (rs).
 //!
-//! Card: support-tls-nats-transport-with-private-ca-trust.
 //! Criteria (Acceptance → "Verified TLS round-trip with private-CA trust"):
 //!   * [integration] trusted private CA + tls:// nats_url → handshake
 //!     completes (cert + hostname verification pass) + whoami round-trip.
@@ -9,7 +8,7 @@
 //!   * [integration] wrong / absent CA → connect() errors: fails CLOSED, never
 //!     a plaintext / unverified fallback.
 //!
-//! GATE (Do-NOW #3 dev-pair local TLS harness — NOT the epic Railway proxy):
+//! GATE (dev-pair local TLS harness — NOT the prod Railway proxy):
 //! each test EARLY-RETURNS (no-op) unless a local tls:// nats + self-signed
 //! test CA is provided via env — KLODI_TLS_INTEGRATION=1, KLODI_TLS_NATS_URL,
 //! KLODI_NATS_CA_FILE, KLODI_TLS_CREDS_PATH. Because the fail-closed case
@@ -28,8 +27,7 @@ use serde_json::Value;
 
 /// A bad-CA connect must reach a terminal error within this bound; a hang
 /// (`retry_on_initial_connect` retries the deterministic verify failure
-/// forever) trips the timeout → the assert fails. Card
-/// gate-auto-trust-on-well-formed-ca-loud-fail.
+/// forever) trips the timeout → the assert fails.
 const TERMINAL_BOUND: Duration = Duration::from_secs(15);
 
 /// A shared local TLS-CA fixture. `CARGO_MANIFEST_DIR` = packages/nats-client-rs,
@@ -113,7 +111,7 @@ async fn verified_tls_handshake_and_whoami_round_trip() {
 #[tokio::test]
 async fn fails_closed_when_ca_is_wrong() {
     let Some(h) = harness() else { return };
-    // TIGHTENED by card gate-auto-trust-on-well-formed-ca-loud-fail: a
+    // TIGHTENED: a
     // WELL-FORMED wrong-signer CA (`ca-wrong.pem` — does not sign the test nats
     // cert, so the failure is a handshake verify at the CONNECT boundary, not a
     // PEM parse) must fail closed **terminally within a bounded time**, never

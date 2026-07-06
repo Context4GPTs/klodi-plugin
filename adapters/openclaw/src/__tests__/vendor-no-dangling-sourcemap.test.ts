@@ -18,7 +18,7 @@
  * either remediation. Discovery (3 seats) converged on STRIP, but the test
  * does not assume it — it asserts the consumer contract, not the mechanism.
  *
- * Acceptance criteria (card → Discovery findings):
+ * Acceptance criteria:
  *   [unit] AC1 — when each vendored .js under
  *     .publish-stage/dist/_vendor/_klodi_openclaw_* is inspected, none
  *     contains a sourceMappingURL comment (chosen contract: strip). Covers
@@ -135,7 +135,7 @@ describe("vendored bundle ships no dangling sourcemap reference", () => {
       const jsFiles = vendoredJsFiles();
 
       // Guard the guard: if vendoring ever stops emitting vendored .js, the
-      // invariant is vacuously true and would hide a broken stage. The card's
+      // invariant is vacuously true and would hide a broken stage. The
       // ground-truth is 15 files (8 natsclient + 7 toolcatalog); require the
       // tree to be non-empty and span both namespaces.
       expect(

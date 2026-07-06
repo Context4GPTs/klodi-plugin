@@ -1,7 +1,7 @@
 //! RED/spec — transport guard collapsed to `tls://` ONLY, no localhost
 //! bypass (rs client).
 //!
-//! Card: remove-dead-ws-localhost-nats-transport-bypass. Mirror of the
+//! Mirror of the
 //! py/ts guard matrix — flips the prior *localhost-accepts-any-scheme*
 //! premise to *localhost-is-no-longer-a-bypass*. The guard's sole rule is
 //! now `scheme == tls://`; `tls://localhost` (dev CA) is Ok because it is
@@ -87,7 +87,7 @@ fn rejects_bare_ws_non_localhost() {
 
 #[test]
 fn rejects_non_tls_against_localhost() {
-    // THE FLIP: localhost is no longer a plaintext escape hatch. Every
+    // The flip: localhost is no longer a plaintext escape hatch. Every
     // non-tls scheme against localhost was Ok under the old
     // `assert_tls_or_localhost` bypass; the collapse rejects them all.
     for url in [

@@ -2,10 +2,8 @@
 id: 0002-on-disk-nkey-credentials
 title: On-disk NKey credentials at mode 0600
 tags: [credentials, nkey, filesystem]
-card: pre-harness
 commit: d365332
 updated_at: 2026-04-30
-updated_by_card: pre-harness
 ---
 
 # ADR-0002 — On-disk NKey credentials at mode 0600

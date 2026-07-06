@@ -72,7 +72,7 @@ describe("plugin entry", () => {
 
   it("registers all 7 tool groups with the api", () => {
     // klodi_assets_upload_url and its registerMediaTools wrapper were
-    // removed in the fold-uploads-into-listing-tools card — listings.ts
+    // removed when uploads were folded into the listing tools — listings.ts
     // now handles photo uploads internally via tools/photos.ts.
     const api = createMockPluginApi();
     capturedRegisterFn!(api);

@@ -1,5 +1,5 @@
 /**
- * card/openclaw-zeroclaw-per-conversation-wake-keying — Item 1 openclaw keying.
+ * openclaw wake-session keying (Item 1).
  *
  * Spec for `deriveWakeSessionKey(agentId, event)` (the new
  * `service/wake-session.ts`). Mirrors the merged hermes `derive_wake_session`

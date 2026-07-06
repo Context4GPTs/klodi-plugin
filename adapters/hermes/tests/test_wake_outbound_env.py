@@ -1,7 +1,7 @@
 """RED spec — the env keystone: the inbound wake-session key IS the outbound
 correlation key, threaded to the tool via the spawn env.
 
-Card: ``wake-outbound-roundtrip-message-and-correlation`` (In-Dev TDD step 4).
+TDD step 4.
 
 ``klodi_message_user`` runs INSIDE the ``hermes chat`` subprocess the bridge
 spawns for each isolated wake turn (tagged ``--source klodi`` so the resolver
@@ -19,7 +19,7 @@ i.e. the bare entity id in the env is exactly the wake-session key without
 its ``klodi:`` namespace prefix. That is the whole point of the round-trip:
 the outbound correlation key and the inbound wake-session key are the same id.
 The key is no longer a hermes argv flag (no hermes version accepts one — the
-defect this card removes); it lives on the env and in the bridge's log.
+defect this change removes); it lives on the env and in the bridge's log.
 
 These drive the REAL ``BridgeCtx`` (with a stub subprocess runner that
 captures argv AND kwargs) through the REAL wake handler, so no hermes binary

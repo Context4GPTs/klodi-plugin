@@ -1,7 +1,5 @@
 """RED — CA resolution consults the persisted register-response CA (py).
 
-Card: auto-trust-nats-ca-from-register.
-
 The register/session response's ``nats_ca`` is persisted to
 ``${KLODI_HOME}/nats-ca.pem`` and becomes a NEW level-2 trust source in the
 ``tls://`` CA resolver, ranked strictly:

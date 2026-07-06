@@ -333,7 +333,7 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// card/audit-all-adapters-for-silent-wake-inject-failure — RED (qa-developer)
+// Audit all adapters for silent wake-inject failure — RED (qa-developer)
 //
 // Seam 1 — zeroclaw post-ACK worker classification (ACs 2, 3, 6).
 //
@@ -649,7 +649,7 @@ mod alarm_classification_red_tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// card/openclaw-zeroclaw-per-conversation-wake-keying — Item 1 zeroclaw [integration].
+// Per-conversation wake-keying, openclaw + zeroclaw — Item 1 zeroclaw [integration].
 //
 // The two `[integration]` ACs: under per-turn session selection the worker runs
 // a `Wake` on its derived per-entity session (`klodi:<entity_id>`) while an

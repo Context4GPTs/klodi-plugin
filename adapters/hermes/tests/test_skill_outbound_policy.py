@@ -1,6 +1,6 @@
 """RED spec — Piece 5: persona policy carries the outbound round-trip.
 
-Card: ``wake-outbound-roundtrip-message-and-correlation``. The tool +
+The tool +
 correlation store are useless if the persona never (a) reaches out at the
 right moment and (b) scans for replies. Per devops [HIGH]: an operator's
 free-text reply has no payload to trigger correlation — the agent only

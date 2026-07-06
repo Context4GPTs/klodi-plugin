@@ -1,8 +1,7 @@
 /**
  * Schema-shape contract for the REMOVAL of listing expiry from the wire.
  *
- * Card: remove-listing-expiry-n-from-the-wire-contract (epic
- *   remove-listing-expiry-2026-06). The marketplace is dropping listing
+ * The marketplace is dropping listing
  *   expiry, so the plugin's listing tools must stop carrying it on the wire:
  *     - the request param `expires_hours` on `klodi_list_create` + `_update`
  *     - the reply field   `expires_at`    on `ListingResult` (shared by all

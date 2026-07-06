@@ -2,15 +2,14 @@
  * RED [unit] — a stale persisted non-`tls://` nats_url is rejected at
  * `connect()` BEFORE any transport dispatch (ts client).
  *
- * Cards: collapse-nats-transport-guard-to-tls-only (the `wss://`-non-localhost
- * case, verify-only) AND remove-dead-ws-localhost-nats-transport-bypass (the
+ * Two cases: the `wss://`-non-localhost case (verify-only) AND the
  * NEW `ws://localhost` / `wss://localhost` cases — RED today, since localhost
- * is still a bypass on current `main`).
+ * is still a bypass on current `main`.
  *
  * Scenario: `config.json` still carries a non-`tls://` nats_url — either a
  * `wss://<non-localhost>` (persisted before the cutover) or a stale
  * `ws://localhost` / `wss://localhost` (persisted while localhost was a
- * plaintext bypass, before this card removed it). The host is upgraded to the
+ * plaintext bypass, before it was removed). The host is upgraded to the
  * guard-collapsed client without re-registering. `doConnect` runs the shared
  * guard before the transport branch, so the stale url must throw synchronously
  * with NO `wsconnect` and NO node-TCP `connect` attempt (both mocked; assert
@@ -81,8 +80,8 @@ afterEach(() => {
 });
 
 describe("connect() rejects a stale persisted non-tls:// url before transport dispatch", () => {
-  // `wss://<non-localhost>` was already rejected by the collapse card
-  // (verify-only); the localhost forms are the flip this card introduces.
+  // `wss://<non-localhost>` was already rejected by the guard collapse
+  // (verify-only); the localhost forms are the flip introduced here.
   it.each([
     "wss://klodi-net.4gpts.com",
     "ws://localhost:8080",

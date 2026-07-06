@@ -1,8 +1,7 @@
 /**
  * Detection matrix for `isGatewayRuntime()` in service/wake-pump.ts.
  *
- * Bug being locked (root cause B, card
- * openclaw-wake-pump-never-arms-in-real-gateway): the real `openclaw
+ * Bug being locked (root cause B): the real `openclaw
  * gateway` daemon runs with `process.title === "openclaw"` (argv
  * rewritten, /proc/PID/cmdline empty), but the gate only matched
  * `process.title ∈ {"openclaw-gateway","openclaw-gatewa"}`. So the
@@ -35,7 +34,7 @@
  * not exist yet. Once the detection fix lands, the gateway-runtime row
  * flips to `true` and the three CLI rows stay `false`. DO NOT relax any
  * row to make a broken implementation pass — the gateway-runtime row
- * going green is the whole point of the card; a CLI row going green is a
+ * going green is the whole point; a CLI row going green is a
  * fail-OPEN regression and must stay red against such an implementation.
  */
 

@@ -1,8 +1,6 @@
 """Integration spec — first-wake-after-idle runs a real turn; the no-silent-drop
 invariant; the warm path stays unregressed.
 
-Card: ``fix-first-wake-after-idle-cold-start-noop``. In-Dev integration tier.
-
 These drive the REAL consumer dispatch seam (``klodi_nats_client.consumers.
 _dispatch_message``) -> the REAL wake handler (``handle_notification``) -> the
 REAL ``BridgeCtx`` with a stub subprocess runner, so no NATS, no docker, and no
@@ -24,7 +22,7 @@ implementation.
 
 AC-3 (the redelivery-recovers-the-wake path) is deliberately ABSENT: under the
 arming-gate fix it is vacuous (the incapable process never arms, so no wake is
-ever left un-ACKed for redelivery to recover). Per the card, do not write a test
+ever left un-ACKed for redelivery to recover). Do not write a test
 for a code path that will not exist. AC-4 is [e2e] and lives cross-repo in
 klodi-stage — not here.
 

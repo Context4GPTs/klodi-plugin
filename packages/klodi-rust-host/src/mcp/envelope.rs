@@ -23,7 +23,7 @@
 //!
 //! - [`ToolEnvelope`] — the wire-format struct.
 //! - [`envelope_from_klodi_err`] — maps every [`klodi_nats_client::KlodiError`]
-//!   variant to a stable envelope code per [R2 in the card body].
+//!   variant to a stable envelope code per R2.
 //! - [`envelope_to_call_tool_result`] — wraps the envelope into the
 //!   `CallToolResult` shape rmcp serves (structured payload PLUS
 //!   JSON-stringified `content[0].text`).
@@ -51,7 +51,7 @@ pub struct ToolEnvelope {
 }
 
 /// Map a [`KlodiError`] into a [`ToolEnvelope`] using the R2 closed
-/// vocabulary (see card body — `errorCodes` in
+/// vocabulary (`errorCodes` in
 /// `packages/tool-catalog/src/error-codes.ts`).
 ///
 /// Marketplace errors collapse to the catch-all

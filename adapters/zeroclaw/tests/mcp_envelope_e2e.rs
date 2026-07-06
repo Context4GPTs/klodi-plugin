@@ -1,8 +1,8 @@
 //! End-to-end test for the `klodi-zeroclaw-mcp` binary's setup-time
 //! envelope emission.
 //!
-//! Round 2 tier coverage: the card claims `tiers: [unit, integration, e2e]`
-//! but no e2e shipped in round 1. This test spawns the actual built
+//! Round 2 tier coverage across `[unit, integration, e2e]`
+//! — no e2e shipped in round 1. This test spawns the actual built
 //! binary as a subprocess with `KLODI_HOME` pointed at an empty
 //! directory and asserts that stderr carries the four-key
 //! `not_registered` envelope JSON — same shape the dispatcher emits to

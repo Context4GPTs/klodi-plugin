@@ -2,10 +2,8 @@
 id: 0018-klodi-skill-bundle-slug
 title: Skill bundle is namespaced `klodi-skill` at build time; `${klodi_home}/skill` install-time stays `skill`
 tags: [skill, bundle, vendoring, publish, naming, collision, adapters, openclaw]
-card: rename-skill-folder-and-frontmatter-to-klodi-skill
 commit: 8c35dd0
 updated_at: 2026-06-25
-updated_by_card: rename-skill-folder-and-frontmatter-to-klodi-skill
 ---
 
 # ADR-0018 — Skill bundle is namespaced `klodi-skill` at build time; `${klodi_home}/skill` install-time stays `skill`
@@ -45,7 +43,7 @@ The frontmatter `name: klodi-skill` / H1 alignment in `SKILL.md` is a consistenc
 ## Alternatives considered
 
 1. **Rename only `openclaw.plugin.json#skills` without renaming the copied folder.** Rejected: the manifest entry must resolve to an existing dir; folder TARGET and manifest key move together or the skill fails to load (worse than the warning).
-2. **Leave the canonical source `skill/` and rename only the openclaw destination** (the originally-shipped, narrower fix). Superseded by founder directive: the canonical dir was renamed too so the source name matches the published slug across all six adapters. The original openclaw-only scoping reasoning is preserved on the card for the record.
+2. **Leave the canonical source `skill/` and rename only the openclaw destination** (the originally-shipped, narrower fix). Superseded by founder directive: the canonical dir was renamed too so the source name matches the published slug across all six adapters. The original openclaw-only scoping reasoning is preserved for the record.
 3. **Also rename `${klodi_home}/skill`.** Rejected: it is per-user state, never registered with the host skill registry, so it cannot collide; renaming breaks user upgrades for no benefit.
 
 ## Security implications

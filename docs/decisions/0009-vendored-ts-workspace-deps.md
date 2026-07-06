@@ -2,10 +2,8 @@
 id: 0009-vendored-ts-workspace-deps
 title: Workspace TS deps vendored into `dist/_vendor/` at publish time
 tags: [publish, vendoring, typescript]
-card: pre-harness
 commit: 2e8d5d8
 updated_at: 2026-06-23
-updated_by_card: pack-or-strip-vendored-toolcatalog-sourcemaps
 ---
 
 # ADR-0009 — Workspace TS deps vendored into `dist/_vendor/` at publish time

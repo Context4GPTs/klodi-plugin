@@ -1,8 +1,6 @@
 /**
  * Manifest↔registered symmetry gate for the openclaw adapter.
  *
- * Card: fix-openclaw-manifest-tool-drift-add-symmetry-gate.
- *
  * The contract (from Discovery — do NOT relitigate in this test):
  *   The "registered-tool set" is the set of static `name:` string literals
  *   inside `api.registerTool({…})` blocks in adapters/openclaw/src/tools/*.ts
@@ -59,7 +57,7 @@ const REAL_TOOLS_SRC = join(
   "tools",
 );
 
-/** The three tools missing from the pre-fix manifest (the card's exact drift). */
+/** The three tools missing from the pre-fix manifest (the exact drift). */
 const MISSING_THREE = [
   "klodi_searches_create",
   "klodi_match_feedback",

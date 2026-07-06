@@ -1,7 +1,7 @@
 """Spec — klodi_message_user outbound tool + operator-target resolver
 + reply correlation (Pieces 3 & 4), bound to Hermes's host primitives.
 
-Card: ``bind-message-user-delivery-and-operator-resolver``. This is the
+This is the
 outbound half of the wake round-trip: the way a klodi escalation reaches
 the operator's live session turn-lessly, and the way their reply
 deterministically drives the right marketplace action.
@@ -527,7 +527,7 @@ def test_pending_decisions_tool_carries_identity_for_disambiguation(
         )
 
 
-# ── Card: distinguish-wake-sessions-from-operator-sessions ────────────
+# ── Wake-session vs operator-session distinction ────────────
 #
 # hermes v0.17.0's one-shot ``hermes chat -q … -Q`` create silently drops
 # ``--source``, so a completed wake session lands ``source='cli'`` —

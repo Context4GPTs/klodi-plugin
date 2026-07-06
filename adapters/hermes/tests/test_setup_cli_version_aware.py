@@ -5,7 +5,7 @@ Drives the real ``main()`` against tempdir ``KLODI_HOME`` / ``HERMES_HOME``
 the same way production does — ``importlib.metadata.version("klodi-hermes")``
 — so these tests track the live wheel version automatically.
 
-These pin the headline guarantee of this card: **no deploy flag can
+These pin the headline guarantee of this change: **no deploy flag can
 strand a stale skill.** ``--no-reseed`` is accepted but inert; the
 canonical bundle always wins when newer; an equal/older bundle is
 always a no-op; and the three outcomes (reseeded / already-current /

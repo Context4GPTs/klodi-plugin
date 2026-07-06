@@ -2,10 +2,8 @@
 id: 0020-operator-escalation-delivery-binding
 title: Operator escalation (`klodi_message_user`) binds to the host's cron-standalone sender + SQLite session store — turn-less, live-operator-resolved, no default channel
 tags: [escalation, message-user, delivery, operator-resolution, sessiondb, channel-directory, hermes, wake, outbound]
-card: bind-message-user-delivery-and-operator-resolver
 commit: e03cae5
 updated_at: 2026-07-02
-updated_by_card: distinguish-wake-sessions-from-operator-sessions
 ---
 
 # ADR-0020 — Operator escalation binds to the host's own primitives
@@ -30,7 +28,7 @@ It runs **inside** the isolated `hermes chat … --source klodi` wake turn, so i
 must reach the operator's *separate* live session **without running an agent turn there**
 (the Piece-3 no-hijack requirement).
 
-The v0.3.5 outbound epic shipped both seams **probe-gated** because the dev env could not
+The v0.3.5 outbound work shipped both seams **probe-gated** because the dev env could not
 confirm Hermes's host primitives: `_deliver` raised `RuntimeError("… not bound …")`, and
 `resolve_operator_target` read an **assumed** `$HERMES_HOME/runtime/active_sessions.json`
 against a guessed schema. Every escalation therefore failed. Probing the real runtime
@@ -90,7 +88,7 @@ exercises the real bindings.
 
 ## Alternatives considered
 
-- **`gateway.delivery.DeliveryRouter`** (the card's original hint) — rejected: needs the
+- **`gateway.delivery.DeliveryRouter`** (the original hint) — rejected: needs the
   gateway's live platform-adapter instances a wake subprocess does not hold (fact 1).
 - **Assumed `$HERMES_HOME/runtime/active_sessions.json`** — rejected: the file does not exist;
   the registry is `SessionDB` (fact 2). The whole assumed-schema loader was deleted.
@@ -137,7 +135,7 @@ adapter reads the host-owned `state.db` and
 channel directory **read-only**; it owns neither. No marketplace payload rides the delivery
 metadata — only the operator-authored escalation `text`.
 
-## Amendment (2026-06-30) — card `fix-hermes-wake-inject-session-flag-argv`
+## Amendment (2026-06-30)
 
 > **Superseded 2026-07-02.** This amendment's core premise — that a wake session persists a
 > `klodi` source tag the resolver can exclude on — does **not** hold on hermes v0.17.0: the
@@ -148,7 +146,7 @@ metadata — only the operator-authored escalation `text`.
 The inbound bridge's wake-inject argv was found to use a `session`-named flag that **no
 hermes version defines** — every wake `sys.exit(2)`'d with `unrecognized arguments`, so the
 relay had been fully down. The fix runs each wake as a fresh isolated session tagged
-`hermes chat … -Q --source klodi` (the inbound card's [[0019-wake-inject-failure-disposition]]
+`hermes chat … -Q --source klodi` (the inbound [[0019-wake-inject-failure-disposition]]
 amendment carries the rationale). Because a wake session is now created **with a `klodi` source
 tag**, the outbound exclusion this ADR depends on changed shape:
 
@@ -169,7 +167,7 @@ tag**, the outbound exclusion this ADR depends on changed shape:
   self-addressing — safe-by-default. Re-confirm on the deployed pin or bump it (klodi-stage
   Dockerfile-pin discipline).
 
-## Amendment (2026-07-02) — card `distinguish-wake-sessions-from-operator-sessions`
+## Amendment (2026-07-02)
 
 A wake session is **no longer distinguished by `source`**, because hermes session `source` is
 not durable through the wake spawn path. On hermes v0.17.0 (`nousresearch/hermes-agent:v2026.6.19`)
@@ -211,10 +209,10 @@ session is untitled), so a wake `cli` row and an operator `cli` row are byte-ide
 store. Class-level `cli` exclusion is the only available axis, and it is sufficient because a `cli`
 session is never a *deliverable* operator.
 
-**Cross-repo lockstep (epic `hermes-wake-relay-2026-06`).** The klodi-stage
+**Cross-repo lockstep.** The klodi-stage
 `integration/hosts/hermes/wake.test.ts` AC1 DELIVERED gate keyed on a new `source='klodi'` session
 appearing after the wake. It **re-points onto `${KLODI_HOME}/wake/completions.json`** in lockstep —
-on the existing klodi-stage gate card, sequenced **after** this card lands the marker. The
+on the existing klodi-stage gate, sequenced **after** this change lands the marker. The
 DELIVERED semantic (the operator physically receives the escalation) never weakens; only the
 source-proxy assertion moves. Marker-first ordering is mandatory: flip the assertion before the
 artifact exists and AC1 has nothing to key on; land the marker before the flip and AC1 stays RED on

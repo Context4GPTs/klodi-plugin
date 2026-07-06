@@ -11,7 +11,7 @@
  * `0.3.1`, the manifest is `0.3.0`. The registry flagged this as
  * `package-manifest-version-drift` and DISABLED the openclaw target.
  *
- * Root cause (card root-cause section): `adapters/openclaw/scripts/
+ * Root cause: `adapters/openclaw/scripts/
  * stamp-version.mjs` only rewrites the pinned-tag GitHub URLs in the
  * manifest, never the manifest's own `.version` field. So the bump to
  * 0.3.1 in package.json left the manifest stranded at 0.3.0 — silent drift
@@ -40,7 +40,7 @@
  * manifest version from package.json, the source of truth) and committing
  * the regenerated manifest — NEVER by hand-editing openclaw.plugin.json to
  * match. Hand-editing the manifest re-creates the exact class of drift this
- * card exists to kill: it makes the two agree once, by luck, while leaving
+ * fix exists to kill: it makes the two agree once, by luck, while leaving
  * the generator that should keep them in lockstep still broken.
  */
 

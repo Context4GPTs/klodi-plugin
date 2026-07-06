@@ -1,8 +1,6 @@
 /**
  * RED — klodi-skill rename contract: SKILL.md declared identity.
  *
- * Card: rename-skill-folder-and-frontmatter-to-klodi-skill.
- *
  * The founder additionally elected to align the skill's *declared*
  * identity with the new slug: the canonical `skill/SKILL.md` (path
  * unchanged — only its contents) gets frontmatter `name: klodi-skill`

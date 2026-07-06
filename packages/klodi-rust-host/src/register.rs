@@ -58,7 +58,7 @@ struct SessionEnvelope {
     user_id: Option<String>,
     nkey_public: Option<String>,
     nats_url: Option<String>,
-    /// The register-response CA (card `auto-trust-nats-ca-from-register`).
+    /// The register-response CA.
     /// OPTIONAL — absent / null / empty ⇒ older `@klodi/web`; persist
     /// nothing, never fail registration. NOT in the required-field chain in
     /// `persist_session`.
@@ -231,7 +231,7 @@ async fn persist_session(klodi_home: &Path, env: &SessionEnvelope) -> Result<()>
         .as_deref()
         .context("registration response missing nats_url")?;
 
-    // Per epic `nats-tls-only-2026-07`: refuse to persist any non-`tls://`
+    // Refuse to persist any non-`tls://`
     // nats_url. Delegates to the single shared client guard (accepts only
     // `tls://`, rejecting `wss://` / `ws://` / `nats://` on every host, with
     // no localhost bypass) so persist-time and connect-time policy can never
@@ -261,8 +261,7 @@ async fn persist_session(klodi_home: &Path, env: &SessionEnvelope) -> Result<()>
     }))?;
     write_secret(klodi_home.join("config.json"), config_bytes).await?;
 
-    // Auto-trust the register-response CA (card
-    // auto-trust-nats-ca-from-register): the ONE rust-host persist site
+    // Auto-trust the register-response CA: the ONE rust-host persist site
     // covers moltis + ironclaw + zeroclaw. `nats_ca` is OPTIONAL — it is not
     // in the `context()?` required-field chain above, so its absence never
     // fails registration. The shared helper skips an empty / non-PEM-shaped

@@ -2,10 +2,8 @@
 id: 0008-bundled-deps-host-ignore-scripts
 title: Runtime deps via `bundleDependencies` + host-enforced `--ignore-scripts`
 tags: [publish, supply-chain, superseded]
-card: pre-harness
 commit: 07522fc
 updated_at: 2026-04-30
-updated_by_card: pre-harness
 ---
 
 # ADR-0008 — Runtime deps via `bundleDependencies` + host-enforced `--ignore-scripts`

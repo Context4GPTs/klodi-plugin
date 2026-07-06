@@ -1,7 +1,7 @@
 //! Publish-boundary contract tests for `publish_match_feedback` (Rust half).
 //!
-//! The flywheel-emit helper added by card
-//! emit-standing-search-accept-dismiss-feedback (SC8). This is the Rust arm
+//! The flywheel-emit helper for standing-search accept/dismiss feedback
+//! (SC8). This is the Rust arm
 //! of the 3-language byte-parity set (TS + Python + Rust). Moltis / IronClaw
 //! / ZeroClaw are daemon hosts with an EMPTY in-agent tool surface, so they
 //! do NOT register this tool — but the `nats-client-rs` crate carries the
@@ -142,7 +142,7 @@ fn action_on_match_is_omitted_when_none() {
 
 #[test]
 fn validate_accepts_non_uuid_listing_id() {
-    // The load-bearing card assertion: a non-UUID listing_id must NOT be
+    // The load-bearing assertion: a non-UUID listing_id must NOT be
     // rejected. (Contrast `is_uuid_v4` in publish_channel_message, which
     // rejects this — that guard exists because channel ids flow into the
     // subject path; match-feedback ids ride in the body.)

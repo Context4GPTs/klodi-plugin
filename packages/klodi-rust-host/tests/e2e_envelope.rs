@@ -11,7 +11,7 @@
 //! through the public handler API exercises the same code path the
 //! stdio server uses (`KlodiMcpHandler::call_tool` → `tools::dispatch`).
 //!
-//! Coverage target: the card's `[e2e]` acceptance criterion — given a
+//! Coverage target: the `[e2e]` acceptance criterion — given a
 //! tool call triggers a guard failure, the envelope shape matches the
 //! cross-language golden fixture (modulo per-host CLI substitution).
 //!

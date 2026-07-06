@@ -1,6 +1,6 @@
 """Hermes bridge surfacing audit — a bad served CA reaches a TERMINAL
 ``bridge_register_failed``, never pinned at ``bridge_register_starting`` (the
-defect). Card: gate-auto-trust-on-well-formed-ca-loud-fail.
+defect).
 
 This is the per-adapter surfacing witness at the exact defect site
 (``bridge.py:449-461``). The motivating defect: a served keyUsage-missing CA

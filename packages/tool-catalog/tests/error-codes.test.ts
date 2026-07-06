@@ -1,9 +1,9 @@
 /**
  * Catalog-level contract: the error-code vocabulary is the closed set
- * every adapter draws from. Per **R2** in the card and the architect's
+ * every adapter draws from. Per **R2** and the architect's
  * ADR-0011 plan, this file owns three contract gates:
  *
- *   1. Vocabulary completeness — every code named in the card's
+ *   1. Vocabulary completeness — every code named in the
  *      acceptance-criteria table is exported by `error-codes.ts`.
  *   2. Recovery-target shape — each entry carries a `recovery_kind`
  *      whose value lives in the closed NextAction discriminated union
@@ -25,7 +25,7 @@ import { describe, it, expect } from "vitest";
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
 import { errorCodes, type ErrorCode } from "../src/error-codes.js";
 
-// The vocabulary spelled out in the card's R2 table. Order matches the
+// The vocabulary spelled out in the R2 table. Order matches the
 // table for human review; the test treats the array as a set.
 const REQUIRED_CODES = [
   "not_registered",
@@ -52,7 +52,7 @@ const ALLOWED_RECOVERY_KINDS = new Set([
 ]);
 
 describe("errorCodes vocabulary completeness", () => {
-  it("exports every code named in the card's R2 acceptance criteria", () => {
+  it("exports every code named in the R2 acceptance criteria", () => {
     const exported = new Set(Object.keys(errorCodes));
     for (const code of REQUIRED_CODES) {
       expect(exported, `missing code: ${code}`).toContain(code);
@@ -125,11 +125,11 @@ describe("errorCodes entry shape", () => {
 });
 
 describe("errorCodes is append-only across versions (R2 stability gate)", () => {
-  // Historical fixture: the codes that exist at this card's merge
-  // become the floor. Removing or renaming any of them in a later card
+  // Historical fixture: the codes that exist at merge time
+  // become the floor. Removing or renaming any of them later
   // breaks every agent in flight pattern-matching on the code string.
-  // This test reads the same REQUIRED_CODES list — once this card
-  // merges, future PRs that delete a code must also amend the fixture
+  // This test reads the same REQUIRED_CODES list — once this floor
+  // is set, future PRs that delete a code must also amend the fixture
   // with a written deprecation notice; the test catches the silent
   // delete.
   it("never deletes a previously-published code", () => {

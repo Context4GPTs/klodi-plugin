@@ -54,9 +54,9 @@ fn service_creds_path() -> PathBuf {
     repo_root().join("infra/nats/dev-keys/service.creds")
 }
 
-// Re-homed off ws://localhost onto the surviving tls:// transport
-// (remove-dead-ws-localhost-nats-transport-bypass). Requires a dev-CA
-// tls://localhost NATS + the CA PEM path in KLODI_NATS_CA_FILE.
+// Re-homed off ws://localhost onto the surviving tls:// transport.
+// Requires a dev-CA tls://localhost NATS + the CA PEM path in
+// KLODI_NATS_CA_FILE.
 fn nats_tls_url() -> String {
     env::var("TEST_NATS_TLS_URL").unwrap_or_else(|_| "tls://localhost:4222".to_owned())
 }

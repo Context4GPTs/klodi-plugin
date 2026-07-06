@@ -1,6 +1,5 @@
 """RED — hermes persists the register-response nats_ca (register.py).
 
-Card: auto-trust-nats-ca-from-register.
 Criteria (Scenario 1 persist + Scenario 3 no-regression + rotation, hermes half
 of the six-adapter symmetry audit):
 

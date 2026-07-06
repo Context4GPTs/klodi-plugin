@@ -135,7 +135,7 @@ describe("klodi_list_mine", () => {
 
 describe("klodi_list_update", () => {
   it("forwards full payload (incl. category) and does NOT touch the sell file", async () => {
-    // Card: make-category-editable-in-plugin-surface-and-docs, acceptance #7.
+    // Acceptance #7.
     // registerUpdate is a pure raw pass-through (ADR-0012): it binds
     // tool.params → parameters and forwards the whole params object via
     // rawRequest. The NEW `category` param must therefore reach the

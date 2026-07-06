@@ -1,8 +1,6 @@
 //! RED [unit] — `KLODI_DEFAULT_NATS_URL` pinned to the tls:// L4 proxy
 //! (rs codegen mirror: `tool-catalog/dist/rust-types.rs`).
 //!
-//! Card: collapse-nats-transport-guard-to-tls-only.
-//!
 //! The constant is codegen'd from `tool-catalog/src/index.ts` into the
 //! gitignored `rust-types.rs` that `catalog.rs` embeds via `#[path]`. This
 //! pins the cutover value `tls://hayabusa.proxy.rlwy.net:32770` (devops §1)

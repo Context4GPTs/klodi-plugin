@@ -2,7 +2,7 @@
  * Synthetic publisher helper — Decision 5, D.1.ts.
  *
  * Re-homed off `ws://localhost` onto the surviving `tls://` raw-TCP
- * transport (card: remove-dead-ws-localhost-nats-transport-bypass). The
+ * transport. The
  * `ws://localhost` WebSocket transport + the `ws` package are deleted, so
  * this helper now mirrors `src/client.ts`'s `connectTcp` exactly: the Node
  * TCP transport from `@nats-io/transport-node` with the private dev CA
@@ -73,5 +73,3 @@ export async function makeSyntheticPublisher(args: {
     },
   };
 }
-
-// qa-developer: remove-dead-ws-localhost-nats-transport-bypass

@@ -61,8 +61,8 @@ let gatewayRuntimeInputsOverride: { argv: string[]; title: string } | null = nul
  * gateway daemon's title is the bare "openclaw" — the per-subcommand
  * `openclaw-${subcommand}` title scheme is honored for short-lived CLI
  * invocations but NOT for the long-lived gateway daemon. So the title gate
- * never matched the gateway and the pump stayed inert (root cause B, card
- * openclaw-wake-pump-never-arms-in-real-gateway). "openclaw" is also the
+ * never matched the gateway and the pump stayed inert (root cause B).
+ * "openclaw" is also the
  * title of other invocations, so matching it would fail the gate OPEN.
  *
  * Why the SUBCOMMAND POSITION, not a substring: matching `gateway`

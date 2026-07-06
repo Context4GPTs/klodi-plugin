@@ -659,7 +659,7 @@ mod tests {
         // Register-only tools never appear on the agent's MCP surface.
         assert!(!names.contains(&"klodi_register"));
         assert!(!names.contains(&"klodi_setup_repair"));
-        // Per card fold-uploads-into-listing-tools: the standalone
+        // The standalone
         // klodi_assets_upload_url tool is gone from every adapter's
         // MCP surface. klodi_list_create / klodi_list_update accept
         // local paths directly and handle the mint+PUT internally.
@@ -747,8 +747,7 @@ mod tests {
 ///
 /// **NEVER weaken these asserts to compile/pass**. The expert wires the
 /// guard chain into dispatch and converts the `McpError` arms to
-/// envelope `Ok(...)` so the asserts hold. See the card's Review round 1
-/// FAIL handoff for the prioritised fix list.
+/// envelope `Ok(...)` so the asserts hold.
 #[cfg(test)]
 mod dispatch_tests {
     use super::*;
@@ -877,7 +876,7 @@ mod dispatch_tests {
     /// produce this. Today the Rust dispatcher treats empty-string as
     /// "no string at all" — same `Err(McpError)`.
     ///
-    /// Acceptance criterion (card body):
+    /// Acceptance criterion:
     ///   > Given `klodi_channel_message` is invoked with an empty
     ///   > `content`, when the adapter responds, then the envelope is
     ///   > `{error: "invalid_request", message: "content must be a
