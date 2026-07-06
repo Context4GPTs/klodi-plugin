@@ -231,16 +231,16 @@ async fn persist_session(klodi_home: &Path, env: &SessionEnvelope) -> Result<()>
         .as_deref()
         .context("registration response missing nats_url")?;
 
-    // Per **D § D10** (P2-17 closure): refuse to persist a non-`tls://`
-    // nats_url on a non-localhost host. Delegates to the single shared
-    // client guard (accepts only `tls://` off localhost, rejecting
-    // `wss://` / `ws://` / `nats://`) so persist-time and connect-time
-    // policy can never drift. A compromised registration endpoint could
-    // otherwise inject `ws://attacker.com` and trick the next connect
-    // into an attacker-controlled session. The wrapping context keeps the
-    // "plaintext" wording — the common refused case is a plaintext url.
-    klodi_nats_client::config::assert_tls_or_localhost(nats_url)
-        .context("registration response had a plaintext non-localhost nats_url")?;
+    // Per epic `nats-tls-only-2026-07`: refuse to persist any non-`tls://`
+    // nats_url. Delegates to the single shared client guard (accepts only
+    // `tls://`, rejecting `wss://` / `ws://` / `nats://` on every host, with
+    // no localhost bypass) so persist-time and connect-time policy can never
+    // drift. A compromised registration endpoint could otherwise inject
+    // `ws://attacker.com` and trick the next connect into an
+    // attacker-controlled session. The wrapping context keeps the "plaintext"
+    // wording — the common refused case is a plaintext url.
+    klodi_nats_client::config::assert_tls(nats_url)
+        .context("registration response had a plaintext non-tls:// nats_url")?;
 
     tokio::fs::create_dir_all(klodi_home)
         .await

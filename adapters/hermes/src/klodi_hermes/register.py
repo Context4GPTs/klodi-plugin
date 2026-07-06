@@ -48,7 +48,7 @@ from typing import Any, Optional
 
 from klodi_nats_client import (
     KLODI_DEFAULT_API_URL,
-    assert_tls_or_localhost,
+    assert_tls,
     persist_nats_ca,
 )
 from klodi_nats_client.secret_write import klodi_secret_write
@@ -331,17 +331,16 @@ def _persist_credentials(result: dict[str, Any]) -> None:
         if not isinstance(value, str) or not value:
             raise OSError(f"session claim missing {field}")
 
-    # Per **D § D10** (P2-17 closure): refuse to persist a non-`tls://`
-    # `nats_url` on a non-localhost host. Delegates to the single shared
-    # client guard (`assert_tls_or_localhost`) so persist-time and
-    # connect-time policy can never drift — it accepts only `tls://` off
-    # localhost, rejecting `wss://` / `ws://` / `nats://`. A compromised
-    # registration endpoint could otherwise inject `ws://attacker.com`
-    # and trick the next connect into a plaintext, attacker-controlled
-    # session.
+    # Per epic `nats-tls-only-2026-07`: refuse to persist any non-`tls://`
+    # `nats_url`. Delegates to the single shared client guard (`assert_tls`)
+    # so persist-time and connect-time policy can never drift — it accepts
+    # only `tls://`, rejecting `wss://` / `ws://` / `nats://` on every host
+    # (there is no localhost bypass). A compromised registration endpoint
+    # could otherwise inject `ws://attacker.com` and trick the next connect
+    # into a plaintext, attacker-controlled session.
     assert isinstance(nats_url, str)  # narrowed above
     try:
-        assert_tls_or_localhost(nats_url)
+        assert_tls(nats_url)
     except ValueError as err:
         raise OSError(
             f"registration response had a plaintext nats_url ({nats_url}); "

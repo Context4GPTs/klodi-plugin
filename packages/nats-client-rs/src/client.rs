@@ -14,7 +14,7 @@
 //! Adapters never touch `async-nats` directly.
 
 use crate::backoff::default_reconnect_delay;
-use crate::config::{KlodiConfig, assert_tls_or_localhost, load_config, load_creds};
+use crate::config::{KlodiConfig, assert_tls, load_config, load_creds};
 use crate::tls::resolve_ca_file;
 use crate::consumers::{
     ActiveSubscription, ChannelHandler, NotificationHandler, subscribe_channels,
@@ -130,11 +130,11 @@ impl KlodiClient {
                 return Ok(());
             }
         }
-        // Per **D § D10**: refuse a non-`tls://` nats_url unless the host
-        // resolves to localhost. Closes the compound attack where a
-        // compromised registration endpoint injects a `ws://` / `wss://`
-        // URL. `tls://` is the sole accepted non-localhost transport.
-        assert_tls_or_localhost(&self.config.nats_url)?;
+        // Per epic `nats-tls-only-2026-07`: refuse any non-`tls://` nats_url.
+        // Closes the compound attack where a compromised registration
+        // endpoint injects a `ws://` / `wss://` / `nats://` URL. `tls://` is
+        // the sole accepted transport — no localhost bypass.
+        assert_tls(&self.config.nats_url)?;
         // P2-5: replace async-nats's default linear delay with the
         // shared exponential-backoff-with-jitter formula. The callback
         // is `Fn(usize) -> Duration` — translates `attempts` to a
@@ -155,29 +155,25 @@ impl KlodiClient {
             .name("klodi-rust-client")
             .max_reconnects(None)
             .reconnect_delay_callback(default_reconnect_delay);
-        // `tls://` (raw TCP+TLS, L4 proxy): trust the private CA and
-        // require TLS explicitly. `add_root_certificates` builds a
-        // standard *verifying* rustls config (cert + SNI-hostname checks
-        // ON) trusting only that CA — a missing / wrong CA or SAN
-        // mismatch fails closed at the handshake. Verification is never
-        // disabled. `wss://` keeps async-nats' default system TLS.
-        // `resolve_ca_file` returns the CA path AND the label naming its source.
-        // The source is threaded into `initial_connect` (not stashed on `&self`
-        // — the client is `Arc`/`Mutex`-shared, so a mutable source field would
-        // be a concurrency smell) so the loud-fail `CaTrust` names exactly the
-        // resolver's selection instead of re-deriving the precedence. `wss://`
-        // runs no resolve, so its Tls arm attributes to the system trust store.
-        let ca_source = if self.config.nats_url.starts_with("tls://") {
-            options = options.require_tls(true);
-            let resolved = resolve_ca_file(&self.klodi_home)?;
-            if let Some(ca_path) = resolved.path {
-                options = options.add_root_certificates(ca_path);
-            }
-            resolved.source
-        } else {
-            "system trust store".to_string()
-        };
-        let client = self.initial_connect(options, ca_source).await?;
+        // `tls://` (raw TCP+TLS, L4 proxy) is the sole transport now — the
+        // guard above guarantees it. Require TLS explicitly and trust the
+        // private CA: `add_root_certificates` builds a standard *verifying*
+        // rustls config (cert + SNI-hostname checks ON) trusting only that CA
+        // — a missing / wrong CA or SAN mismatch fails closed at the
+        // handshake. Verification is never disabled. When the resolver
+        // returns no path (system-store case) async-nats' default system TLS
+        // still verifies. `resolve_ca_file` returns the CA path AND the label
+        // naming its source; the source is threaded into `initial_connect`
+        // (not stashed on `&self` — the client is `Arc`/`Mutex`-shared, so a
+        // mutable source field would be a concurrency smell) so the loud-fail
+        // `CaTrust` names exactly the resolver's selection instead of
+        // re-deriving the precedence.
+        options = options.require_tls(true);
+        let resolved = resolve_ca_file(&self.klodi_home)?;
+        if let Some(ca_path) = resolved.path {
+            options = options.add_root_certificates(ca_path);
+        }
+        let client = self.initial_connect(options, resolved.source).await?;
         let ctx = jetstream::new(client.clone());
         *state = Some(Connected { client, ctx });
         Ok(())

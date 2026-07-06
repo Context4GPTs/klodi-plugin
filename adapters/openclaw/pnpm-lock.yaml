@@ -598,10 +598,6 @@ snapshots:
       '@nats-io/jetstream': 3.3.1
       '@nats-io/nats-core': 3.3.1
       '@nats-io/transport-node': 3.3.1
-      ws: 8.18.0
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
 
   '@klodi/tool-catalog@file:../../packages/tool-catalog':
     dependencies:

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -129,44 +128,29 @@ def load_creds(path: str | Path) -> Path:
     return creds_path
 
 
-def is_localhost(url: str) -> bool:
-    """Return True when `url`'s host is localhost / 127.0.0.1 / 0.0.0.0
-    / *.localhost. Per **D § D10**: plaintext ``ws://`` is only allowed
-    when the destination is unambiguously local."""
-    from urllib.parse import urlparse
+def assert_tls(nats_url: str) -> None:
+    """Refuse `nats_url` unless it uses the `tls://` transport.
 
-    try:
-        host = urlparse(url).hostname or ""
-    except ValueError:
-        return False
-    if host in ("localhost", "127.0.0.1", "0.0.0.0"):
-        return True
-    return host.endswith(".localhost")
-
-
-def assert_tls_or_localhost(nats_url: str) -> None:
-    """Refuse `nats_url` unless it is `tls://` or resolves to localhost.
-
-    Per **D § D10**: the smart-default TLS posture closes the compound
-    attack where a compromised registration endpoint injects a non-TLS
-    `nats_url` and the next connect goes to attacker-controlled
-    infrastructure. `tls://` (raw NATS-over-TLS, the L4 TCP-proxy path)
-    is the sole accepted non-localhost transport — it terminates TLS at
-    the NATS server with certificate + hostname verification ON (see
-    `klodi_nats_client.tls`). Every other scheme (`wss://` / `ws://` /
-    `nats://`) is only tolerated when the host resolves to localhost, so
-    dev and the integration harnesses (all on `ws://localhost`) keep
-    working. There is no env opt-out — a non-localhost host that needs a
-    different transport is a misconfiguration (terminate TLS at the edge).
+    Per epic ``nats-tls-only-2026-07``: ``tls://`` (raw NATS-over-TLS, the
+    L4 TCP-proxy path) is the **sole** accepted transport. It terminates
+    TLS at the NATS server with certificate + hostname verification ON
+    (see `klodi_nats_client.tls`). Every other scheme (`wss://` / `ws://`
+    / `nats://`) is rejected — there is no host-based localhost bypass and
+    no plaintext transport anywhere. The dev loopback is ``tls://localhost``
+    (dev CA), accepted by this same prefix check *because it is* ``tls://``,
+    not via a carve-out. This closes the compound attack where a
+    compromised registration endpoint injects a non-TLS `nats_url` and the
+    next connect goes to attacker-controlled infrastructure. There is no
+    env opt-out — a host that needs a different transport terminates TLS at
+    the edge and hands the client a `tls://` URL.
     """
     if nats_url.startswith("tls://"):
         return
-    if is_localhost(nats_url):
-        return
     raise ValueError(
         f"KlodiClient: nats_url must use tls:// (got {nats_url}). "
-        "ws:// / wss:// / nats:// are only accepted when the host resolves "
-        "to localhost. Re-register to obtain the current tls:// endpoint.",
+        "tls:// (raw NATS-over-TLS with certificate + hostname verification) "
+        "is the sole accepted transport. Re-register to obtain the current "
+        "tls:// endpoint.",
     )
 
 
@@ -176,8 +160,7 @@ __all__ = [
     "CredsNotFoundError",
     "KlodiConfig",
     "REQUIRED_FIELDS",
-    "assert_tls_or_localhost",
-    "is_localhost",
+    "assert_tls",
     "load_config",
     "load_creds",
 ]
