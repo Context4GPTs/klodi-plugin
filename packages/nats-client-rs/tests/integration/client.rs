@@ -54,12 +54,38 @@ fn service_creds_path() -> PathBuf {
     repo_root().join("infra/nats/dev-keys/service.creds")
 }
 
-fn nats_ws_url() -> String {
-    env::var("TEST_NATS_WS_URL").unwrap_or_else(|_| "ws://localhost:8080".to_owned())
+// Re-homed off ws://localhost onto the surviving tls:// transport
+// (remove-dead-ws-localhost-nats-transport-bypass). Requires a dev-CA
+// tls://localhost NATS + the CA PEM path in KLODI_NATS_CA_FILE.
+fn nats_tls_url() -> String {
+    env::var("TEST_NATS_TLS_URL").unwrap_or_else(|_| "tls://localhost:4222".to_owned())
+}
+
+fn ca_file() -> Option<PathBuf> {
+    match env::var("KLODI_NATS_CA_FILE") {
+        Ok(p) if !p.is_empty() => Some(PathBuf::from(p)),
+        _ => None,
+    }
+}
+
+/// Connect a service-creds publisher/admin connection over tls:// trusting
+/// the private dev CA (verification always ON) — mirrors the client's own
+/// `require_tls(true).add_root_certificates(...)`.
+async fn connect_service_tls() -> Result<async_nats::Client, async_nats::ConnectError> {
+    let mut options = ConnectOptions::with_credentials_file(service_creds_path())
+        .await
+        .expect("creds file")
+        .require_tls(true);
+    if let Some(ca) = ca_file() {
+        options = options.add_root_certificates(ca);
+    }
+    options.connect(nats_tls_url()).await
 }
 
 fn integration_enabled() -> bool {
-    env::var("INTEGRATION").as_deref() == Ok("1") && service_creds_path().is_file()
+    env::var("INTEGRATION").as_deref() == Ok("1")
+        && service_creds_path().is_file()
+        && ca_file().is_some()
 }
 
 struct TestUser {
@@ -95,7 +121,7 @@ async fn make_test_user() -> TestUser {
         "handle": handle,
         "user_id": user_id,
         "nkey_public": "test-placeholder-nkey",
-        "nats_url": nats_ws_url(),
+        "nats_url": nats_tls_url(),
     });
     fs::write(&config_path, serde_json::to_string(&config).unwrap())
         .await
@@ -110,13 +136,7 @@ async fn make_test_user() -> TestUser {
 }
 
 async fn delete_consumer(durable: &str) {
-    let creds = service_creds_path();
-    let nc = match ConnectOptions::with_credentials_file(&creds)
-        .await
-        .expect("creds file")
-        .connect(nats_ws_url())
-        .await
-    {
+    let nc = match connect_service_tls().await {
         Ok(c) => c,
         Err(_) => return,
     };
@@ -158,12 +178,7 @@ async fn publish_notification(
 }
 
 async fn make_publisher_ctx() -> (async_nats::Client, JetStreamContext) {
-    let nc = ConnectOptions::with_credentials_file(service_creds_path())
-        .await
-        .expect("creds file")
-        .connect(nats_ws_url())
-        .await
-        .expect("publisher connect");
+    let nc = connect_service_tls().await.expect("publisher connect");
     let ctx = jetstream::new(nc.clone());
     (nc, ctx)
 }
@@ -174,7 +189,7 @@ async fn cleanup_user(user: &TestUser) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn connects_via_websocket_with_nkey_credentials() {
+async fn connects_via_tls_with_nkey_credentials() {
     if !integration_enabled() {
         eprintln!("INTEGRATION=1 + dev keys required — skipping");
         return;

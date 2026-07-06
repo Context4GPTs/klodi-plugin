@@ -1,20 +1,26 @@
-//! RED/spec — the rust host persists a server-sent `tls://` nats_url.
+//! The rust host persists a server-sent `tls://` nats_url and refuses non-tls.
 //!
-//! Card: support-tls-nats-transport-with-private-ca-trust.
-//! Criteria (Acceptance → "Registration persists a server-sent tls:// endpoint"):
+//! Cards: support-tls-nats-transport-with-private-ca-trust (tls:// persist +
+//! non-localhost refusal, verify-only) AND
+//! remove-dead-ws-localhost-nats-transport-bypass (the NEW `ws://localhost`
+//! refusal — RED today, since localhost is still a bypass on current `main`).
+//!
+//! Criteria (Acceptance → D "each adapter persist path rejects a non-tls:// url"):
 //!
 //!   * marketplace returns `nats_url: tls://<svc>.proxy.rlwy.net:<port>` →
 //!     the exact url is persisted to `${klodi_home}/config.json`.
-//!   * marketplace returns a plaintext non-localhost url (nats:// / ws://) →
-//!     registration fails closed; nothing persisted.
+//!   * marketplace returns ANY non-`tls://` url — nats:// / ws:// non-localhost,
+//!     OR `ws://localhost` (the flip) — registration fails closed; nothing
+//!     persisted.
 //!
-//! `register.rs:236` delegates to the shared `assert_encrypted_or_localhost`
-//! guard (auto-fixed by the guard widening), unlike hermes/nanobot/openclaw
-//! which carry inline copies. This drives the full public `run_register`
-//! flow against a wiremock marketplace — mirrors the existing
-//! `run_register_*` tests, no private-item access.
+//! `register.rs` delegates to the shared guard (`assert_tls` after this card's
+//! rename) — all four adapters delegate now, none carry an inline scheme copy.
+//! This drives the full public `run_register` flow against a wiremock
+//! marketplace — mirrors the existing `run_register_*` tests, no private-item
+//! access.
 //!
-//! QA-owned (adversarial-testing). NEVER weaken.
+//! QA-owned (adversarial-testing). NEVER weaken. Do NOT re-add a localhost
+//! carve-out so the `ws://localhost` case passes.
 
 use klodi_rust_host::{run_register, RegisterArgs};
 use tempfile::tempdir;
@@ -118,6 +124,34 @@ async fn refuses_wss_non_localhost() {
     assert!(
         !dir.path().join("config.json").exists(),
         "nothing may persist when the wss:// url is refused"
+    );
+    assert!(!dir.path().join("nats.creds").exists());
+}
+
+/// [integration] THE FLIP (remove-dead-ws-localhost-nats-transport-bypass):
+/// a `/register` response carrying `ws://localhost` was accepted while
+/// localhost was a plaintext bypass. After the guard collapse the shared
+/// guard rejects it — the rust-host persist site fails closed, nothing
+/// persisted. RED today (ws://localhost is still accepted on `main`).
+#[tokio::test]
+async fn refuses_ws_localhost() {
+    let dir = tempdir().unwrap();
+    let server = MockServer::start().await;
+    mock_completed(&server, "ws://localhost:8080").await;
+
+    let err = run_register(RegisterArgs {
+        api_url: server.uri(),
+        klodi_home: dir.path().to_path_buf(),
+        user_agent: "klodi-test/0".into(),
+        binary_name: "klodi-test".into(),
+        force_register: false,
+    })
+    .await
+    .expect_err("ws://localhost must fail closed after the localhost bypass is removed");
+    let _ = err;
+    assert!(
+        !dir.path().join("config.json").exists(),
+        "nothing may persist when the ws://localhost url is refused"
     );
     assert!(!dir.path().join("nats.creds").exists());
 }

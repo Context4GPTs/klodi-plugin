@@ -34,7 +34,12 @@ _DEV_KEYS_DIR = _REPO_ROOT / "infra" / "nats" / "dev-keys"
 _SERVICE_CREDS_PATH = _DEV_KEYS_DIR / "service.creds"
 
 INTEGRATION = os.environ.get("INTEGRATION") == "1"
-NATS_WS_URL = os.environ.get("TEST_NATS_WS_URL", "ws://localhost:8080")
+# Re-homed off ws://localhost onto the surviving tls:// transport
+# (remove-dead-ws-localhost-nats-transport-bypass). Requires a dev-CA
+# tls://localhost NATS + the CA PEM path in KLODI_NATS_CA_FILE (the same env
+# the KlodiClient resolves its CA from).
+NATS_TLS_URL = os.environ.get("TEST_NATS_TLS_URL", "tls://localhost:4222")
+CA_FILE = os.environ.get("KLODI_NATS_CA_FILE", "")
 SERVICE_CREDS_PATH: str = str(_SERVICE_CREDS_PATH)
 
 
@@ -49,11 +54,12 @@ def pytest_collection_modifyitems(config, items):  # noqa: ARG001
     scope the skip to items under this directory — leaves the unit
     suite untouched.
     """
-    if INTEGRATION and _SERVICE_CREDS_PATH.is_file():
+    if INTEGRATION and _SERVICE_CREDS_PATH.is_file() and CA_FILE:
         return
     reason = (
-        "INTEGRATION=1 and infra/nats/dev-keys/service.creds required"
-        " — run `pnpm setup:dev` first"
+        "INTEGRATION=1, infra/nats/dev-keys/service.creds, and a dev-CA"
+        " tls://localhost NATS (KLODI_NATS_CA_FILE) required — run"
+        " `pnpm setup:dev` first"
     )
     skip = pytest.mark.skip(reason=reason)
     integration_dir = str(_HERE)

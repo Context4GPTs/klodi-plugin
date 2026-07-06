@@ -1,19 +1,23 @@
 /**
- * RED [unit] — a stale persisted `wss://` nats_url is rejected at
+ * RED [unit] — a stale persisted non-`tls://` nats_url is rejected at
  * `connect()` BEFORE any transport dispatch (ts client).
  *
- * Card: collapse-nats-transport-guard-to-tls-only.
+ * Cards: collapse-nats-transport-guard-to-tls-only (the `wss://`-non-localhost
+ * case, verify-only) AND remove-dead-ws-localhost-nats-transport-bypass (the
+ * NEW `ws://localhost` / `wss://localhost` cases — RED today, since localhost
+ * is still a bypass on current `main`).
  *
- * Scenario: `config.json` still carries a `wss://<non-localhost>` nats_url
- * (persisted before the cutover), the host is upgraded to the tls-only
- * client without re-registering. `doConnect` runs `assertTlsOrLocalhost`
- * before the transport branch, so the stale url must throw synchronously
- * with NO `wsconnect` and NO node-TCP `connect` attempt (both mocked;
- * assert neither fired) — no hang against a dead wss:// endpoint.
+ * Scenario: `config.json` still carries a non-`tls://` nats_url — either a
+ * `wss://<non-localhost>` (persisted before the cutover) or a stale
+ * `ws://localhost` / `wss://localhost` (persisted while localhost was a
+ * plaintext bypass, before this card removed it). The host is upgraded to the
+ * guard-collapsed client without re-registering. `doConnect` runs the shared
+ * guard before the transport branch, so the stale url must throw synchronously
+ * with NO `wsconnect` and NO node-TCP `connect` attempt (both mocked; assert
+ * neither fired) — no hang against a dead ws:// / wss:// endpoint.
  *
- * Mirrors the mocking seam of scheme-dispatch.test.ts.
- *
- * QA-owned (adversarial-testing). NEVER weaken.
+ * QA-owned (adversarial-testing). NEVER weaken. Do NOT re-widen the guard to
+ * accept `ws://localhost` so the localhost cases pass — the bypass is deleted.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -76,12 +80,21 @@ afterEach(() => {
   if (home) rmSync(home, { recursive: true, force: true });
 });
 
-describe("connect() rejects a stale persisted wss:// before transport dispatch", () => {
-  it("throws and dispatches neither transport (no wsconnect, no node-TCP, no hang)", async () => {
-    const client = makeClient("wss://klodi-net.4gpts.com");
-    await expect(client.connect()).rejects.toThrow();
-    expect(wsMock).not.toHaveBeenCalled();
-    expect(tcpMock).not.toHaveBeenCalled();
-    expect(client.isConnected()).toBe(false);
-  });
+describe("connect() rejects a stale persisted non-tls:// url before transport dispatch", () => {
+  // `wss://<non-localhost>` was already rejected by the collapse card
+  // (verify-only); the localhost forms are the flip this card introduces.
+  it.each([
+    "wss://klodi-net.4gpts.com",
+    "ws://localhost:8080",
+    "wss://localhost",
+  ])(
+    "throws on %s and dispatches neither transport (no wsconnect, no node-TCP, no hang)",
+    async (staleUrl) => {
+      const client = makeClient(staleUrl);
+      await expect(client.connect()).rejects.toThrow();
+      expect(wsMock).not.toHaveBeenCalled();
+      expect(tcpMock).not.toHaveBeenCalled();
+      expect(client.isConnected()).toBe(false);
+    },
+  );
 });

@@ -28,9 +28,9 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "no
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { credsAuthenticator, wsconnect } from "@nats-io/nats-core";
+import { credsAuthenticator } from "@nats-io/nats-core";
+import { connect as nodeConnect } from "@nats-io/transport-node";
 import { jetstreamManager } from "@nats-io/jetstream";
-import { WebSocket as NodeWebSocket } from "ws";
 
 import { KlodiClient } from "../../src/client.js";
 import { makeSyntheticPublisher, type SyntheticPublisher } from "./synthetic-publisher.js";
@@ -40,7 +40,12 @@ import { makeSyntheticPublisher, type SyntheticPublisher } from "./synthetic-pub
 // NATS won't exist, and these tests can't run.
 const INTEGRATION = process.env["INTEGRATION"] === "1";
 
-const NATS_WS_URL = process.env["TEST_NATS_WS_URL"] ?? "ws://localhost:8080";
+// Re-homed off ws://localhost onto the surviving tls:// transport
+// (remove-dead-ws-localhost-nats-transport-bypass). Requires a dev-CA
+// tls://localhost NATS + the CA PEM path in KLODI_NATS_CA_FILE (same env
+// the KlodiClient resolves its CA from).
+const NATS_TLS_URL = process.env["TEST_NATS_TLS_URL"] ?? "tls://localhost:4222";
+const CA_FILE = process.env["KLODI_NATS_CA_FILE"] ?? "";
 
 // Repo-rooted dev keys path. Test runs from the package dir, so walk up.
 // (__dirname is set by tsc/vitest at runtime.)
@@ -55,7 +60,7 @@ function devKeysPresent(): boolean {
   return existsSync(SERVICE_CREDS_PATH);
 }
 
-const SHOULD_RUN = INTEGRATION && devKeysPresent();
+const SHOULD_RUN = INTEGRATION && devKeysPresent() && CA_FILE !== "";
 
 // Each test owns a unique user_id; the KlodiClient's per-user durable
 // consumer keys off it, giving us per-test isolation on the shared
@@ -94,7 +99,7 @@ function makeTestUser(): TestUser {
     handle,
     user_id: userId,
     nkey_public: "test-placeholder-nkey",
-    nats_url: NATS_WS_URL,
+    nats_url: NATS_TLS_URL,
   }));
 
   return {
@@ -109,14 +114,12 @@ function makeTestUser(): TestUser {
 
 async function deleteConsumer(durableName: string): Promise<void> {
   const creds = readFileSync(SERVICE_CREDS_PATH);
-  // nats-core v3 ships only WS in core; mirror src/client.ts wsconnect path.
-  const nc = await wsconnect({
-    servers: NATS_WS_URL,
+  // Mirror src/client.ts connectTcp: the Node TCP transport over tls://,
+  // trusting the private dev CA (verification always ON).
+  const nc = await nodeConnect({
+    servers: NATS_TLS_URL,
     authenticator: credsAuthenticator(creds),
-    wsFactory: (url: string) => Promise.resolve({
-      socket: new NodeWebSocket(url) as unknown as WebSocket,
-      encrypted: url.startsWith("wss://"),
-    }),
+    tls: CA_FILE !== "" ? { ca: readFileSync(CA_FILE) } : undefined,
   });
   try {
     const jsm = await jetstreamManager(nc);
@@ -135,8 +138,9 @@ describe.skipIf(!SHOULD_RUN)("KlodiClient integration (D.1.ts)", () => {
 
   beforeAll(async () => {
     publisher = await makeSyntheticPublisher({
-      natsUrl: NATS_WS_URL,
+      natsUrl: NATS_TLS_URL,
       credsPath: SERVICE_CREDS_PATH,
+      caFile: CA_FILE,
     });
   }, 30_000);
 
@@ -162,7 +166,7 @@ describe.skipIf(!SHOULD_RUN)("KlodiClient integration (D.1.ts)", () => {
     }
   });
 
-  it("connects via WebSocket + NKey credentials", async () => {
+  it("connects via tls:// + NKey credentials", async () => {
     client = new KlodiClient({
       configPath: user.configPath,
       credsPath: user.credsPath,

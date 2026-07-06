@@ -1,24 +1,27 @@
 /**
  * Synthetic publisher helper — Decision 5, D.1.ts.
  *
- * Connects to NATS over WebSocket using the service-account creds
- * (broad publish allow), publishes a fully-formed NotificationEvent or
- * ChannelMessageEvent on a per-test subject, returns the JetStream ack.
+ * Re-homed off `ws://localhost` onto the surviving `tls://` raw-TCP
+ * transport (card: remove-dead-ws-localhost-nats-transport-bypass). The
+ * `ws://localhost` WebSocket transport + the `ws` package are deleted, so
+ * this helper now mirrors `src/client.ts`'s `connectTcp` exactly: the Node
+ * TCP transport from `@nats-io/transport-node` with the private dev CA
+ * trusted (cert + hostname verification ON — `rejectUnauthorized` never
+ * disabled).
  *
- * The KlodiClient under test connects via WebSocket on the user-scoped
- * creds. Keeping the publisher on a separate connection / cred set
- * avoids mixing send and receive identity, and matches the production
- * topology (marketplace publishes via service identity → P2P_*).
+ * Connects to NATS over `tls://` using the service-account creds (broad
+ * publish allow), publishes a fully-formed NotificationEvent on a per-test
+ * subject, returns the JetStream ack. The KlodiClient under test connects
+ * over the same `tls://` transport on the user-scoped creds — keeping the
+ * publisher on a separate connection / cred set avoids mixing send and
+ * receive identity, and matches the production topology (marketplace
+ * publishes via service identity → P2P_*).
  */
-import {
-  credsAuthenticator,
-  wsconnect,
-  type NatsConnection,
-} from "@nats-io/nats-core";
+import { credsAuthenticator, type NatsConnection } from "@nats-io/nats-core";
+import { connect as nodeConnect } from "@nats-io/transport-node";
 import { jetstream } from "@nats-io/jetstream";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { WebSocket as NodeWebSocket } from "ws";
 
 const encoder = new TextEncoder();
 
@@ -32,21 +35,21 @@ export interface SyntheticPublisher {
 }
 
 export async function makeSyntheticPublisher(args: {
+  /** A `tls://` URL — the surviving transport (dev-CA loopback in tests). */
   natsUrl: string;
   credsPath: string;
+  /** PEM path for the private dev CA that signs the local tls:// nats.
+   *  Defaults to `KLODI_NATS_CA_FILE` — the same env the client resolves. */
+  caFile?: string;
 }): Promise<SyntheticPublisher> {
   const creds = readFileSync(args.credsPath);
-  // Match production transport: nats-core v3 ships only WS in the core
-  // package; the Node TCP transport lives in a separate package we don't
-  // depend on. Re-using `wsconnect` + ws-package wsFactory mirrors
-  // src/client.ts so tests exercise the same surface as production.
-  const nc: NatsConnection = await wsconnect({
+  const caPath = args.caFile ?? process.env["KLODI_NATS_CA_FILE"] ?? "";
+  // Mirror src/client.ts connectTcp: raw TCP + TLS trusting only the private
+  // dev CA, verification always ON. No `ws`/`wsconnect`/`wsFactory` anywhere.
+  const nc: NatsConnection = await nodeConnect({
     servers: args.natsUrl,
     authenticator: credsAuthenticator(creds),
-    wsFactory: (url: string) => Promise.resolve({
-      socket: new NodeWebSocket(url) as unknown as WebSocket,
-      encrypted: url.startsWith("wss://"),
-    }),
+    tls: caPath !== "" ? { ca: readFileSync(caPath) } : undefined,
   });
   const js = jetstream(nc);
 
@@ -71,4 +74,4 @@ export async function makeSyntheticPublisher(args: {
   };
 }
 
-// qa-developer: 0012-gap-fixes-decision-13
+// qa-developer: remove-dead-ws-localhost-nats-transport-bypass

@@ -29,9 +29,9 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { credsAuthenticator, wsconnect } from "@nats-io/nats-core";
+import { credsAuthenticator } from "@nats-io/nats-core";
+import { connect as nodeConnect } from "@nats-io/transport-node";
 import { jetstreamManager } from "@nats-io/jetstream";
-import { WebSocket as NodeWebSocket } from "ws";
 
 import { KlodiClient } from "../../src/client.js";
 import {
@@ -40,24 +40,26 @@ import {
 } from "./synthetic-publisher.js";
 
 const INTEGRATION = process.env["INTEGRATION"] === "1";
-const NATS_WS_URL = process.env["TEST_NATS_WS_URL"] ?? "ws://localhost:8080";
+// Re-homed off ws://localhost onto the surviving tls:// transport
+// (remove-dead-ws-localhost-nats-transport-bypass). Requires a dev-CA
+// tls://localhost NATS + the CA PEM path in KLODI_NATS_CA_FILE.
+const NATS_TLS_URL = process.env["TEST_NATS_TLS_URL"] ?? "tls://localhost:4222";
+const CA_FILE = process.env["KLODI_NATS_CA_FILE"] ?? "";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..", "..", "..", "..");
 const SERVICE_CREDS_PATH = join(REPO_ROOT, "infra", "nats", "dev-keys", "service.creds");
 
-const SHOULD_RUN = INTEGRATION && existsSync(SERVICE_CREDS_PATH);
+const SHOULD_RUN = INTEGRATION && existsSync(SERVICE_CREDS_PATH) && CA_FILE !== "";
 
 async function deleteConsumer(durableName: string): Promise<void> {
   const creds = readFileSync(SERVICE_CREDS_PATH);
-  // nats-core v3 ships only WS in core; mirror src/client.ts wsconnect path.
-  const nc = await wsconnect({
-    servers: NATS_WS_URL,
+  // Mirror src/client.ts connectTcp: the Node TCP transport over tls://,
+  // trusting the private dev CA (verification always ON).
+  const nc = await nodeConnect({
+    servers: NATS_TLS_URL,
     authenticator: credsAuthenticator(creds),
-    wsFactory: (url: string) => Promise.resolve({
-      socket: new NodeWebSocket(url) as unknown as WebSocket,
-      encrypted: url.startsWith("wss://"),
-    }),
+    tls: CA_FILE !== "" ? { ca: readFileSync(CA_FILE) } : undefined,
   });
   try {
     const jsm = await jetstreamManager(nc);
@@ -81,8 +83,9 @@ describe.skipIf(!SHOULD_RUN)("KlodiClient reconnect + drain (D.8)", () => {
 
   beforeAll(async () => {
     publisher = await makeSyntheticPublisher({
-      natsUrl: NATS_WS_URL,
+      natsUrl: NATS_TLS_URL,
       credsPath: SERVICE_CREDS_PATH,
+      caFile: CA_FILE,
     });
   }, 30_000);
 
@@ -101,7 +104,7 @@ describe.skipIf(!SHOULD_RUN)("KlodiClient reconnect + drain (D.8)", () => {
       handle: "d8_user",
       user_id: userId,
       nkey_public: "test-placeholder",
-      nats_url: NATS_WS_URL,
+      nats_url: NATS_TLS_URL,
     }));
   });
 
