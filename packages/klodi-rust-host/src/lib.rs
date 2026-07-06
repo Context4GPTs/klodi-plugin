@@ -96,7 +96,7 @@ pub use mcp::{McpConfig, run_mcp_server};
 
 #[cfg(feature = "zeroclaw")]
 pub use operator_session::{
-    DispatchError, InboundEvent, OperatorInbox, OperatorSessionController,
+    DispatchError, InboundEvent, OperatorInbox, OperatorSessionController, WakeOnlyController,
 };
 #[cfg(feature = "zeroclaw")]
 pub use telegram::{

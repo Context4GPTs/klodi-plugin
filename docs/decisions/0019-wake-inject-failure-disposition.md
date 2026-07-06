@@ -2,8 +2,8 @@
 id: 0019-wake-inject-failure-disposition
 title: Wake-inject failure disposition by class — timeout is swallowed-and-ACKed; a deterministic nonzero exit is a loud correlated alarm, never NAK/redeliver/dead-letter
 tags: [wake, error-handling, observability, alarm, consumer, ack, adapters, parity, hermes, nats]
-commit: 709dd7c
-updated_at: 2026-07-02
+commit: 6f545f9
+updated_at: 2026-07-06
 ---
 
 # ADR-0019 — Wake-inject failure disposition by failure class
@@ -228,6 +228,33 @@ adapter that spawns a host CLI** (the cross-adapter audit is
 the propagation vehicle): validate the argv against the shipped binary's captured surface, never a
 literal that restates the author's belief — a stub literal *is* the contract with your own assumption,
 not with the tool.
+
+### Amendment (2026-07-06) — PR #57, zeroclaw dispatch-ACK quantified + second consumer
+
+The zeroclaw row of the cross-adapter table above says the daemon "ACKs at *dispatch*"
+and that "moving the ACK post-turn is the ruled-out anti-fix (breaks the daemon's <50ms
+ack contract)" — but never recorded *why* the <50ms contract exists, and it predated a
+second daemon path. Both are recorded here.
+
+1. **Why zeroclaw ACKs at dispatch, not on turn completion (quantified).** zeroclaw's
+   `/ws/chat` `done` frame arrives only *after* the full agent turn — up to
+   `DEFAULT_TURN_TIMEOUT` = 600s (`packages/klodi-rust-host/src/zeroclaw_chat.rs`).
+   ACKing on turn completion would routinely exceed the JetStream consumer's `ack_wait`,
+   so the wake would redeliver mid-turn → a redelivery storm and duplicate turns. Hence
+   the `InboxWakeHandler` ACKs at *dispatch* (<50ms) and the post-turn worker
+   (`log_chat_turn_error`) is the only failure surface. This is the axis on which
+   zeroclaw differs from moltis/ironclaw: their `HttpStructuredHandler` acks on *receipt*
+   (the agent runs in the background), so the 4xx-ACK/5xx-NAK disposition is decided
+   synchronously at receipt — there is no post-turn window to outrun `ack_wait`.
+
+2. **The dispatch-ACK seam is now shared by a second daemon path.** The daemon's
+   `--skip-telegram` wake-only mode (`run_wake_only` + `run_wake_worker` in
+   `operator_session.rs`, added in PR #57) reuses the same `InboxWakeHandler`:
+   dispatch-ACK, then an async worker dials `/ws/chat` and logs the reply (no operator
+   session, no Telegram). A direct consequence for tests — the per-user durable
+   `ack_floor` (advanced at dispatch) and the `/ws/chat` dial are **separate
+   observables**: a green ack-floor never proves a dial, so assert the dial
+   independently (WS handshake carries `session_id=klodi:<entity_id>`).
 
 ## Alternatives considered
 

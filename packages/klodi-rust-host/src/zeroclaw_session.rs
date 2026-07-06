@@ -1,10 +1,15 @@
 //! Persisted ZeroClaw operator-session id under
 //! `${KLODI_HOME}/zeroclaw.session`.
 //!
-//! `register` mints the session via WS at registration time and writes
-//! the id here; the daemon reads it on every wake so it can include
-//! `{operator_session_id}` in the wake prompt the spawned agent uses to
-//! decide who to write back to (`sessions_send`).
+//! `register` mints the session via WS at registration time and writes the
+//! id here. The daemon reads it once at boot and uses it ONLY to run
+//! operator-typed (Telegram) messages on the operator's own session — the
+//! `OperatorMessage` arm of `run_worker`. It is never embedded in a wake
+//! prompt (`format_prompt` renders only the wake kind/event_id/payload) and
+//! the wake path never touches it: wakes run on their own per-conversation
+//! `klodi:<entity_id>` session (ADR-0019). Under the daemon's `--skip-telegram`
+//! wake-only mode there is no operator-message source, so this id is unused
+//! and the file is optional.
 
 use anyhow::{Context, Result, bail};
 use klodi_nats_client::klodi_secret_write;

@@ -101,6 +101,59 @@ impl OperatorSessionController {
     }
 }
 
+/// Headless sibling of [`OperatorSessionController`] for the daemon's
+/// `--skip-telegram` wake-only mode. Same NATS→inbox→worker decoupling,
+/// but the drain worker runs each wake on its own per-conversation
+/// `klodi:<entity_id>` session (ADR-0019) and simply logs the reply —
+/// there is no operator session and no Telegram sink. Construct with
+/// [`spawn`](Self::spawn); the caller holds `join` in its `select!` so a
+/// worker panic exits the process for a supervisor restart.
+///
+/// It reuses the module-private [`InboundEvent`], [`OperatorInbox`],
+/// [`INBOX_CAPACITY`], [`format_prompt`], and [`log_chat_turn_error`]
+/// with zero visibility changes and zero edits to the operator bridge
+/// (BR-E: operator-bridge runtime stays byte-for-byte).
+pub struct WakeOnlyController {
+    pub inbox: OperatorInbox,
+    pub join: tokio::task::JoinHandle<()>,
+}
+
+impl WakeOnlyController {
+    pub fn spawn(chat: Arc<ChatClient>) -> Self {
+        let (tx, rx) = mpsc::channel::<InboundEvent>(INBOX_CAPACITY);
+        let inbox = OperatorInbox { tx };
+        Self {
+            inbox,
+            join: tokio::spawn(run_wake_worker(chat, rx)),
+        }
+    }
+}
+
+/// Drain the inbox and run one `/ws/chat` turn per wake on its derived
+/// per-entity session. No Telegram forwarding: the reply is logged, not
+/// surfaced (BR-C). ACK already happened at dispatch (BR-D), so a failed
+/// turn is classified + logged by [`log_chat_turn_error`] and the worker
+/// keeps draining. Stays exhaustive over [`InboundEvent`]: an
+/// `OperatorMessage` cannot arrive without a Telegram poller, but if one
+/// ever did it gets a defensive `warn!` + skip — never `unreachable!`.
+async fn run_wake_worker(chat: Arc<ChatClient>, mut rx: mpsc::Receiver<InboundEvent>) {
+    while let Some(event) = rx.recv().await {
+        let InboundEvent::Wake(wake) = &event else {
+            tracing::warn!("klodi_zeroclaw_wake_only_unexpected_operator_message");
+            continue;
+        };
+        let session_id = derive_wake_session(wake);
+        match chat.send_and_wait(&session_id, &format_prompt(&event)).await {
+            Ok(outcome) => tracing::info!(
+                turn_duration = ?outcome.turn_duration,
+                "klodi_zeroclaw_wake_only_turn_complete"
+            ),
+            Err(err) => log_chat_turn_error(&event, &err),
+        }
+    }
+    tracing::info!("klodi_zeroclaw_wake_only_inbox_drained");
+}
+
 struct WorkerCtx {
     chat_id: i64,
     chat: Arc<ChatClient>,
@@ -857,6 +910,445 @@ mod per_turn_session_tests {
             body["chat_id"].as_i64(),
             Some(99),
             "a per-entity wake's reply must still reach the single operator chat_id (BR-6)",
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wake-only controller — headless `--skip-telegram` daemon mode [integration].
+//
+// AC3 (dials /ws/chat on the derived per-entity session) + AC4 (no human
+// surface) + resilience (a deterministic gateway error does not stop the
+// drain — BR-D). The only observable contract is the session_id the worker
+// puts on the `/ws/chat` handshake; there is NO `TelegramClient` anywhere on
+// the wake-only path (`WakeOnlyController::spawn` takes only the `ChatClient`),
+// so AC4 ("zero sendMessage / getUpdates") is a compile-time guarantee — these
+// tests prove the dial happens on `klodi:<entity_id>` independently of any
+// ack-floor (BR-D), and that the worker keeps draining past a gateway error.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod wake_only_tests {
+    use super::*;
+
+    use crate::zeroclaw_chat::ChatClient;
+    use futures_util::{SinkExt, StreamExt};
+    use klodi_nats_client::NotificationEvent;
+    use std::sync::Mutex;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::handshake::server::{
+        Request as HsRequest, Response as HsResponse,
+    };
+
+    fn wake_offer(listing_id: &str, offer_id: &str, event_id: &str) -> WakeEvent {
+        let evt = NotificationEvent::OfferProposed {
+            event_id: event_id.into(),
+            offer_id: offer_id.into(),
+            listing_id: listing_id.into(),
+            buyer_handle: "buyer".into(),
+            amount: 1000,
+            terms: None,
+        };
+        WakeEvent::Notification {
+            kind: evt.kind().to_string(),
+            event_id: evt.event_id().to_string(),
+            user_id: "u1".into(),
+            payload: evt,
+        }
+    }
+
+    /// One happy `/ws/chat` turn on an already-accepted socket:
+    /// session_start → consume the client's `message` frame → `done(reply)`.
+    async fn happy_turn(
+        mut ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        reply: &str,
+    ) {
+        ws.send(Message::Text(
+            serde_json::json!({"type": "session_start", "resumed": false}).to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = ws.next().await;
+        ws.send(Message::Text(
+            serde_json::json!({"type": "done", "full_response": reply}).to_string(),
+        ))
+        .await
+        .unwrap();
+    }
+
+    /// Accept one connection, capture its handshake URI, run one happy turn.
+    async fn serve_one_uri_capturing(
+        port_tx: oneshot::Sender<u16>,
+        captured: Arc<Mutex<Option<String>>>,
+        reply: String,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        port_tx.send(listener.local_addr().unwrap().port()).unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let slot = captured.clone();
+        // tungstenite's accept_hdr callback must return `Result<_, ErrorResponse>`;
+        // the large Err type is the external API's, not ours.
+        #[allow(clippy::result_large_err)]
+        let callback = move |req: &HsRequest, response: HsResponse| {
+            *slot.lock().unwrap() = Some(req.uri().to_string());
+            Ok(response)
+        };
+        let ws = tokio_tungstenite::accept_hdr_async(stream, callback)
+            .await
+            .unwrap();
+        happy_turn(ws, &reply).await;
+    }
+
+    /// Accept two connections: conn 1 rejects with a deterministic gateway error
+    /// frame; conn 2 captures its handshake URI + runs a happy turn — so a
+    /// captured conn-2 URI proves the worker kept draining past the first error.
+    async fn serve_error_then_capture(
+        port_tx: oneshot::Sender<u16>,
+        captured: Arc<Mutex<Option<String>>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        port_tx.send(listener.local_addr().unwrap().port()).unwrap();
+
+        let (s1, _) = listener.accept().await.unwrap();
+        #[allow(clippy::result_large_err)]
+        let cb1 = |_req: &HsRequest, response: HsResponse| Ok(response);
+        let mut ws1 = tokio_tungstenite::accept_hdr_async(s1, cb1).await.unwrap();
+        ws1.send(Message::Text(
+            serde_json::json!({"type": "session_start", "resumed": true}).to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = ws1.next().await;
+        ws1.send(Message::Text(
+            serde_json::json!({
+                "type": "error", "code": "session_not_found", "message": "no such session"
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let (s2, _) = listener.accept().await.unwrap();
+        let slot = captured.clone();
+        #[allow(clippy::result_large_err)]
+        let cb2 = move |req: &HsRequest, response: HsResponse| {
+            *slot.lock().unwrap() = Some(req.uri().to_string());
+            Ok(response)
+        };
+        let ws2 = tokio_tungstenite::accept_hdr_async(s2, cb2).await.unwrap();
+        happy_turn(ws2, "second reply").await;
+    }
+
+    /// AC3 — a consumed wake dials `/ws/chat` on its derived per-entity session
+    /// `klodi:<listing_id>` (ADR-0019). This is the dial proof, separate from
+    /// any ack-floor (BR-D). No `TelegramClient` is wired at all → AC4 holds by
+    /// construction.
+    #[tokio::test]
+    async fn wake_only_dials_ws_on_per_entity_session() {
+        let captured = Arc::new(Mutex::new(None));
+        let (port_tx, port_rx) = oneshot::channel();
+        let server = tokio::spawn(serve_one_uri_capturing(
+            port_tx,
+            captured.clone(),
+            "agent reply".into(),
+        ));
+        let port = port_rx.await.unwrap();
+
+        let chat = Arc::new(ChatClient::new(format!("http://127.0.0.1:{port}"), "tok".into()));
+        let controller = WakeOnlyController::spawn(chat);
+        controller
+            .inbox
+            .dispatch(InboundEvent::Wake(Box::new(wake_offer("l1", "off-1", "e-offer-l1"))))
+            .unwrap();
+        // Close the inbox so the worker drains the one wake then exits.
+        let WakeOnlyController { inbox, join } = controller;
+        drop(inbox);
+        join.await.unwrap();
+        let _ = server.await;
+
+        let uri = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("WS handshake never reached the scripted gateway");
+        // offer.proposed on listing "l1" → key klodi:l1 → percent-encoded klodi%3Al1.
+        assert!(
+            uri.contains("klodi%3Al1"),
+            "wake-only must dial /ws/chat on the per-entity session klodi:l1 \
+             (ADR-0019), not a fixed/operator session; handshake URI: {uri}",
+        );
+    }
+
+    /// BR-D resilience — a deterministic `ChatError::Gateway` on the first wake
+    /// must not kill the worker: the second wake still reaches `/ws/chat`. The
+    /// ERROR-severity classification of that failure is covered by
+    /// `alarm_classification_red_tests` (shared `log_chat_turn_error`).
+    #[tokio::test]
+    async fn wake_only_keeps_draining_after_deterministic_gateway_error() {
+        let captured = Arc::new(Mutex::new(None));
+        let (port_tx, port_rx) = oneshot::channel();
+        let server = tokio::spawn(serve_error_then_capture(port_tx, captured.clone()));
+        let port = port_rx.await.unwrap();
+
+        let chat = Arc::new(ChatClient::new(format!("http://127.0.0.1:{port}"), "tok".into()));
+        let controller = WakeOnlyController::spawn(chat);
+        controller
+            .inbox
+            .dispatch(InboundEvent::Wake(Box::new(wake_offer("l1", "off-1", "e-offer-l1"))))
+            .unwrap();
+        controller
+            .inbox
+            .dispatch(InboundEvent::Wake(Box::new(wake_offer("l2", "off-2", "e-offer-l2"))))
+            .unwrap();
+        let WakeOnlyController { inbox, join } = controller;
+        drop(inbox);
+        join.await.unwrap();
+        let _ = server.await;
+
+        let uri = captured.lock().unwrap().clone().expect(
+            "the worker died on the first (gateway-error) wake and never dialled the \
+             second — wake-only must keep draining after a deterministic failure (BR-D)",
+        );
+        assert!(
+            uri.contains("klodi%3Al2"),
+            "the second wake (listing l2) must still reach /ws/chat after the first \
+             wake's gateway error; second handshake URI: {uri}",
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wake-only worker alarm + no-relay contracts — qa-developer (adversarial).
+//
+// `wake_only_tests` above proves the DIAL (AC3) + keeps-draining, but (a) leans
+// purely on the compile-time signature for AC4 and (b) delegates the
+// ERROR-severity of a gateway failure to `alarm_classification_red_tests` —
+// which drives the OPERATOR `run_worker`, not `run_wake_worker`. Two gaps:
+//   • that `run_wake_worker` ITSELF routes a deterministic `ChatError::Gateway`
+//     through the shared classifier as a DISTINCT ERROR alarm. Post-ACK is the
+//     only surface (BR-D), so a swallow-and-continue regression is an
+//     unrecoverable SILENT loss — and it would still pass the keeps-draining
+//     test (the second wake dials regardless of whether the first was logged).
+//   • that a NON-EMPTY reply is LOGGED, never relayed (AC4 behaviourally, not
+//     only "by construction").
+// Drives the module-private `run_wake_worker` directly (like
+// `alarm_classification_red_tests`) so the thread-local recorder captures the
+// worker's own events. These assertions ARE the spec — never weaken one.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod wake_only_alarm_tests {
+    use super::*;
+
+    use crate::zeroclaw_chat::ChatClient;
+    use futures_util::{SinkExt, StreamExt};
+    use klodi_nats_client::NotificationEvent;
+    use std::sync::Mutex;
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::handshake::server::{
+        Request as HsRequest, Response as HsResponse,
+    };
+    use tracing::field::{Field, Visit};
+    use tracing::{Dispatch, Event, Level, Metadata, Subscriber, span};
+
+    #[derive(Clone)]
+    struct RecordedEvent {
+        level: Level,
+        rendered: String,
+    }
+
+    #[derive(Default)]
+    struct RecorderInner {
+        events: Mutex<Vec<RecordedEvent>>,
+    }
+
+    // Independent of the pinned `alarm_classification_red_tests` recorder (which
+    // is private to its own mod). A local newtype over an `Arc` is required to
+    // impl the foreign `Subscriber` (orphan rule).
+    #[derive(Clone, Default)]
+    struct Recorder(Arc<RecorderInner>);
+
+    impl Recorder {
+        fn errors_containing(&self, needle: &str) -> usize {
+            self.0
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.level == Level::ERROR && e.rendered.contains(needle))
+                .count()
+        }
+        fn any_containing(&self, needle: &str) -> bool {
+            self.0
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.rendered.contains(needle))
+        }
+        fn dump(&self) -> String {
+            self.0
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|e| format!("[{}]{}", e.level, e.rendered))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        }
+    }
+
+    struct FieldCollector {
+        out: String,
+    }
+    impl Visit for FieldCollector {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            use std::fmt::Write;
+            let _ = write!(self.out, " {}={:?}", field.name(), value);
+        }
+    }
+    impl Subscriber for Recorder {
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            let l = *metadata.level();
+            l == Level::ERROR || l == Level::WARN || l == Level::INFO
+        }
+        fn new_span(&self, _s: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+        fn record(&self, _s: &span::Id, _v: &span::Record<'_>) {}
+        fn record_follows_from(&self, _s: &span::Id, _f: &span::Id) {}
+        fn event(&self, event: &Event<'_>) {
+            let level = *event.metadata().level();
+            let mut c = FieldCollector { out: String::new() };
+            event.record(&mut c);
+            self.0
+                .events
+                .lock()
+                .unwrap()
+                .push(RecordedEvent { level, rendered: c.out });
+        }
+        fn enter(&self, _s: &span::Id) {}
+        fn exit(&self, _s: &span::Id) {}
+    }
+
+    /// Accept one connection, run session_start → consume the client's `message`
+    /// frame → emit `final_frame` (a `done` or an `error`).
+    async fn serve_one_turn<F>(port_tx: oneshot::Sender<u16>, final_frame: F)
+    where
+        F: FnOnce() -> serde_json::Value + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        port_tx.send(listener.local_addr().unwrap().port()).unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        #[allow(clippy::result_large_err)]
+        let cb = |_req: &HsRequest, response: HsResponse| Ok(response);
+        let mut ws = tokio_tungstenite::accept_hdr_async(stream, cb).await.unwrap();
+        ws.send(Message::Text(
+            serde_json::json!({"type": "session_start", "resumed": false}).to_string(),
+        ))
+        .await
+        .unwrap();
+        let _ = ws.next().await;
+        ws.send(Message::Text(final_frame().to_string()))
+            .await
+            .unwrap();
+    }
+
+    fn wake(listing_id: &str, event_id: &str) -> WakeEvent {
+        let evt = NotificationEvent::OfferProposed {
+            event_id: event_id.into(),
+            offer_id: "off-1".into(),
+            listing_id: listing_id.into(),
+            buyer_handle: "buyer".into(),
+            amount: 1000,
+            terms: None,
+        };
+        WakeEvent::Notification {
+            kind: evt.kind().to_string(),
+            event_id: evt.event_id().to_string(),
+            user_id: "u1".into(),
+            payload: evt,
+        }
+    }
+
+    /// `run_wake_worker` must route a deterministic `ChatError::Gateway` (e.g. a
+    /// stale/GC'd session the gateway rejects) through the shared classifier as a
+    /// DISTINCT ERROR alarm naming the cause. Post-ACK is the only surface
+    /// (BR-D) — a swallow-and-continue would be an unrecoverable silent loss that
+    /// the keeps-draining test cannot catch.
+    #[tokio::test]
+    async fn wake_only_worker_error_alarms_on_deterministic_gateway_failure() {
+        let recorder = Recorder::default();
+        let dispatch = Dispatch::new(recorder.clone());
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        let (port_tx, port_rx) = oneshot::channel();
+        let server = tokio::spawn(serve_one_turn(port_tx, || {
+            serde_json::json!({
+                "type": "error", "code": "session_not_found", "message": "no such session"
+            })
+        }));
+        let port = port_rx.await.unwrap();
+        let chat = Arc::new(ChatClient::new(format!("http://127.0.0.1:{port}"), "tok".into()));
+
+        let (tx, rx) = mpsc::channel::<InboundEvent>(4);
+        tx.send(InboundEvent::Wake(Box::new(wake("l1", "e1")))).await.unwrap();
+        drop(tx);
+        run_wake_worker(chat, rx).await;
+        let _ = server.await;
+
+        assert!(
+            recorder.errors_containing("session_not_found") >= 1,
+            "a deterministic Gateway failure on the wake-only path must raise a \
+             DISTINCT ERROR alarm via the shared classifier (naming the cause); \
+             recorded: {}",
+            recorder.dump(),
+        );
+    }
+
+    /// AC4 (behavioural) — a NON-EMPTY reply is LOGGED, never relayed: the
+    /// wake-only worker emits its completion log and issues ZERO Telegram traffic
+    /// (no `sendMessage` / `getUpdates`). The reply flows (a `done` frame with
+    /// non-empty text) so this proves the absence is by design, not because the
+    /// turn produced nothing.
+    #[tokio::test]
+    async fn wake_only_worker_logs_nonempty_reply_and_never_touches_telegram() {
+        let recorder = Recorder::default();
+        let dispatch = Dispatch::new(recorder.clone());
+        let _guard = tracing::dispatcher::set_default(&dispatch);
+
+        let (port_tx, port_rx) = oneshot::channel();
+        let server = tokio::spawn(serve_one_turn(port_tx, || {
+            serde_json::json!({"type": "done", "full_response": "a non-empty agent reply"})
+        }));
+        let port = port_rx.await.unwrap();
+        let chat = Arc::new(ChatClient::new(format!("http://127.0.0.1:{port}"), "tok".into()));
+
+        let (tx, rx) = mpsc::channel::<InboundEvent>(4);
+        tx.send(InboundEvent::Wake(Box::new(wake("l1", "e1")))).await.unwrap();
+        drop(tx);
+        run_wake_worker(chat, rx).await;
+        let _ = server.await;
+
+        assert!(
+            recorder.any_containing("klodi_zeroclaw_wake_only_turn_complete"),
+            "the non-empty-reply turn must complete + be logged (not surfaced); \
+             recorded: {}",
+            recorder.dump(),
+        );
+        assert!(
+            !recorder.any_containing("telegram"),
+            "AC4/BR-C: wake-only must issue ZERO Telegram traffic (no sendMessage / \
+             getUpdates) even on a non-empty reply; recorded: {}",
+            recorder.dump(),
+        );
+        assert!(
+            !recorder.any_containing("reply_sent"),
+            "AC4/BR-C: a non-empty reply must be LOGGED, never forwarded to an \
+             operator surface in wake-only mode; recorded: {}",
+            recorder.dump(),
         );
     }
 }
