@@ -163,24 +163,27 @@ async fn pair_and_bootstrap(cli: &Cli, klodi_home: &std::path::Path) -> Result<(
     let ws_cfg = ZeroClawWsConfig::from_http_base(&cli.zeroclaw_http_base, bearer.clone())?;
     let hello = hello_line(&identity.handle);
 
-    if let Some(existing) = read_session_id(klodi_home)? {
-        match send_session_message(&ws_cfg, &existing, &hello).await {
-            Ok(_) => {
-                println!(
-                    "Resumed existing operator chat session ({}). \
-                     Hello line appended.",
-                    existing,
-                );
-                return Ok(());
-            }
-            Err(err) => {
-                tracing::warn!(
-                    cached_session = %existing,
-                    error = %format!("{err:#}"),
-                    "klodi_zeroclaw_register_resume_failed_falling_through_to_bootstrap"
-                );
+    match read_session_id(klodi_home)? {
+        Some(existing) => {
+            match send_session_message(&ws_cfg, &existing, &hello).await {
+                Ok(_) => {
+                    println!(
+                        "Resumed existing operator chat session ({}). \
+                         Hello line appended.",
+                        existing,
+                    );
+                    return Ok(());
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        cached_session = %existing,
+                        error = %format!("{err:#}"),
+                        "klodi_zeroclaw_register_resume_failed_falling_through_to_bootstrap"
+                    );
+                }
             }
         }
+        None => {}
     }
 
     let outcome = bootstrap_session_with_first_message(&ws_cfg, &hello)
