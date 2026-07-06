@@ -12,7 +12,8 @@
 //!    to Telegram.
 //!
 //! NATS ACKs at *dispatch time*, not on agent completion — preserves
-//! <50ms ack latency regardless of LLM duration. The Telegram poller
+//! <50ms ack latency regardless of LLM duration (see ADR-0019 for why the
+//! post-turn `done` frame forbids a turn-completion ACK). The Telegram poller
 //! persists the `last_acked_update_id` offset after every successful
 //! dispatch so a crash redelivers at most one update.
 
