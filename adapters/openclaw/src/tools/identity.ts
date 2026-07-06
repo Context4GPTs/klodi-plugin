@@ -35,7 +35,7 @@ import { hasCredentials, loadConfig } from "../lib/config.js";
 import {
   startRegisterPoll,
   stopRegisterPoll,
-  claimRegisterSession,
+  claimAndBringUp,
   type ClaimResult,
 } from "./register-poller.js";
 
@@ -119,7 +119,7 @@ function registerRegister(api: PluginAPI): void {
         );
       }
       stopRegisterPoll("tool_preempts");
-      const result = await claimRegisterSession(api, sessionId);
+      const result = await claimAndBringUp(api, sessionId);
       return toolResultFor(result);
     },
   });

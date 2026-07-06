@@ -7,28 +7,20 @@
  * persists credentials when applicable, and wakes the agent.
  *
  * The 10-minute ceiling matches apps/web SESSION_EXPIRY_MS.
+ *
+ * The PluginAPI-free claim + persist-to-disk path lives in lib/register-core.ts
+ * (the TS analogue of rust `run_register`, also driven by the headless
+ * `klodi-openclaw-register` bin). This module keeps ONLY the plugin runtime:
+ * the setInterval loop, the wake-agent handlers, and the thin `claimAndBringUp`
+ * wrapper that re-attaches the post-persist NATS/wake bring-up the core omits.
  */
 
 import type { PluginAPI } from "openclaw/plugin-sdk";
-import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
-import { assertTls, persistNatsCa } from "@klodi/nats-client";
 import {
   REGISTER_POLL_CEILING_SECONDS,
   REGISTER_POLL_INTERVAL_SECONDS,
 } from "@klodi/tool-catalog";
-import {
-  getApiUrl,
-  getBuyDir,
-  getCredsPath,
-  getKlodiHome,
-  getPoliciesDir,
-  getSellDir,
-} from "../lib/paths.js";
-import { writeConfig } from "../lib/config.js";
-import {
-  seedNegotiationStyleIfAbsent,
-  seedSecurityPolicyIfAbsent,
-} from "../lib/policy-seeding.js";
+import { claimRegisterSession, type CoreClaimResult } from "../lib/register-core.js";
 import { closeClient, connectClient } from "../lib/client.js";
 import { startWakePump, stopWakePump } from "../service/wake-pump.js";
 import { wakeAgent } from "../service/wake.js";
@@ -38,8 +30,14 @@ import { wakeAgent } from "../service/wake.js";
 // values into milliseconds.
 const POLL_INTERVAL_MS = REGISTER_POLL_INTERVAL_SECONDS * 1_000;
 const POLL_MAX_MS = REGISTER_POLL_CEILING_SECONDS * 1_000;
-const USER_AGENT = "klodi-plugin/0.2.0";
 
+/**
+ * The plugin-facing claim result. It is the core's result with the `registered`
+ * variant re-widened to carry the plugin-runtime NATS-connection facts
+ * (`nats_connected` / `nats_reason`) that {@link claimAndBringUp} attaches after
+ * the post-persist bring-up. All non-`registered` variants pass through the
+ * core union unchanged.
+ */
 export type ClaimResult =
   | {
       kind: "registered";
@@ -49,12 +47,7 @@ export type ClaimResult =
       nats_connected: boolean;
       nats_reason?: string;
     }
-  | { kind: "pending" }
-  | { kind: "expired" }
-  | { kind: "already_claimed" }
-  | { kind: "http_error"; status: number; statusText: string }
-  | { kind: "transport_error"; message: string }
-  | { kind: "invalid_response"; message: string };
+  | Exclude<CoreClaimResult, { kind: "registered" }>;
 
 interface ActivePoll {
   api: PluginAPI;
@@ -89,134 +82,29 @@ export function stopRegisterPoll(reason: string): void {
   api.logger.debug("register_poll_stopped", { session_id: sessionId, reason });
 }
 
-export async function claimRegisterSession(
+/**
+ * Plugin wrapper over the PluginAPI-free core. Claims + persists via
+ * {@link claimRegisterSession}, and on a fresh `registered` result performs the
+ * plugin post-persist NATS refresh — draining any stale pre-registration pump +
+ * connection, then eagerly (re)connecting and arming the wake pump against the
+ * freshly-written creds so inbound JetStream events flow without waiting for the
+ * next tool call.
+ *
+ * The `stop → close → connect → start` order is PINNED (hermes locks the
+ * identical order in test_register.py; openclaw parity): arming the pump before
+ * draining the stale one, or connecting before closing, would leak a consumer /
+ * dial on a half-torn client.
+ */
+export async function claimAndBringUp(
   api: PluginAPI,
   sessionId: string,
 ): Promise<ClaimResult> {
-  const url = `${getApiUrl()}/api/sessions/${sessionId}`;
-  let response: Response;
-  // Per **R § P2-19**: TS poller had no timeout, so a stalled API
-  // (DNS hang, SYN drop) blocked the poll-tick indefinitely. Mirror
-  // the 15s timeout used by Hermes and the Rust adapters.
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-  try {
-    response = await fetch(url, {
-      headers: { "user-agent": USER_AGENT },
-      signal: controller.signal,
-    });
-  } catch (err) {
-    return { kind: "transport_error", message: String(err) };
-  } finally {
-    clearTimeout(timeout);
-  }
-  if (!response.ok) {
-    const body = await response.json().catch(() => null) as
-      | { error?: unknown } | null;
-    if (body && body["error"] === "CREDENTIALS_ALREADY_CLAIMED") {
-      return { kind: "already_claimed" };
-    }
-    return {
-      kind: "http_error",
-      status: response.status, statusText: response.statusText,
-    };
-  }
-  const data = (await response.json()) as Record<string, unknown>;
-  if (data["status"] === "expired") return { kind: "expired" };
-  if (data["status"] !== "completed") return { kind: "pending" };
-  return persistCompleted(api, data);
-}
-
-async function persistCompleted(
-  api: PluginAPI,
-  data: Record<string, unknown>,
-): Promise<ClaimResult> {
-  const creds = data["nats_creds"];
-  const handle = data["handle"];
-  const userId = data["user_id"];
-  const nkeyPublic = data["nkey_public"];
-  const natsUrl = data["nats_url"];
-  if (
-    typeof creds !== "string"
-    || typeof handle !== "string"
-    || typeof userId !== "string"
-    || typeof nkeyPublic !== "string"
-    || typeof natsUrl !== "string"
-  ) {
-    return {
-      kind: "invalid_response",
-      message:
-        "Registration response missing required fields (nats_creds,"
-        + " handle, user_id, nkey_public, nats_url).",
-    };
-  }
-
-  // Refuse to persist any non-`tls://`
-  // `nats_url`. Delegates to the single shared client guard (accepts only
-  // `tls://`, rejecting `wss://` / `ws://` / `nats://` on every host, with
-  // no localhost bypass) so persist-time and connect-time policy can never
-  // drift. A compromised registration endpoint could otherwise inject
-  // `ws://attacker.com` and trick the next connect into a plaintext,
-  // attacker-controlled session.
-  try {
-    assertTls(natsUrl);
-  } catch {
-    return {
-      kind: "invalid_response",
-      message:
-        `Registration response had a plaintext nats_url (${natsUrl}). `
-        + "Refusing to persist. Verify your KLODI_API_URL or re-run"
-        + " registration against the canonical endpoint.",
-    };
-  }
-
-  const klodiHome = getKlodiHome();
-  mkdirSync(klodiHome, { recursive: true });
-  mkdirSync(getSellDir(), { recursive: true });
-  mkdirSync(getBuyDir(), { recursive: true });
-  mkdirSync(getPoliciesDir(), { recursive: true });
-
-  // P1-10 — `${klodi_home}` was inheriting the umask default (typically
-  // 0755). SECURITY.md documents the dir at 0700; force it. Best-effort
-  // on filesystems that don't support chmod (rare on macOS/Linux dev
-  // hosts; common on a sub-tree of a Docker volume).
-  try {
-    chmodSync(klodiHome, 0o700);
-  } catch (err) {
-    api.logger.warn?.("klodi_home_chmod_failed", {
-      path: klodiHome,
-      err: String(err),
-    });
-  }
-
-  const credsPath = getCredsPath();
-  writeFileSync(credsPath, creds, { encoding: "utf-8", mode: 0o600 });
-  chmodSync(credsPath, 0o600);
-
-  writeConfig({
-    handle, user_id: userId, nkey_public: nkeyPublic, nats_url: natsUrl,
+  const result = await claimRegisterSession(sessionId, {
+    info: (event, fields) => api.logger.info(event, fields),
+    warn: (event, fields) => api.logger.warn?.(event, fields),
   });
+  if (result.kind !== "registered") return result;
 
-  // Auto-trust the register-response CA: `nats_ca` is OPTIONAL — it is NOT in
-  // the required-field check above, so an absent value never fails
-  // registration. The shared helper skips a non-string / empty /
-  // non-PEM-shaped value and never throws; an omission on a later
-  // re-register does not delete the persisted file ("no update" ≠
-  // "revoke"). A fresh value overwrites → re-register is the CA-rotation
-  // path.
-  const natsCa = data["nats_ca"];
-  if (typeof natsCa === "string") {
-    persistNatsCa(klodiHome, natsCa);
-  }
-
-  const negotiationSeeded = seedNegotiationStyleIfAbsent();
-  const securitySeeded = seedSecurityPolicyIfAbsent();
-
-  // Drain any stale pre-registration pump + connection (idempotent),
-  // then eagerly start the wake pump against the freshly-written creds
-  // so inbound JetStream events flow without waiting for the next tool
-  // call and any transport failure surfaces here rather than at first
-  // whoami.
   await stopWakePump(api);
   await closeClient();
   let natsConnected = false;
@@ -230,13 +118,14 @@ async function persistCompleted(
   }
 
   api.logger.info("register_claim_succeeded", {
-    handle, user_id: userId, nats_connected: natsConnected,
+    handle: result.handle,
+    nats_connected: natsConnected,
   });
   return {
     kind: "registered",
-    handle,
-    negotiation_style_seeded: negotiationSeeded,
-    security_policy_seeded: securitySeeded,
+    handle: result.handle,
+    negotiation_style_seeded: result.negotiation_style_seeded,
+    security_policy_seeded: result.security_policy_seeded,
     nats_connected: natsConnected,
     nats_reason: natsReason,
   };
@@ -269,7 +158,7 @@ async function pollOnce(
     return;
   }
 
-  const result = await claimRegisterSession(api, sessionId);
+  const result = await claimAndBringUp(api, sessionId);
   // Re-check the active session AFTER the await — a concurrent
   // klodi_register or klodi_setup_repair may have rotated or stopped
   // the poll while the HTTP round-trip was in flight.
