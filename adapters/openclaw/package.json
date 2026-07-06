@@ -21,6 +21,9 @@
   ],
   "type": "module",
   "main": "./dist/index.js",
+  "bin": {
+    "klodi-openclaw-register": "./dist/bin/register.js"
+  },
   "files": [
     "dist",
     "klodi-skill",
