@@ -1,9 +1,9 @@
 ---
 id: 0015-gateway-runtime-load-vs-armed-axis
 title: Load-vs-armed axis — loaded ≠ armed; each adapter detects its wake-pump host by a positive, non-inherited signal (openclaw argv subcommand; hermes BridgeCtx capability marker)
-tags: [openclaw, hermes, wake-pump, gateway, runtime, detection, activation, axis, contracts, adapters, parity, ctx-marker]
+tags: [openclaw, hermes, wake-pump, gateway, runtime, detection, activation, axis, contracts, adapters, parity, ctx-marker, register, headless, structural]
 commit: d543efc
-updated_at: 2026-07-03
+updated_at: 2026-07-06
 ---
 
 # ADR-0015 — Load-vs-armed axis: loaded ≠ armed; detect the wake-pump host by a positive, non-inherited signal
@@ -166,6 +166,37 @@ context; if `argv` is rewritten too, fall back to a gateway-only env marker
   once armed the delivery path is unchanged and already unit-locked by
   `wake.test.ts`.
 
+## Third openclaw context — the headless register entry avoids arming *structurally*, not by detection
+
+PR #56 added a third openclaw context beyond the gateway daemon and the
+CLI-verify invocations: the headless `klodi-openclaw-register` bin
+(`adapters/openclaw/src/bin/register.ts`), the TS analogue of rust `run_register`
+(`packages/klodi-rust-host/src/register.rs`). It provisions creds/config/CA to
+disk at boot and exits — no agent in the loop.
+
+It does **not** rely on the `argv[2]` detection above to skip arming. The claim +
+persist-to-disk logic was extracted into a **PluginAPI-free core**
+(`adapters/openclaw/src/lib/register-core.ts`) that imports no plugin runtime — no
+`PluginAPI`, no NATS connect, no wake pump. The bin consumes only that core, so the
+fail-OPEN this ADR guards (a short-lived non-gateway process arming a JetStream
+consumer) is not merely detected-and-skipped but **unreachable**: there is no
+wake-pump import to fire. The plugin's post-persist NATS/wake bring-up is
+re-attached by the thin `claimAndBringUp` wrapper in `register-poller.ts` — the one
+caller that arms.
+
+The type system encodes the split: the core's `CoreClaimResult.registered` carries
+only disk facts, and the plugin-runtime fields (`nats_connected` / `nats_reason`)
+are re-attached by the poller wrapper via an `Exclude<…>` widening — they *cannot*
+originate in the core. So there are now **two strategies** for keeping a
+non-gateway context from arming, and a future contributor should pick the stronger
+one when the code path allows it: **detect-and-skip** (the gateway/CLI split above,
+for a single `register()` that runs in both) or **structural exclusion** (a
+PluginAPI-free core, for a fully separate entry point). A future headless register
+entry — e.g. wiring hermes's still-unfilled `klodi-hermes-register` — should mirror
+rust `run_register` and this core, not reach for runtime detection. Persist policy
+(bare `assertTls`, optional `nats_ca`) is owned by
+[[0022-tls-nats-transport-private-ca-trust]].
+
 ## Cross-adapter realization — hermes: the mirror-image failure, a ctx-marker discriminator
 
 PR #45 confirmed **loaded ≠ armed is a cross-adapter axis, not an openclaw quirk** —
@@ -257,6 +288,11 @@ follow-up.
   — runtime/CLI/override permutations + fail-OPEN/fail-CLOSED adversarial rows.
 - **Skip/halt contract lock (unit):** `adapters/openclaw/src/__tests__/service/wake-pump-retry.test.ts`
   — gateway-skip via the detection seam; asserts halt-on-null, no busy-retry.
+- **Structural-exclusion seam (inline WHY, PR #56):**
+  `adapters/openclaw/src/lib/register-core.ts` (PluginAPI-free core) +
+  `adapters/openclaw/src/bin/register.ts` (the headless bin that consumes it) —
+  the `ADR-0015`/`ADR-0022` rationale and the disk-facts-only `CoreClaimResult`
+  live at both sites.
 - **Root cause A (merged #17):** `openclaw.plugin.json:7-9`
   (`activation.onStartup`).
 - **The static axes this complements:** [[0014-tool-symmetry-axes]] (manifest /
