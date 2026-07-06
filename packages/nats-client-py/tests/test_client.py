@@ -358,7 +358,10 @@ def _make_client(tmp_path: Path) -> KlodiClient:
         "handle": "alice",
         "user_id": "00000000-0000-0000-0000-000000000001",
         "nkey_public": "UABCD",
-        "nats_url": "ws://127.0.0.1:1/ws",
+        # Inert here — these request-envelope tests inject `_nc` directly and
+        # never call connect(), so the guard never runs. Kept as a tls:// url
+        # so no stale ws:// literal survives the localhost-bypass removal.
+        "nats_url": "tls://127.0.0.1:4222",
     }))
     return KlodiClient(
         creds_path=str(creds_path),

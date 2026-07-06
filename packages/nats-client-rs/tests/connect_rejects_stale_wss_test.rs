@@ -1,12 +1,17 @@
-//! RED [unit] — a stale persisted `wss://` nats_url is rejected at
+//! RED [unit] — a stale persisted non-`tls://` nats_url is rejected at
 //! `KlodiClient::connect()` BEFORE any transport dispatch (rs client).
 //!
-//! Card: collapse-nats-transport-guard-to-tls-only.
+//! Cards: collapse-nats-transport-guard-to-tls-only (the `wss://`-non-localhost
+//! case, verify-only) AND remove-dead-ws-localhost-nats-transport-bypass (the
+//! NEW `ws://localhost` / `wss://localhost` cases — RED today, since localhost
+//! is still a bypass on current `main`).
 //!
-//! Scenario: `config.json` still carries a `wss://<non-localhost>` nats_url
-//! (persisted before the cutover), the host is upgraded to the tls-only
-//! client without re-registering. `connect()` runs the shared guard
-//! (`client.rs:137`) BEFORE building `ConnectOptions` or entering
+//! Scenario: `config.json` still carries a non-`tls://` nats_url — either a
+//! `wss://<non-localhost>` (persisted before the cutover) or a stale
+//! `ws://localhost` / `wss://localhost` (persisted while localhost was a
+//! plaintext bypass, before this card removed it). The host is upgraded to the
+//! guard-collapsed client without re-registering. `connect()` runs the shared
+//! guard (`client.rs:137`) BEFORE building `ConnectOptions` or entering
 //! `initial_connect`, so the stale url must fail closed synchronously with a
 //! structured `KlodiError::InvalidConfig` — no dial attempt.
 //!
@@ -88,4 +93,42 @@ async fn connect_rejects_stale_wss_before_transport_dispatch() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn connect_rejects_stale_ws_localhost_before_transport_dispatch() {
+    // THE FLIP (remove-dead-ws-localhost-nats-transport-bypass): a stale
+    // `ws://localhost` / `wss://localhost` was accepted at connect while
+    // localhost was a bypass. After the collapse the guard rejects it with
+    // `InvalidConfig` BEFORE any `ConnectOptions` / dial — no hang against a
+    // localhost endpoint that no longer speaks ws://.
+    for stale_url in ["ws://localhost:8080", "wss://localhost"] {
+        let dir = unique_dir("home");
+        let (creds_path, config_path) = write_session(&dir, stale_url);
+
+        let client = KlodiClient::new(&creds_path, &config_path)
+            .await
+            .expect("new() only loads config+creds; it does not run the guard");
+
+        // The timeout is the no-hang tripwire: a late guard would let the
+        // client dial the localhost endpoint (or spin the reconnect loop).
+        let outcome = tokio::time::timeout(Duration::from_secs(5), client.connect()).await;
+
+        let result = outcome.unwrap_or_else(|_| {
+            panic!("connect() must return promptly (guard before dispatch) for {stale_url}, not hang")
+        });
+        let err = result.expect_err(&format!(
+            "stale {stale_url} must be rejected by the collapsed guard"
+        ));
+        assert!(
+            matches!(err, KlodiError::InvalidConfig(_)),
+            "rejection must be structured InvalidConfig for {stale_url}, got: {err:?}"
+        );
+        assert!(
+            !client.is_connected().await,
+            "no half-open connection may remain after a rejected connect() for {stale_url}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import ssl
 import tempfile
 import uuid
 from collections.abc import AsyncIterator
@@ -27,7 +28,7 @@ from nats.aio.client import Client as NATSClient
 
 from klodi_nats_client import KlodiClient
 
-from .conftest import NATS_WS_URL, SERVICE_CREDS_PATH
+from .conftest import CA_FILE, NATS_TLS_URL, SERVICE_CREDS_PATH
 from .synthetic_publisher import (
     SyntheticPublisher,
     make_synthetic_publisher,
@@ -37,8 +38,9 @@ from .synthetic_publisher import (
 @pytest.fixture
 async def publisher() -> AsyncIterator[SyntheticPublisher]:
     pub = await make_synthetic_publisher(
-        nats_url=NATS_WS_URL,
+        nats_url=NATS_TLS_URL,
         creds_path=SERVICE_CREDS_PATH,
+        ca_file=CA_FILE,
     )
     try:
         yield pub
@@ -67,7 +69,7 @@ async def test_user() -> AsyncIterator[dict[str, str]]:
                 "handle": handle,
                 "user_id": user_id,
                 "nkey_public": "test-placeholder-nkey",
-                "nats_url": NATS_WS_URL,
+                "nats_url": NATS_TLS_URL,
             }
         ),
         encoding="utf-8",
@@ -88,12 +90,14 @@ async def test_user() -> AsyncIterator[dict[str, str]]:
 
 
 async def _delete_consumer(durable: str) -> None:
-    """Delete the user's notifications consumer via service creds."""
+    """Delete the user's notifications consumer via service creds (tls://)."""
+    ctx = ssl.create_default_context(cafile=CA_FILE) if CA_FILE else None
     nc = NATSClient()
     try:
         await nc.connect(
-            servers=NATS_WS_URL,
+            servers=NATS_TLS_URL,
             user_credentials=SERVICE_CREDS_PATH,
+            tls=ctx,
             max_reconnect_attempts=3,
             reconnect_time_wait=1,
             connect_timeout=10,
@@ -110,7 +114,7 @@ async def _delete_consumer(durable: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_connects_via_websocket_with_nkey_credentials(
+async def test_connects_via_tls_with_nkey_credentials(
     test_user: dict[str, str],
 ) -> None:
     client = KlodiClient(

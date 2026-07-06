@@ -24,8 +24,8 @@ pub struct KlodiConfig {
     pub user_id: String,
     /// Public NKey, sent in the `X-Nkey-Public` header.
     pub nkey_public: String,
-    /// `tls://…` (prod, the sole accepted non-localhost transport) or
-    /// `ws://localhost` (dev / loopback).
+    /// `tls://…` — the sole accepted transport (prod, or `tls://localhost`
+    /// with the dev CA for loopback).
     pub nats_url: String,
 }
 
@@ -101,61 +101,27 @@ pub fn load_creds(path: &Path) -> Result<String, KlodiError> {
     })
 }
 
-/// True when `url`'s host is localhost / 127.0.0.1 / 0.0.0.0 / *.localhost.
+/// Refuse `nats_url` unless it uses the `tls://` transport.
 ///
-/// Per **D § D10**: plaintext `ws://` is only allowed when the
-/// destination is unambiguously local. The check is dependency-free
-/// string parsing — adding `url` crate just for this is overkill.
-pub fn is_localhost(url: &str) -> bool {
-    let after_scheme = match url.find("://") {
-        Some(idx) => &url[idx + 3..],
-        None => return false,
-    };
-    let host_with_port = after_scheme.split('/').next().unwrap_or("");
-    // Strip auth (user:pass@) if present.
-    let host_with_port = host_with_port
-        .rsplit('@')
-        .next()
-        .unwrap_or(host_with_port);
-    // Strip port; defensive against bracketed IPv6 even though our URLs
-    // don't currently use it.
-    let host = if let Some(stripped) = host_with_port
-        .strip_prefix('[')
-        .and_then(|s| s.split(']').next())
-    {
-        stripped
-    } else {
-        host_with_port.split(':').next().unwrap_or("")
-    };
-    host == "localhost"
-        || host == "127.0.0.1"
-        || host == "0.0.0.0"
-        || host.ends_with(".localhost")
-}
-
-/// Refuse `nats_url` unless it is `tls://` or resolves to localhost.
-///
-/// Per **D § D10** (P2-17 / P2-18 closure): the smart-default TLS
-/// posture closes the compound attack where a compromised registration
-/// endpoint injects a non-TLS `nats_url` and the next connect goes to
-/// attacker-controlled infrastructure. `tls://` (raw NATS-over-TLS, the
-/// L4 TCP-proxy path) is the sole accepted non-localhost transport — it
-/// terminates TLS at the NATS server with certificate + hostname
-/// verification ON (see [`crate::tls`]). Every other scheme (`wss://` /
-/// `ws://` / `nats://`) is only tolerated against a localhost host, so
-/// dev and the integration harnesses (all on `ws://localhost`) keep
-/// working.
-pub fn assert_tls_or_localhost(nats_url: &str) -> Result<(), KlodiError> {
+/// Per epic `nats-tls-only-2026-07`: `tls://` (raw NATS-over-TLS, the L4
+/// TCP-proxy path) is the **sole** accepted transport. It terminates TLS
+/// at the NATS server with certificate + hostname verification ON (see
+/// [`crate::tls`]). Every other scheme (`wss://` / `ws://` / `nats://`) is
+/// rejected on every host — there is no localhost bypass and no plaintext
+/// transport anywhere. The dev loopback is `tls://localhost` (dev CA),
+/// accepted by this same prefix check because it *is* `tls://`. This closes
+/// the compound attack where a compromised registration endpoint injects a
+/// non-TLS `nats_url` and the next connect goes to attacker-controlled
+/// infrastructure.
+pub fn assert_tls(nats_url: &str) -> Result<(), KlodiError> {
     if nats_url.starts_with("tls://") {
-        return Ok(());
-    }
-    if is_localhost(nats_url) {
         return Ok(());
     }
     Err(KlodiError::InvalidConfig(format!(
         "KlodiClient: nats_url must use tls:// (got {nats_url}). \
-         ws:// / wss:// / nats:// are only accepted when the host resolves \
-         to localhost. Re-register to obtain the current tls:// endpoint.",
+         tls:// (raw NATS-over-TLS with certificate + hostname verification) \
+         is the sole accepted transport. Re-register to obtain the current \
+         tls:// endpoint.",
     )))
 }
 

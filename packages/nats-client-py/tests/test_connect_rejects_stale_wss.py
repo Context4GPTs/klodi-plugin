@@ -1,25 +1,32 @@
-"""RED [unit] — a stale persisted ``wss://`` nats_url is rejected at
+"""RED [unit] — a stale persisted non-``tls://`` nats_url is rejected at
 ``KlodiClient.connect()`` BEFORE any transport dispatch (py client).
 
-Card: collapse-nats-transport-guard-to-tls-only.
+Cards: collapse-nats-transport-guard-to-tls-only (the ``wss://``-non-localhost
+case, unchanged here — verify-only) AND
+remove-dead-ws-localhost-nats-transport-bypass (the NEW ``ws://localhost`` /
+``wss://localhost`` cases — RED today, since localhost is still a bypass on
+current ``main``).
 
-Scenario (product-owner "connect-time / stale persisted URL"): a host
-whose ``config.json`` still carries a ``wss://<non-localhost>`` nats_url
-(persisted before the cutover, upgraded to the tls-only client without
-re-registering). ``connect()`` runs the shared guard at
-``client.py`` before selecting a transport — so the stale url must raise
-**synchronously**, with NO ``nats.aio.client.Client.connect`` dispatch
+Scenario (product-owner "connect-time / stale persisted URL"): a host whose
+``config.json`` still carries a non-``tls://`` nats_url — either a
+``wss://<non-localhost>`` (persisted before the tls-only cutover) or a stale
+``ws://localhost`` / ``wss://localhost`` (persisted while localhost was a
+plaintext bypass, before this card removed it). The host is upgraded to the
+guard-collapsed client without re-registering. ``connect()`` runs the shared
+guard in ``client.py`` before selecting a transport — so the stale url must
+raise **synchronously**, with NO ``nats.aio.client.Client.connect`` dispatch
 and NO hang. nats-py selects the raw-TCP vs WebSocket transport *inside*
 ``Client.connect`` (and dials there), so asserting that method is never
 awaited proves neither transport fired.
 
 Guard-before-dispatch matters: were the guard to run late, a WebSocket
 connect would be attempted against an endpoint that (post server-side WS
-teardown) no longer speaks ``wss://`` — reproducing the silent-hang class
-the ADR-0022 loud-fail addendum fought. The ``asyncio.wait_for`` timeout
-is the no-hang tripwire.
+teardown) no longer speaks ``ws://`` / ``wss://`` — reproducing the
+silent-hang class the ADR-0022 loud-fail addendum fought. The
+``asyncio.wait_for`` timeout is the no-hang tripwire.
 
-QA-owned (adversarial-testing). NEVER weaken.
+QA-owned (adversarial-testing). NEVER weaken. Do NOT re-widen the guard to
+accept ``ws://localhost`` so the localhost cases pass — the bypass is deleted.
 """
 
 from __future__ import annotations
@@ -34,7 +41,14 @@ import pytest
 import klodi_nats_client.client as client_mod
 from klodi_nats_client.client import KlodiClient
 
-_STALE_WSS = "wss://klodi-net.4gpts.com"
+# The whole stale-non-tls family the collapsed guard must reject at connect.
+# ``wss://<non-localhost>`` was already rejected by the collapse card
+# (verify-only); the localhost forms are the flip this card introduces.
+_STALE_NON_TLS = [
+    "wss://klodi-net.4gpts.com",
+    "ws://localhost:8080",
+    "wss://localhost",
+]
 
 
 def _write_session(home: Path, nats_url: str) -> tuple[str, str]:
@@ -59,10 +73,12 @@ def _write_session(home: Path, nats_url: str) -> tuple[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_connect_rejects_stale_wss_before_transport_dispatch(
+@pytest.mark.parametrize("stale_url", _STALE_NON_TLS)
+async def test_connect_rejects_stale_non_tls_before_transport_dispatch(
     tmp_path: Path,
+    stale_url: str,
 ) -> None:
-    creds_path, config_path = _write_session(tmp_path, _STALE_WSS)
+    creds_path, config_path = _write_session(tmp_path, stale_url)
     client = KlodiClient(creds_path=creds_path, config_path=config_path)
 
     # Patch the single seam through which nats-py dispatches BOTH transports

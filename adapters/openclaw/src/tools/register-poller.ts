@@ -11,7 +11,7 @@
 
 import type { PluginAPI } from "openclaw/plugin-sdk";
 import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
-import { assertTlsOrLocalhost, persistNatsCa } from "@klodi/nats-client";
+import { assertTls, persistNatsCa } from "@klodi/nats-client";
 import {
   REGISTER_POLL_CEILING_SECONDS,
   REGISTER_POLL_INTERVAL_SECONDS,
@@ -151,15 +151,15 @@ async function persistCompleted(
     };
   }
 
-  // Per **D § D10** (P2-17 closure): refuse to persist a non-`tls://`
-  // `nats_url` on a non-localhost host. Delegates to the single shared
-  // client guard (accepts only `tls://` off localhost, rejecting
-  // `wss://` / `ws://` / `nats://`) so persist-time and connect-time
-  // policy can never drift. A compromised registration endpoint could
-  // otherwise inject `ws://attacker.com` and trick the next connect into
-  // a plaintext, attacker-controlled session.
+  // Per epic `nats-tls-only-2026-07`: refuse to persist any non-`tls://`
+  // `nats_url`. Delegates to the single shared client guard (accepts only
+  // `tls://`, rejecting `wss://` / `ws://` / `nats://` on every host, with
+  // no localhost bypass) so persist-time and connect-time policy can never
+  // drift. A compromised registration endpoint could otherwise inject
+  // `ws://attacker.com` and trick the next connect into a plaintext,
+  // attacker-controlled session.
   try {
-    assertTlsOrLocalhost(natsUrl);
+    assertTls(natsUrl);
   } catch {
     return {
       kind: "invalid_response",

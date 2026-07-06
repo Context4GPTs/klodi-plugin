@@ -3,9 +3,9 @@ id: 0022-tls-nats-transport-private-ca-trust
 title: Client `tls://` NATS transport with private-CA trust — verify-ON, private-CA-only, fail-closed
 tags: [nats, tls, transport, ca, trust, security, guard, vendoring, adapters, parity, railway, loud-fail, starttls, precedence, resolver]
 card: support-tls-nats-transport-with-private-ca-trust
-commit: ced6bc6
-updated_at: 2026-07-05
-updated_by_card: collapse-nats-transport-guard-to-tls-only
+commit: 3e25845
+updated_at: 2026-07-06
+updated_by_card: remove-dead-ws-localhost-nats-transport-bypass
 ---
 
 # ADR-0022 — Client `tls://` NATS transport with private-CA trust
@@ -130,6 +130,20 @@ Card `collapse-nats-transport-guard-to-tls-only` (epic `nats-tls-only-2026-07`, 
 
 **Cutover ordering (unchanged, still load-bearing).** This `tls://`-only client must land *before* the marketplace `/register` endpoint emits `tls://`, or a not-yet-updated host rejects the server's scheme at persist and fails closed. The infra half is confirmed ready (proxy + cert provisioned, marketplace carries `NATS_CA`); whether `/register` actually *emits* `tls://hayabusa…:32770` is marketplace-source and invisible from this repo — recorded as a **founder gate on the `0.3.11` release/publish**, never a Discovery assumption. `0.3.11` is a lockstep six-adapter bump; the internal `packages/*` stay pinned (vendored, never published).
 
+## Addendum (2026-07-06) — localhost bypass + `ws://localhost` transport deleted; guard is bare `tls://`, no host carve-out
+
+Card `remove-dead-ws-localhost-nats-transport-bypass` (epic `nats-tls-only-2026-07`, PR #54, release `0.3.12`) removes the last of the pre-`tls://` scaffolding. The guard's sole rule is now `nats_url.startswith("tls://")`: `is_localhost` / `isLocalhost` are deleted, and `assert_tls_or_localhost → assert_tls` (`assertTlsOrLocalhost → assertTls`) — the **third** rename in this control's lineage (`assert_wss_or_localhost → assert_encrypted_or_localhost → assert_tls_or_localhost → assert_tls`), each driven by the same lie-in-a-name discipline: once the localhost carve-out is gone, `_or_localhost` misnames the control. No re-export of the old symbol (CLAUDE.md no-backcompat). `tls://localhost` (dev CA) is still accepted — but *because it is* `tls://`, via the same one-line prefix test as every other endpoint, **not** via any host special-casing. Localhost is no longer a concept in the transport guard at all.
+
+**This deletes the three items the 2026-07-05 addendum recorded as retained** (its "Unchanged (still true)" bullets are superseded — do not read them as current):
+
+1. *"Localhost plaintext bypass retained"* → **deleted**. `ws://` / `wss://` / `nats://` now reject on **every** host, localhost included. No plaintext transport anywhere.
+2. *"`_ws_transport_patch.py` retained"* → **deleted** (the whole module + its connect-time `apply_patch` call). It was inert on `tls://` and load-bearing only on the now-gone `ws://localhost` path.
+3. *"the `wss://→wsconnect` dispatch branch is retained"* → **deleted**. TS drops `usesWebSocketTransport` + `connectWebSocket` (the `ws`-package `wsFactory` + `NodeWebSocket`), the `wsconnect` import, and the `ws` / `@types/ws` deps; `doConnect` unconditionally calls `connectTcp`. RS collapses the dead non-`tls://` else-branch in `client.rs::connect`. `connect()` routes every accepted URL to the single raw-TCP+TLS transport.
+
+The retention rationale from the 0.3.11 addendum — *"all three integration harnesses (on `ws://localhost`) keep working"* — no longer holds: the external stage harness moved to a dev-CA `tls://localhost` loopback (klodi-stage `move-e2e-harness-to-tls-only-nats`, the gate this card waited on), and the **in-repo** `nats-client-{py,ts,rs}` integration suites were re-homed off `ws://localhost:8080` onto `tls://localhost` + `KLODI_NATS_CA_FILE` in this same PR (they SKIP absent a live dev-CA bed; the e2e proof lives in klodi-stage's Docker suite — this card's tiers are `[unit, integration]`).
+
+**Landmine — the CA-resolver `None` / system-store branches are NOT dead code (verify-ON invariant unchanged).** A naive read after this collapse concludes: "the guard now guarantees `tls://`, so `build_tls_context`'s `None` return / `resolveTlsCa().ca === undefined` / `resolve_ca_file`'s `path: None` are unreachable — delete them." **Do not.** Those branches are the CA *resolver's* system-store fall-through (empty bundle, no `KLODI_NATS_CA_FILE`, no persisted CA), pinned unchanged by `test_nats_ca_resolve.py:261`, `nats-ca-resolve.test.ts:98`, and `ca_source_parity.rs` — the resolver is out of scope for the transport collapse. They are deliberately kept **fail-closed**, not fail-open: py `client.py` keeps an *unreachable* `if resolved is None: raise CaTrustError(...)` guard (refuse to dial rather than pass `tls=None`; `ty` also requires the narrowing); ts `connectTcp`'s `tls: ca !== undefined ? { ca } : undefined` fallback uses the system trust store which **still verifies** (`rejectUnauthorized` never touched); rs `resolve_ca_file(...)?` propagates and `require_tls(true)` is unconditional, system-store path still verifies. Inline WHY comments guard each site (`client.py:220`, `client.ts:457,478`, `client.rs:164`). This corrects the Discovery audit, which over-eagerly called these "now dead." Verify-ON / private-CA-only / no-disable-toggle is untouched; the three `verification_never_disabled` ratchets stay green. This card changed **no** `tls.*` / CA-resolver / verification code.
+
 ## Security implications
 
 - **Verification is a hard invariant, ratcheted by tests.** Each language carries a `verification_never_disabled` unit test that greps the source for the insecure flags and asserts their absence, plus that no env var toggles verify off. `KLODI_NATS_CA_FILE` is not a backdoor — it can only change *which* CA is trusted.
@@ -139,7 +153,7 @@ Card `collapse-nats-transport-guard-to-tls-only` (epic `nats-tls-only-2026-07`, 
 
 ## References
 
-- Guard (shared; `tls://`-only after the 2026-07-05 addendum): `packages/nats-client-py/src/klodi_nats_client/config.py:147` (`assert_tls_or_localhost`), `packages/nats-client-ts/src/client.ts:104` (`assertTlsOrLocalhost`), `packages/nats-client-rs/src/config.rs:148` (`assert_tls_or_localhost`)
+- Guard (shared; bare `tls://` prefix check, no localhost carve-out after the 2026-07-06 addendum): `packages/nats-client-py/src/klodi_nats_client/config.py:131` (`assert_tls`), `packages/nats-client-ts/src/client.ts:87` (`assertTls`), `packages/nats-client-rs/src/config.rs:116` (`assert_tls`)
 - Persist guards routed to the shared guard: `adapters/hermes/src/klodi_hermes/register.py`, `adapters/nanobot/nanobot_local_tools.py`, `adapters/openclaw/src/tools/register-poller.ts`, `packages/klodi-rust-host/src/register.rs`
 - CA trust (verify-ON, private-CA-only): `packages/nats-client-py/src/klodi_nats_client/tls.py`, `packages/nats-client-ts/src/tls.ts`, `packages/nats-client-rs/src/tls.rs`
 - Loud-fail structured type: `packages/nats-client-rs/src/error.rs:51` (`KlodiError::CaTrust { ca_source, message }`); `CaTrustError` in `tls.py` / `tls.ts`

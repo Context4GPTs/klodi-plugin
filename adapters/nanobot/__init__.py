@@ -15,7 +15,7 @@ via :mod:`nanobot_tools` for nanobot's tool-decorator integration.
 
 from __future__ import annotations
 
-__version__ = "0.3.11"
+__version__ = "0.3.12"
 
 
 __all__: list[str] = []

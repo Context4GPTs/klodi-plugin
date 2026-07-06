@@ -34,11 +34,10 @@ from nats.aio.client import Client as NATSClient
 from nats.errors import NoRespondersError
 from nats.js import JetStreamContext
 
-from klodi_nats_client._ws_transport_patch import apply_patch as _apply_ws_patch
 from klodi_nats_client.backoff import BackoffPolicy
 from klodi_nats_client.config import (
     KlodiConfig,
-    assert_tls_or_localhost,
+    assert_tls,
     load_config,
     load_creds,
 )
@@ -48,8 +47,6 @@ from klodi_nats_client.tls import (
 )
 from klodi_nats_client.consumers import (
     ActiveSubscription,
-    ChannelHandler,
-    NotificationHandler,
     subscribe_channels,
     subscribe_notifications,
 )
@@ -201,40 +198,33 @@ class KlodiClient:
             self._backoff.reset()
             return
 
-        # Repair upstream nats-py's WebSocketTransport before any
-        # connect attempts. Inert on a ``tls://`` (raw TCP) transport,
-        # but still load-bearing on every ``ws://`` connection: without
-        # it, long-lived consumers (the wake pump's two JetStream
-        # subscriptions) die on the first CLOSE / PING / ERROR frame the
-        # WS edge sends — see ``_ws_transport_patch`` for the defect.
-        _apply_ws_patch()
-
         config = self._load_config()
-        assert_tls_or_localhost(config.nats_url)
+        assert_tls(config.nats_url)
         creds = load_creds(self._creds_path)
 
-        # `tls://` → hand nats-py a verifying SSLContext that trusts the
-        # private CA (cert + hostname verification stays ON). `None` for
-        # `wss://` (nats-py's system-default TLS) and `ws://localhost`.
-        # `klodi_home` is the creds-path parent — the persisted register CA
-        # (`${KLODI_HOME}/nats-ca.pem`) lives in the same home as the creds,
-        # so no upward KLODI_HOME re-resolution happens here (layering).
+        # The guard above guarantees a `tls://` URL — hand nats-py a verifying
+        # SSLContext that trusts the private CA (cert + hostname verification
+        # stays ON). `klodi_home` is the creds-path parent: the persisted
+        # register CA (`${KLODI_HOME}/nats-ca.pem`) lives in the same home as
+        # the creds, so no upward KLODI_HOME re-resolution happens here
+        # (layering).
         klodi_home = Path(self._creds_path).parent
-        # `build_tls_context` returns `(ctx, source)` for `tls://` and `None`
-        # otherwise. The returned `source` is the single source of truth for the
-        # connect-failure attribution: the resolver already selected the CA
-        # source label at the branch that read it, so the loud-fail
-        # `CaTrustError` consumes it verbatim instead of independently
-        # re-deriving the env→persisted→bundled precedence. `None` for `wss://`
-        # renders "served NATS CA (None) …", which is acceptable because a bare
-        # `SSLCertVerificationError` on a `wss://` initial connect is
-        # aiohttp-wrapped and does not reach the classifier.
+        # `build_tls_context` returns `(ctx, source)` for `tls://` (it returns
+        # `None` only for non-`tls://` schemes, which `assert_tls` has already
+        # rejected). The returned `source` is the single source of truth for the
+        # connect-failure attribution: the resolver selected the CA-source label
+        # at the branch that read it, so the loud-fail `CaTrustError` consumes it
+        # verbatim instead of re-deriving the env→persisted→bundled precedence.
         resolved = build_tls_context(config.nats_url, klodi_home=klodi_home)
         if resolved is None:
-            tls_ctx = None
-            self._ca_source = None
-        else:
-            tls_ctx, self._ca_source = resolved
+            # Unreachable: `assert_tls` guarantees `tls://`, for which
+            # `build_tls_context` always returns a context. Fail closed rather
+            # than dial with an unverified/plaintext transport.
+            raise CaTrustError(
+                f"KlodiClient: no TLS context for {config.nats_url!r} despite "
+                "the tls:// guard — refusing to connect without verification.",
+            )
+        tls_ctx, self._ca_source = resolved
 
         nc = NATSClient()
         # Arm the terminal reclassification for the initial connect only.

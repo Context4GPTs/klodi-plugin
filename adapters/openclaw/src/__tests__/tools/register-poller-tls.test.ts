@@ -1,21 +1,27 @@
 /**
- * openclaw persists a server-sent `tls://` nats_url (register-poller.ts).
+ * openclaw persists a server-sent `tls://` nats_url and refuses non-tls
+ * (register-poller.ts).
  *
- * Card: support-tls-nats-transport-with-private-ca-trust.
- * Criteria (Acceptance → "Registration persists a server-sent tls:// endpoint"):
+ * Cards: support-tls-nats-transport-with-private-ca-trust (tls:// persist +
+ * non-localhost refusal, verify-only) AND
+ * remove-dead-ws-localhost-nats-transport-bypass (the NEW `ws://localhost`
+ * refusal — RED today, since localhost is still a bypass on current `main`).
+ *
+ * Criteria (Acceptance → D "each adapter persist path rejects a non-tls:// url"):
  *
  *   - marketplace returns `nats_url: tls://<svc>.proxy.rlwy.net:<port>` →
  *     `claimRegisterSession` returns `registered` and writes that exact url
  *     to `${klodi_home}/config.json`.
- *   - marketplace returns a plaintext non-localhost url (nats:// / ws://) →
- *     `invalid_response`; nothing persisted.
+ *   - marketplace returns ANY non-`tls://` url — nats:// / ws:// non-localhost,
+ *     OR `ws://localhost` (the flip) → `invalid_response`; nothing persisted.
  *
- * `register-poller.ts:162` delegates to the shared `assertEncryptedOrLocalhost`
- * guard (the inline plaintext-refusal copy now points at the shared guard).
- * Mirrors the existing `register-poller.test.ts` harness (fetch mocked,
+ * `register-poller.ts` delegates to the shared guard (`assertTls` after this
+ * card's rename) — all four adapters delegate now, none carry an inline scheme
+ * copy. Mirrors the existing `register-poller.test.ts` harness (fetch mocked,
  * temp KLODI_HOME).
  *
- * QA-owned (adversarial-testing). NEVER weaken.
+ * QA-owned (adversarial-testing). NEVER weaken. Do NOT re-add a localhost
+ * carve-out so the `ws://localhost` case passes.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -98,6 +104,21 @@ describe("claimRegisterSession — tls:// nats_url", () => {
     });
     const result = await claimRegisterSession(api, SESSION_ID);
     expect(result.kind).toBe("invalid_response");
+    expect(existsSync(getConfigPath())).toBe(false);
+  });
+
+  it("rejects a ws://localhost url with invalid_response (the flip)", async () => {
+    // THE FLIP (remove-dead-ws-localhost-nats-transport-bypass):
+    // ws://localhost was accepted while localhost was a plaintext bypass.
+    // After the guard collapse the shared guard rejects it, so the openclaw
+    // persist path returns invalid_response and writes nothing.
+    mockFetchOnce(200, {
+      ...BASE_PAYLOAD,
+      nats_url: "ws://localhost:8080",
+    });
+    const result = await claimRegisterSession(api, SESSION_ID);
+    expect(result.kind).toBe("invalid_response");
+    expect(existsSync(getCredsPath())).toBe(false);
     expect(existsSync(getConfigPath())).toBe(false);
   });
 });

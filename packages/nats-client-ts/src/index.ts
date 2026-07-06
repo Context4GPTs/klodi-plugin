@@ -10,8 +10,7 @@ export {
   KlodiClient,
   KlodiRequestError,
   WHOAMI_PROBE_TIMEOUT_MS,
-  assertTlsOrLocalhost,
-  isLocalhost,
+  assertTls,
   type KlodiClientArgs,
   type RequestOptions,
 } from "./client.js";

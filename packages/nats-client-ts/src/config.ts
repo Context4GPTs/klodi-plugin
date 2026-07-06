@@ -21,7 +21,8 @@ export interface KlodiConfig {
   user_id: string;
   /** Public NKey, sent in the X-Nkey-Public header. */
   nkey_public: string;
-  /** wss:// (prod) or ws:// (dev / loopback). */
+  /** `tls://…` — the sole accepted transport (prod, or `tls://localhost`
+   *  with the dev CA for loopback). */
   nats_url: string;
 }
 

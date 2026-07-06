@@ -1,23 +1,23 @@
-"""RED — nanobot persists a server-sent ``tls://`` nats_url.
+"""nanobot persists a server-sent ``tls://`` nats_url and refuses non-tls.
 
-Card: support-tls-nats-transport-with-private-ca-trust.
+Cards: support-tls-nats-transport-with-private-ca-trust (the tls:// persist +
+non-localhost refusal, verify-only) AND
+remove-dead-ws-localhost-nats-transport-bypass (the NEW ``ws://localhost``
+refusal — RED today, since localhost is still a bypass on current ``main``).
 
-nanobot carries the same *inline copy* of the plaintext-refusal check as
-hermes (``nanobot_local_tools.py:632`` — ``startswith("wss://")`` +
-``_is_localhost``), separate from the shared ``assert_wss_or_localhost``.
-Discovery's "Register/persist guard family" lists this as a persist site that
-would otherwise **refuse to persist the server's tls:// URL** → registration
-against the new prod endpoint fails closed. The card is emphatic: "test all
-persist sites" — nanobot is one, so it is covered here as part of the family.
+nanobot does NOT carry an inline scheme check — ``_persist_credentials``
+delegates to the single shared client guard (``assert_tls`` after this card's
+rename) and wraps the ``ValueError`` into ``OSError``, so persist-time and
+connect-time policy can never drift. This file pins that delegated contract
+as part of the adapter-family audit unit (criterion D: "test all persist
+sites").
 
-Criteria (Acceptance → "Registration persists a server-sent tls:// endpoint"):
+Criteria (Acceptance → D "each adapter persist path rejects a non-tls:// url"):
   * tls://<svc>.proxy.rlwy.net:<port> → persisted verbatim to config.json.
-  * plaintext non-localhost (nats:// / ws://) → refused (OSError), nothing
-    written.
+  * ANY non-``tls://`` url — nats:// / ws:// non-localhost, OR ws://localhost
+    (the flip) → refused (OSError), nothing written.
 
-RED today: the inline check only allows wss:// / localhost.
-
-QA-owned. NEVER weaken.
+QA-owned. NEVER weaken. Do NOT re-add an adapter-local localhost carve-out.
 """
 
 from __future__ import annotations
@@ -91,6 +91,17 @@ class TestNanobotPersistTlsUrl(_KlodiHomeCase):
         with self.assertRaises(OSError):
             lt._persist_credentials(claim)
         self.assertFalse((self.home / "config.json").exists())
+
+    def test_rejects_ws_localhost(self) -> None:
+        # THE FLIP (remove-dead-ws-localhost-nats-transport-bypass):
+        # ws://localhost was accepted while localhost was a plaintext
+        # bypass. After the guard collapse the shared guard rejects it.
+        claim = _tls_claim()
+        claim["nats_url"] = "ws://localhost:8080"
+        with self.assertRaises(OSError):
+            lt._persist_credentials(claim)
+        self.assertFalse((self.home / "config.json").exists())
+        self.assertFalse((self.home / "nats.creds").exists())
 
 
 if __name__ == "__main__":
